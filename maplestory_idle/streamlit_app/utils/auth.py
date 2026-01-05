@@ -8,6 +8,16 @@ import csv
 from datetime import datetime
 from typing import Optional, Tuple
 
+# Registration code - must be provided to create an account
+# Set this as REGISTRATION_CODE in Streamlit secrets or environment variable
+def _get_registration_code() -> str:
+    """Get the registration code from Streamlit secrets or environment."""
+    try:
+        import streamlit as st
+        return st.secrets.get("REGISTRATION_CODE", os.environ.get("REGISTRATION_CODE", ""))
+    except Exception:
+        return os.environ.get("REGISTRATION_CODE", "")
+
 # Path to users database
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 USERS_FILE = os.path.join(DATA_DIR, "users.csv")
@@ -43,12 +53,20 @@ def user_exists(username: str) -> bool:
     return username.lower() in [u.lower() for u in get_all_users()]
 
 
-def create_user(username: str, password: str) -> Tuple[bool, str]:
+def create_user(username: str, password: str, registration_code: str = "") -> Tuple[bool, str]:
     """
     Create a new user account.
+    Requires a valid registration code.
     Returns (success, message).
     """
     _ensure_users_file()
+
+    # Validate registration code
+    expected_code = _get_registration_code()
+    if not expected_code:
+        return False, "Registration is currently disabled"
+    if registration_code != expected_code:
+        return False, "Invalid registration code"
 
     # Validate username
     if not username or len(username) < 2:

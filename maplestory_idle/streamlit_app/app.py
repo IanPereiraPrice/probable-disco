@@ -108,6 +108,7 @@ def login_page():
 
         with tab2:
             st.subheader("Create Account")
+            reg_code = st.text_input("Registration Code", key="reg_code", type="password", placeholder="Required to create account")
             reg_username = st.text_input("Choose Username", key="reg_user", placeholder="2-20 characters")
             reg_password = st.text_input("Choose Password", key="reg_pass", type="password", placeholder="At least 4 characters")
             reg_password2 = st.text_input("Confirm Password", key="reg_pass2", type="password", placeholder="Repeat password")
@@ -115,8 +116,8 @@ def login_page():
             if st.button("Create Account", key="reg_btn"):
                 if reg_password != reg_password2:
                     st.error("Passwords don't match!")
-                elif reg_username and reg_password:
-                    success, msg = create_user(reg_username, reg_password)
+                elif reg_username and reg_password and reg_code:
+                    success, msg = create_user(reg_username, reg_password, reg_code)
                     if success:
                         st.success(msg + " You can now login.")
                     else:
