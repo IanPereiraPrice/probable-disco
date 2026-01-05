@@ -357,78 +357,78 @@ HERO_POWER_STAT_RANGES: Dict[HeroPowerTier, Dict[HeroPowerStatType, Tuple[float,
     HeroPowerTier.MYSTIC: {
         HeroPowerStatType.DAMAGE: (28.0, 40.0),
         HeroPowerStatType.BOSS_DAMAGE: (28.0, 40.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (28.0, 40.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (14.0, 20.0),
         HeroPowerStatType.MAX_DMG_MULT: (28.0, 40.0),
+        HeroPowerStatType.MIN_DMG_MULT: (28.0, 40.0),
         HeroPowerStatType.CRIT_DAMAGE: (20.0, 30.0),
-        HeroPowerStatType.MIN_DMG_MULT: (20.0, 30.0),
         HeroPowerStatType.MAIN_STAT_PCT: (1500, 2500),  # Flat main stat (e.g., +2000 DEX)
         HeroPowerStatType.CRIT_RATE: (8.0, 12.0),
         HeroPowerStatType.ATTACK_PCT: (12.0, 18.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (20.0, 30.0),
     },
     HeroPowerTier.LEGENDARY: {
-        HeroPowerStatType.DAMAGE: (18.0, 28.0),
-        HeroPowerStatType.BOSS_DAMAGE: (18.0, 28.0),
+        HeroPowerStatType.DAMAGE: (18.0, 25.0),
+        HeroPowerStatType.BOSS_DAMAGE: (18.0, 25.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (18.0, 25.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (10.0, 14.0),
-        HeroPowerStatType.MAX_DMG_MULT: (18.0, 28.0),
+        HeroPowerStatType.MAX_DMG_MULT: (18.0, 25.0),
+        HeroPowerStatType.MIN_DMG_MULT: (18.0, 25.0),
         HeroPowerStatType.CRIT_DAMAGE: (14.0, 20.0),
-        HeroPowerStatType.MIN_DMG_MULT: (14.0, 20.0),
         HeroPowerStatType.MAIN_STAT_PCT: (800, 1200),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (5.0, 8.0),
         HeroPowerStatType.ATTACK_PCT: (8.0, 12.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (14.0, 20.0),
     },
     HeroPowerTier.UNIQUE: {
         HeroPowerStatType.DAMAGE: (12.0, 18.0),
         HeroPowerStatType.BOSS_DAMAGE: (12.0, 18.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (12.0, 18.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (6.0, 10.0),
         HeroPowerStatType.MAX_DMG_MULT: (12.0, 18.0),
+        HeroPowerStatType.MIN_DMG_MULT: (12.0, 18.0),
         HeroPowerStatType.CRIT_DAMAGE: (10.0, 14.0),
-        HeroPowerStatType.MIN_DMG_MULT: (10.0, 14.0),
         HeroPowerStatType.MAIN_STAT_PCT: (400, 700),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (3.0, 5.0),
         HeroPowerStatType.ATTACK_PCT: (5.0, 8.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (10.0, 14.0),
     },
     HeroPowerTier.EPIC: {
         HeroPowerStatType.DAMAGE: (8.0, 12.0),
         HeroPowerStatType.BOSS_DAMAGE: (8.0, 12.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (8.0, 12.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (4.0, 6.0),
         HeroPowerStatType.MAX_DMG_MULT: (8.0, 12.0),
+        HeroPowerStatType.MIN_DMG_MULT: (8.0, 12.0),
         HeroPowerStatType.CRIT_DAMAGE: (6.0, 10.0),
-        HeroPowerStatType.MIN_DMG_MULT: (6.0, 10.0),
         HeroPowerStatType.MAIN_STAT_PCT: (200, 300),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (2.0, 3.0),
         HeroPowerStatType.ATTACK_PCT: (3.0, 5.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (6.0, 10.0),
         HeroPowerStatType.DEFENSE: (100, 200),
         HeroPowerStatType.MAX_HP: (500, 1000),
     },
     HeroPowerTier.RARE: {
         HeroPowerStatType.DAMAGE: (4.0, 8.0),
         HeroPowerStatType.BOSS_DAMAGE: (4.0, 8.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (4.0, 8.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (2.0, 4.0),
         HeroPowerStatType.MAX_DMG_MULT: (4.0, 8.0),
+        HeroPowerStatType.MIN_DMG_MULT: (4.0, 8.0),
         HeroPowerStatType.CRIT_DAMAGE: (3.0, 6.0),
-        HeroPowerStatType.MIN_DMG_MULT: (3.0, 6.0),
         HeroPowerStatType.MAIN_STAT_PCT: (100, 150),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (1.0, 2.0),
         HeroPowerStatType.ATTACK_PCT: (2.0, 3.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (3.0, 6.0),
         HeroPowerStatType.DEFENSE: (50, 100),
         HeroPowerStatType.MAX_HP: (200, 500),
     },
     HeroPowerTier.COMMON: {
         HeroPowerStatType.DAMAGE: (1.0, 4.0),
         HeroPowerStatType.BOSS_DAMAGE: (1.0, 4.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (1.0, 4.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (1.0, 2.0),
         HeroPowerStatType.MAX_DMG_MULT: (1.0, 4.0),
+        HeroPowerStatType.MIN_DMG_MULT: (1.0, 4.0),
         HeroPowerStatType.CRIT_DAMAGE: (1.0, 3.0),
-        HeroPowerStatType.MIN_DMG_MULT: (1.0, 3.0),
         HeroPowerStatType.MAIN_STAT_PCT: (40, 60),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (0.5, 1.0),
         HeroPowerStatType.ATTACK_PCT: (1.0, 2.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (1.0, 3.0),
         HeroPowerStatType.DEFENSE: (20, 50),
         HeroPowerStatType.MAX_HP: (100, 200),
     },
