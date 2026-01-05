@@ -1,6 +1,6 @@
 """
 Hero Power Page
-Configure hero power rerollable lines, passive stats, and level config.
+Configure hero power rerollable lines, passive stats, level config, and get reroll recommendations.
 """
 import streamlit as st
 from utils.data_manager import save_user_data
@@ -8,10 +8,14 @@ from hero_power import (
     HeroPowerStatType, HeroPowerTier, HeroPowerPassiveStatType,
     STAT_DISPLAY_NAMES, TIER_COLORS, HERO_POWER_PASSIVE_STATS,
     PASSIVE_STAT_DISPLAY_NAMES, HERO_POWER_STAT_RANGES,
-    HERO_POWER_REROLL_COSTS
+    HERO_POWER_REROLL_COSTS, HeroPowerLine, HeroPowerConfig,
+    HeroPowerLevelConfig, score_hero_power_line, get_line_score_category,
+    score_hero_power_line_for_mode, analyze_lock_strategy,
+    rank_all_possible_lines_by_dps, MODE_STAT_ADJUSTMENTS,
+    STAT_DPS_WEIGHTS, TIER_SCORE_MULTIPLIERS
 )
 
-st.set_page_config(page_title="Hero Power", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Hero Power", page_icon="*", layout="wide")
 
 if 'logged_in' not in st.session_state or not st.session_state.logged_in:
     st.warning("Please login first!")
@@ -26,6 +30,9 @@ HP_STAT_DISPLAY[""] = "---"
 
 HP_TIERS = [t.value for t in HeroPowerTier]
 HP_TIER_DISPLAY = {t.value: t.value.capitalize() for t in HeroPowerTier}
+
+COMBAT_MODES = ["stage", "boss", "world_boss"]
+COMBAT_MODE_DISPLAY = {"stage": "Stage", "boss": "Boss", "world_boss": "World Boss"}
 
 
 def auto_save():
@@ -47,9 +54,136 @@ def get_value_range(tier_str: str, stat_str: str) -> tuple:
     return (0, 100)
 
 
-st.title("⚡ Hero Power")
+def get_level_config() -> HeroPowerLevelConfig:
+    """Build HeroPowerLevelConfig from user data."""
+    lc = data.hero_power_level or {}
+    return HeroPowerLevelConfig(
+        level=lc.get('level', 15),
+        mystic_rate=lc.get('mystic_rate', 0.14),
+        legendary_rate=lc.get('legendary_rate', 1.63),
+        unique_rate=lc.get('unique_rate', 3.3),
+        epic_rate=lc.get('epic_rate', 37.93),
+        rare_rate=lc.get('rare_rate', 32.0),
+        common_rate=lc.get('common_rate', 25.0),
+        base_cost=lc.get('base_cost', 89),
+    )
 
-tab1, tab2, tab3, tab4 = st.tabs(["Ability Lines", "Passive Stats", "Level Config", "Summary"])
+
+def build_hero_power_config() -> HeroPowerConfig:
+    """Build HeroPowerConfig from current user data lines."""
+    lines = []
+    for i in range(1, 7):
+        line_key = f'line{i}'
+        line_data = data.hero_power_lines.get(line_key, {})
+        stat_str = line_data.get('stat', '')
+        tier_str = line_data.get('tier', 'common').lower()
+        value = float(line_data.get('value', 0))
+        locked = line_data.get('locked', False)
+
+        try:
+            stat_type = HeroPowerStatType(stat_str) if stat_str else HeroPowerStatType.DAMAGE
+        except ValueError:
+            stat_type = HeroPowerStatType.DAMAGE
+
+        try:
+            tier = HeroPowerTier(tier_str)
+        except ValueError:
+            tier = HeroPowerTier.COMMON
+
+        lines.append(HeroPowerLine(
+            slot=i,
+            stat_type=stat_type,
+            value=value,
+            tier=tier,
+            is_locked=locked
+        ))
+
+    return HeroPowerConfig(lines=lines)
+
+
+def init_preset_if_needed():
+    """Initialize presets with Default if empty."""
+    if not data.hero_power_presets:
+        # Copy current lines to Default preset
+        data.hero_power_presets["Default"] = {'lines': dict(data.hero_power_lines)}
+        data.active_hero_power_preset = "Default"
+        auto_save()
+
+
+def switch_preset(preset_name: str):
+    """Switch to a different preset, saving current first."""
+    # Save current lines to current preset
+    if data.active_hero_power_preset:
+        data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
+
+    # Load new preset
+    if preset_name in data.hero_power_presets:
+        preset_data = data.hero_power_presets[preset_name]
+        data.hero_power_lines = dict(preset_data.get('lines', {}))
+
+    data.active_hero_power_preset = preset_name
+    auto_save()
+
+
+st.title("Hero Power")
+
+# Initialize presets
+init_preset_if_needed()
+
+# Initialize hero power lines if not present
+for i in range(1, 7):
+    line_key = f'line{i}'
+    if line_key not in data.hero_power_lines:
+        data.hero_power_lines[line_key] = {
+            'stat': '',
+            'value': 0.0,
+            'tier': 'common',
+            'locked': False,
+        }
+
+# Preset management in sidebar-like area
+with st.expander("Preset Management", expanded=False):
+    col1, col2, col3 = st.columns([2, 1, 1])
+
+    with col1:
+        preset_names = list(data.hero_power_presets.keys()) if data.hero_power_presets else ["Default"]
+        current_preset = data.active_hero_power_preset if data.active_hero_power_preset in preset_names else preset_names[0]
+        current_idx = preset_names.index(current_preset) if current_preset in preset_names else 0
+
+        selected_preset = st.selectbox(
+            "Active Preset",
+            options=preset_names,
+            index=current_idx,
+            key="preset_select"
+        )
+
+        if selected_preset != data.active_hero_power_preset:
+            switch_preset(selected_preset)
+            st.rerun()
+
+    with col2:
+        new_preset_name = st.text_input("New Preset", key="new_preset_name", placeholder="Name...")
+        if st.button("Create", key="create_preset"):
+            if new_preset_name and new_preset_name not in data.hero_power_presets:
+                # Copy current lines to new preset
+                data.hero_power_presets[new_preset_name] = {'lines': dict(data.hero_power_lines)}
+                data.active_hero_power_preset = new_preset_name
+                auto_save()
+                st.rerun()
+
+    with col3:
+        st.write("")  # Spacer
+        if st.button("Delete Current", key="delete_preset"):
+            if len(data.hero_power_presets) > 1 and data.active_hero_power_preset in data.hero_power_presets:
+                del data.hero_power_presets[data.active_hero_power_preset]
+                data.active_hero_power_preset = list(data.hero_power_presets.keys())[0]
+                # Load the new active preset
+                preset_data = data.hero_power_presets[data.active_hero_power_preset]
+                data.hero_power_lines = dict(preset_data.get('lines', {}))
+                auto_save()
+                st.rerun()
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Ability Lines", "Line Analysis", "Passive Stats", "Level Config", "Summary"])
 
 # ============================================================================
 # TAB 1: ABILITY LINES (6 rerollable lines)
@@ -57,20 +191,10 @@ tab1, tab2, tab3, tab4 = st.tabs(["Ability Lines", "Passive Stats", "Level Confi
 with tab1:
     st.markdown("**6 Rerollable Lines** - Lock valuable lines before rerolling")
 
-    # Initialize hero power lines if not present
-    for i in range(1, 7):
-        line_key = f'line{i}'
-        if line_key not in data.hero_power_lines:
-            data.hero_power_lines[line_key] = {
-                'stat': '',
-                'value': 0.0,
-                'tier': 'common',
-                'locked': False,
-            }
-
     # Calculate reroll cost based on locked lines
     locked_count = sum(1 for i in range(1, 7) if data.hero_power_lines.get(f'line{i}', {}).get('locked', False))
-    reroll_cost = HERO_POWER_REROLL_COSTS.get(locked_count, 86)
+    level_config = get_level_config()
+    reroll_cost = level_config.get_reroll_cost(locked_count)
 
     st.caption(f"Locked: {locked_count}/6 | Reroll Cost: {reroll_cost} Medals")
 
@@ -79,18 +203,18 @@ with tab1:
         line_key = f'line{i}'
         line = data.hero_power_lines[line_key]
 
-        tier_str = line.get('tier', 'common').lower()  # Normalize to lowercase
+        tier_str = line.get('tier', 'common').lower()
         stat_str = line.get('stat', '')
         try:
             tier_color = TIER_COLORS.get(HeroPowerTier(tier_str), "#888888")
         except ValueError:
             tier_color = "#888888"
 
-        col_lock, col_tier, col_stat, col_val = st.columns([0.8, 1.5, 2.5, 1.5])
+        col_lock, col_tier, col_stat, col_val, col_score = st.columns([0.6, 1.2, 2.2, 1.2, 1.0])
 
         with col_lock:
             new_locked = st.checkbox(
-                "🔒",
+                "",
                 value=line.get('locked', False),
                 key=f"hp_lock_{i}",
                 help=f"Lock Line {i}"
@@ -129,22 +253,44 @@ with tab1:
 
         with col_val:
             min_val, max_val = get_value_range(new_tier, new_stat)
+            min_val_f = float(min_val)
+            max_val_f = float(max_val)
             current_val = float(line.get('value', 0))
-            # Clamp to valid range
-            current_val = max(min_val, min(max_val, current_val))
+            current_val = max(min_val_f, min(max_val_f, current_val))
+            step_val = 0.5 if max_val_f < 100 else 10.0
 
             new_value = st.number_input(
                 f"L{i} Value",
-                min_value=float(min_val),
-                max_value=float(max_val),
+                min_value=min_val_f,
+                max_value=max_val_f,
                 value=current_val,
-                step=0.5 if max_val < 100 else 10.0,
+                step=step_val,
                 key=f"hp_val_{i}",
                 label_visibility="collapsed"
             )
             if new_value != line.get('value'):
                 line['value'] = new_value
                 auto_save()
+
+        with col_score:
+            # Calculate and display line score
+            if new_stat:
+                try:
+                    hp_line = HeroPowerLine(
+                        slot=i,
+                        stat_type=HeroPowerStatType(new_stat),
+                        value=new_value,
+                        tier=HeroPowerTier(new_tier),
+                        is_locked=new_locked
+                    )
+                    score = score_hero_power_line(hp_line)
+                    category, color = get_line_score_category(score)
+                    lock_icon = "L" if new_locked else ""
+                    st.markdown(f"<span style='color:{color};'>{lock_icon}{score:.0f} ({category})</span>", unsafe_allow_html=True)
+                except (ValueError, KeyError):
+                    st.write("---")
+            else:
+                st.write("---")
 
     st.divider()
 
@@ -157,7 +303,7 @@ with tab1:
         if stat_str:
             tier_str = line.get('tier', 'common')
             val = line.get('value', 0)
-            locked = "🔒" if line.get('locked') else ""
+            locked = "L" if line.get('locked') else ""
 
             # Format value (flat stats vs %)
             is_flat = stat_str in ['main_stat_pct', 'defense', 'max_hp']
@@ -175,9 +321,121 @@ with tab1:
         st.dataframe(summary_rows, use_container_width=True, hide_index=True)
 
 # ============================================================================
-# TAB 2: PASSIVE STATS (Levelable)
+# TAB 2: LINE ANALYSIS & RECOMMENDATIONS
 # ============================================================================
 with tab2:
+    st.markdown("**Line Analysis & Reroll Recommendations**")
+
+    # Combat mode selector for analysis
+    analysis_mode = st.selectbox(
+        "Optimize for",
+        options=COMBAT_MODES,
+        format_func=lambda x: COMBAT_MODE_DISPLAY.get(x, x),
+        key="analysis_mode"
+    )
+
+    # Build current config
+    hp_config = build_hero_power_config()
+    level_config = get_level_config()
+
+    # Analyze lock strategy
+    analysis = analyze_lock_strategy(hp_config, level_config)
+
+    st.markdown("### Current Lines Analysis")
+
+    # Show each line with its analysis
+    analysis_rows = []
+    for la in analysis['efficiency_analysis']:
+        line = la['line']
+        eff = la['efficiency_result']
+
+        # Calculate mode-specific score
+        mode_score = score_hero_power_line_for_mode(line, analysis_mode)
+        category, color = get_line_score_category(mode_score)
+
+        # Recommendation
+        rec = eff['recommendation']
+        rec_color = "#00ff88" if rec == "LOCK" else "#ff9f43"
+
+        analysis_rows.append({
+            "Slot": line.slot,
+            "Stat": STAT_DISPLAY_NAMES.get(line.stat_type, line.stat_type.value),
+            "Tier": line.tier.value.capitalize(),
+            "Value": f"{line.value:.1f}" if line.stat_type not in [HeroPowerStatType.MAIN_STAT_PCT, HeroPowerStatType.DEFENSE, HeroPowerStatType.MAX_HP] else f"{line.value:,.0f}",
+            "Score": f"{mode_score:.0f}",
+            "Category": category,
+            "P(Better)": f"{eff['probability_of_improvement']:.1%}",
+            "Recommendation": rec,
+        })
+
+    st.dataframe(analysis_rows, use_container_width=True, hide_index=True)
+
+    # Show strategy summary
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        lock_slots = ", ".join(str(s) for s in analysis['lines_to_lock']) if analysis['lines_to_lock'] else "None"
+        st.metric("Lines to Lock", lock_slots)
+    with col2:
+        reroll_slots = ", ".join(str(s) for s in analysis['lines_to_reroll']) if analysis['lines_to_reroll'] else "None"
+        st.metric("Lines to Reroll", reroll_slots)
+    with col3:
+        st.metric("Reroll Cost", f"{analysis['cost_per_reroll']} Medals")
+
+    st.divider()
+
+    # Best lines reference
+    st.markdown("### Best Lines to Target")
+    st.caption("Shows the most valuable lines to aim for when rerolling")
+
+    rankings = rank_all_possible_lines_by_dps()
+    mode_rankings = rankings.get(analysis_mode, [])
+
+    top_lines = []
+    for entry in mode_rankings[:12]:
+        top_lines.append({
+            "Rank": entry['rank'],
+            "Stat": entry['stat'],
+            "Tier": entry['tier'],
+            "Range": entry['value_range'],
+            "Est. DPS": f"+{entry['dps_contribution']:.2f}%",
+        })
+
+    if top_lines:
+        st.dataframe(top_lines, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Mode-specific tips
+    st.markdown("### Mode-Specific Tips")
+    mode_adj = MODE_STAT_ADJUSTMENTS.get(analysis_mode, {})
+
+    tips = []
+    if analysis_mode == "stage":
+        tips = [
+            "Normal Damage has value for clearing mobs",
+            "Boss Damage is less valuable (less boss time)",
+            "Balanced approach works well"
+        ]
+    elif analysis_mode == "boss":
+        tips = [
+            "Boss Damage is very important",
+            "Normal Damage is USELESS on bosses",
+            "Defense Penetration is strong"
+        ]
+    elif analysis_mode == "world_boss":
+        tips = [
+            "Defense Penetration is VERY valuable (high enemy DEF)",
+            "Boss Damage is important",
+            "Normal Damage is USELESS"
+        ]
+
+    for tip in tips:
+        st.markdown(f"- {tip}")
+
+# ============================================================================
+# TAB 3: PASSIVE STATS (Levelable)
+# ============================================================================
+with tab3:
     st.markdown("**Passive Stats** - Upgraded with Gold (Stage 6 max levels)")
 
     # Initialize passive stats if not present
@@ -257,9 +515,9 @@ with tab2:
     st.dataframe(passive_totals, use_container_width=True, hide_index=True)
 
 # ============================================================================
-# TAB 3: LEVEL CONFIG (affects tier rates and costs)
+# TAB 4: LEVEL CONFIG (affects tier rates and costs)
 # ============================================================================
-with tab3:
+with tab4:
     st.markdown("**Hero Power Level** - Affects tier probabilities and reroll cost")
     st.caption("Enter your Hero Power level's tier rates (shown in-game)")
 
@@ -340,9 +598,9 @@ with tab3:
     st.dataframe(cost_table, use_container_width=True, hide_index=True)
 
 # ============================================================================
-# TAB 4: SUMMARY (Total stats from Hero Power)
+# TAB 5: SUMMARY (Total stats from Hero Power)
 # ============================================================================
-with tab4:
+with tab5:
     st.markdown("**Hero Power Stats Summary**")
 
     # Ability Lines totals
@@ -425,3 +683,23 @@ with tab4:
     with col2:
         atk_passive = data.hero_power_passives.get('attack', 0) * 103.75
         st.metric("Attack (flat)", f"+{atk_passive:,.0f}")
+
+    st.divider()
+
+    # Total config score
+    st.markdown("### Config Score by Mode")
+    hp_config = build_hero_power_config()
+
+    score_cols = st.columns(3)
+    for idx, mode in enumerate(COMBAT_MODES):
+        total_score = sum(
+            score_hero_power_line_for_mode(line, mode)
+            for line in hp_config.lines
+            if line.stat_type
+        )
+        with score_cols[idx]:
+            st.metric(
+                COMBAT_MODE_DISPLAY[mode],
+                f"{total_score:.0f}",
+                help="Sum of all line scores for this mode (0-600 max)"
+            )

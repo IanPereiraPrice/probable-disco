@@ -43,6 +43,10 @@ class UserData:
     # Hero Power level config
     hero_power_level: Dict[str, Any] = field(default_factory=dict)
 
+    # Hero Power presets (preset_name -> {lines: Dict, name: str})
+    hero_power_presets: Dict[str, Dict] = field(default_factory=dict)
+    active_hero_power_preset: str = "Default"
+
     # Artifacts (slot -> {name, stars, potentials...})
     artifacts_equipped: Dict[str, Dict] = field(default_factory=dict)
     artifacts_inventory: Dict[str, Dict] = field(default_factory=dict)
@@ -124,6 +128,15 @@ def save_user_data(username: str, data: UserData) -> bool:
             # Hero Power level config
             for key, value in data.hero_power_level.items():
                 writer.writerow(['hero_power_level', key, '', str(value)])
+
+            # Hero Power presets
+            for preset_name, preset_data in data.hero_power_presets.items():
+                for line_id, line_data in preset_data.get('lines', {}).items():
+                    for key, value in line_data.items():
+                        writer.writerow(['hero_power_preset', preset_name, f'{line_id}_{key}', str(value)])
+
+            # Active Hero Power preset
+            writer.writerow(['hero_power_active_preset', 'name', '', data.active_hero_power_preset])
 
             # Artifacts equipped
             for slot, artifact in data.artifacts_equipped.items():
@@ -247,6 +260,21 @@ def load_user_data(username: str) -> UserData:
 
                 elif section == 'hero_power_level':
                     data.hero_power_level[key] = _parse_value(value)
+
+                elif section == 'hero_power_preset':
+                    preset_name = key
+                    if preset_name not in data.hero_power_presets:
+                        data.hero_power_presets[preset_name] = {'lines': {}}
+                    # subkey format: line1_stat, line1_value, etc.
+                    parts = subkey.split('_', 1)
+                    if len(parts) == 2:
+                        line_id, field_name = parts
+                        if line_id not in data.hero_power_presets[preset_name]['lines']:
+                            data.hero_power_presets[preset_name]['lines'][line_id] = {}
+                        data.hero_power_presets[preset_name]['lines'][line_id][field_name] = _parse_value(value)
+
+                elif section == 'hero_power_active_preset':
+                    data.active_hero_power_preset = value
 
                 elif section == 'artifact_equipped':
                     if key not in data.artifacts_equipped:
@@ -462,6 +490,15 @@ def export_user_data_csv(data: UserData) -> str:
     for key, value in data.hero_power_level.items():
         writer.writerow(['hero_power_level', key, '', str(value)])
 
+    # Hero Power presets
+    for preset_name, preset_data in data.hero_power_presets.items():
+        for line_id, line_data in preset_data.get('lines', {}).items():
+            for key, value in line_data.items():
+                writer.writerow(['hero_power_preset', preset_name, f'{line_id}_{key}', str(value)])
+
+    # Active Hero Power preset
+    writer.writerow(['hero_power_active_preset', 'name', '', data.active_hero_power_preset])
+
     # Artifacts equipped
     for slot, artifact in data.artifacts_equipped.items():
         for key, value in artifact.items():
@@ -578,6 +615,20 @@ def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
 
             elif section == 'hero_power_level':
                 data.hero_power_level[key] = _parse_value(value)
+
+            elif section == 'hero_power_preset':
+                preset_name = key
+                if preset_name not in data.hero_power_presets:
+                    data.hero_power_presets[preset_name] = {'lines': {}}
+                parts = subkey.split('_', 1)
+                if len(parts) == 2:
+                    line_id, field_name = parts
+                    if line_id not in data.hero_power_presets[preset_name]['lines']:
+                        data.hero_power_presets[preset_name]['lines'][line_id] = {}
+                    data.hero_power_presets[preset_name]['lines'][line_id][field_name] = _parse_value(value)
+
+            elif section == 'hero_power_active_preset':
+                data.active_hero_power_preset = value
 
             elif section == 'artifact_equipped':
                 if key not in data.artifacts_equipped:
