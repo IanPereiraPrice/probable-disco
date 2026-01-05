@@ -1,6 +1,7 @@
 """
 Hero Power Page
 Configure hero power rerollable lines, passive stats, level config, and get reroll recommendations.
+Now with 10 preset tabs like the original app!
 """
 import streamlit as st
 from utils.data_manager import save_user_data
@@ -33,6 +34,9 @@ HP_TIER_DISPLAY = {t.value: t.value.capitalize() for t in HeroPowerTier}
 
 COMBAT_MODES = ["stage", "boss", "world_boss"]
 COMBAT_MODE_DISPLAY = {"stage": "Stage", "boss": "Boss", "world_boss": "World Boss"}
+
+# Number of preset tabs
+PRESET_COUNT = 10
 
 
 def auto_save():
@@ -69,12 +73,12 @@ def get_level_config() -> HeroPowerLevelConfig:
     )
 
 
-def build_hero_power_config() -> HeroPowerConfig:
-    """Build HeroPowerConfig from current user data lines."""
+def build_hero_power_config(lines_data: dict) -> HeroPowerConfig:
+    """Build HeroPowerConfig from lines data."""
     lines = []
     for i in range(1, 7):
         line_key = f'line{i}'
-        line_data = data.hero_power_lines.get(line_key, {})
+        line_data = lines_data.get(line_key, {})
         stat_str = line_data.get('stat', '')
         tier_str = line_data.get('tier', 'common').lower()
         value = float(line_data.get('value', 0))
@@ -101,34 +105,81 @@ def build_hero_power_config() -> HeroPowerConfig:
     return HeroPowerConfig(lines=lines)
 
 
-def init_preset_if_needed():
-    """Initialize presets with Default if empty."""
-    if not data.hero_power_presets:
-        # Copy current lines to Default preset
-        data.hero_power_presets["Default"] = {'lines': dict(data.hero_power_lines)}
-        data.active_hero_power_preset = "Default"
-        auto_save()
-
-
-def switch_preset(preset_name: str):
-    """Switch to a different preset, saving current first."""
-    # Save current lines to current preset
-    if data.active_hero_power_preset:
-        data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
-
-    # Load new preset
-    if preset_name in data.hero_power_presets:
-        preset_data = data.hero_power_presets[preset_name]
-        data.hero_power_lines = dict(preset_data.get('lines', {}))
-
-    data.active_hero_power_preset = preset_name
-    auto_save()
+def get_default_lines() -> dict:
+    """Get default empty lines for a new preset."""
+    return {
+        f'line{i}': {'stat': '', 'value': 0.0, 'tier': 'common', 'locked': False}
+        for i in range(1, 7)
+    }
 
 
 st.title("Hero Power")
 
-# Initialize presets
-init_preset_if_needed()
+# ============================================================================
+# INITIALIZE 10 PRESETS
+# ============================================================================
+
+# Initialize all 10 presets if they don't exist
+if not data.hero_power_presets:
+    data.hero_power_presets = {}
+
+for preset_idx in range(1, PRESET_COUNT + 1):
+    preset_name = str(preset_idx)
+    if preset_name not in data.hero_power_presets:
+        data.hero_power_presets[preset_name] = {'lines': get_default_lines()}
+
+# Ensure active preset is valid
+if not data.active_hero_power_preset or data.active_hero_power_preset not in data.hero_power_presets:
+    data.active_hero_power_preset = "1"
+    auto_save()
+
+# ============================================================================
+# PRESET TAB SELECTION
+# ============================================================================
+
+st.markdown("### Preset Selection")
+st.caption("Click a preset to switch. Each preset saves separately.")
+
+# Create a row of buttons for preset selection
+preset_cols = st.columns(PRESET_COUNT)
+for idx, col in enumerate(preset_cols):
+    preset_name = str(idx + 1)
+    is_active = preset_name == data.active_hero_power_preset
+
+    with col:
+        button_type = "primary" if is_active else "secondary"
+        if st.button(
+            f"{preset_name}",
+            key=f"preset_btn_{preset_name}",
+            type=button_type,
+            use_container_width=True
+        ):
+            if not is_active:
+                # Save current preset's lines before switching
+                data.hero_power_presets[data.active_hero_power_preset] = {
+                    'lines': dict(data.hero_power_lines)
+                }
+                # Switch to new preset
+                data.active_hero_power_preset = preset_name
+                # Load new preset's lines
+                preset_data = data.hero_power_presets.get(preset_name, {})
+                data.hero_power_lines = dict(preset_data.get('lines', get_default_lines()))
+                auto_save()
+                st.rerun()
+
+# Show current preset indicator
+st.info(f"Currently editing **Preset {data.active_hero_power_preset}**")
+
+st.divider()
+
+# ============================================================================
+# LOAD CURRENT PRESET DATA
+# ============================================================================
+
+# Ensure hero_power_lines has the current preset's data
+preset_data = data.hero_power_presets.get(data.active_hero_power_preset, {})
+if not data.hero_power_lines or data.hero_power_lines != preset_data.get('lines', {}):
+    data.hero_power_lines = dict(preset_data.get('lines', get_default_lines()))
 
 # Initialize hero power lines if not present
 for i in range(1, 7):
@@ -141,47 +192,9 @@ for i in range(1, 7):
             'locked': False,
         }
 
-# Preset management in sidebar-like area
-with st.expander("Preset Management", expanded=False):
-    col1, col2, col3 = st.columns([2, 1, 1])
-
-    with col1:
-        preset_names = list(data.hero_power_presets.keys()) if data.hero_power_presets else ["Default"]
-        current_preset = data.active_hero_power_preset if data.active_hero_power_preset in preset_names else preset_names[0]
-        current_idx = preset_names.index(current_preset) if current_preset in preset_names else 0
-
-        selected_preset = st.selectbox(
-            "Active Preset",
-            options=preset_names,
-            index=current_idx,
-            key="preset_select"
-        )
-
-        if selected_preset != data.active_hero_power_preset:
-            switch_preset(selected_preset)
-            st.rerun()
-
-    with col2:
-        new_preset_name = st.text_input("New Preset", key="new_preset_name", placeholder="Name...")
-        if st.button("Create", key="create_preset"):
-            if new_preset_name and new_preset_name not in data.hero_power_presets:
-                # Copy current lines to new preset
-                data.hero_power_presets[new_preset_name] = {'lines': dict(data.hero_power_lines)}
-                data.active_hero_power_preset = new_preset_name
-                auto_save()
-                st.rerun()
-
-    with col3:
-        st.write("")  # Spacer
-        if st.button("Delete Current", key="delete_preset"):
-            if len(data.hero_power_presets) > 1 and data.active_hero_power_preset in data.hero_power_presets:
-                del data.hero_power_presets[data.active_hero_power_preset]
-                data.active_hero_power_preset = list(data.hero_power_presets.keys())[0]
-                # Load the new active preset
-                preset_data = data.hero_power_presets[data.active_hero_power_preset]
-                data.hero_power_lines = dict(preset_data.get('lines', {}))
-                auto_save()
-                st.rerun()
+# ============================================================================
+# MAIN CONTENT TABS
+# ============================================================================
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Ability Lines", "Line Analysis", "Passive Stats", "Level Config", "Summary"])
 
@@ -221,6 +234,8 @@ with tab1:
             )
             if new_locked != line.get('locked'):
                 line['locked'] = new_locked
+                # Save to preset
+                data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
                 auto_save()
 
         with col_tier:
@@ -235,6 +250,7 @@ with tab1:
             )
             if new_tier != tier_str:
                 line['tier'] = new_tier
+                data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
                 auto_save()
 
         with col_stat:
@@ -249,6 +265,7 @@ with tab1:
             )
             if new_stat != stat_str:
                 line['stat'] = new_stat
+                data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
                 auto_save()
 
         with col_val:
@@ -270,6 +287,7 @@ with tab1:
             )
             if new_value != line.get('value'):
                 line['value'] = new_value
+                data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
                 auto_save()
 
         with col_score:
@@ -335,7 +353,7 @@ with tab2:
     )
 
     # Build current config
-    hp_config = build_hero_power_config()
+    hp_config = build_hero_power_config(data.hero_power_lines)
     level_config = get_level_config()
 
     # Analyze lock strategy
@@ -688,7 +706,7 @@ with tab5:
 
     # Total config score
     st.markdown("### Config Score by Mode")
-    hp_config = build_hero_power_config()
+    hp_config = build_hero_power_config(data.hero_power_lines)
 
     score_cols = st.columns(3)
     for idx, mode in enumerate(COMBAT_MODES):
