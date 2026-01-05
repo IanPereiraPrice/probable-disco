@@ -48,12 +48,20 @@ class UserData:
     artifacts_inventory: Dict[str, Dict] = field(default_factory=dict)
     artifacts_resonance: Dict[str, Any] = field(default_factory=dict)
 
-    # Weapons (weapon_id -> {name, atk_pct})
+    # Weapons (old format - weapon_id -> {name, atk_pct})
     weapons: Dict[str, Dict] = field(default_factory=dict)
 
-    # Companions (slot -> {name, level})
+    # Weapons (new format)
+    weapon_inventory: list = field(default_factory=list)  # List of {rarity, tier, level}
+    equipped_weapon: int = None  # Index into weapon_inventory
+
+    # Companions (old format - slot -> {name, level})
     companions_equipped: Dict[str, Dict] = field(default_factory=dict)
     companions_inventory: Dict[str, Dict] = field(default_factory=dict)
+
+    # Companions (new format)
+    companion_levels: Dict[str, int] = field(default_factory=dict)  # companion_key -> level
+    equipped_companions: list = field(default_factory=lambda: [None] * 7)  # 7 slots
 
     # Maple Rank
     maple_rank: Dict[str, Any] = field(default_factory=dict)
@@ -131,10 +139,19 @@ def save_user_data(username: str, data: UserData) -> bool:
             for key, value in data.artifacts_resonance.items():
                 writer.writerow(['artifact_resonance', key, '', str(value)])
 
-            # Weapons
+            # Weapons (old format)
             for weapon_id, weapon in data.weapons.items():
                 for key, value in weapon.items():
                     writer.writerow(['weapon', weapon_id, key, str(value)])
+
+            # Weapon inventory (new format)
+            for idx, weapon in enumerate(data.weapon_inventory or []):
+                for key, value in weapon.items():
+                    writer.writerow(['weapon_inv', str(idx), key, str(value)])
+
+            # Equipped weapon (new format)
+            if data.equipped_weapon is not None:
+                writer.writerow(['equipped_weapon', 'index', '', str(data.equipped_weapon)])
 
             # Companions equipped
             for slot, companion in data.companions_equipped.items():
@@ -145,6 +162,15 @@ def save_user_data(username: str, data: UserData) -> bool:
             for comp_id, companion in data.companions_inventory.items():
                 for key, value in companion.items():
                     writer.writerow(['companion_inventory', comp_id, key, str(value)])
+
+            # Companion levels (new format)
+            for comp_key, level in data.companion_levels.items():
+                writer.writerow(['companion_level', comp_key, '', str(level)])
+
+            # Equipped companions (new format)
+            for slot_idx, comp_key in enumerate(data.equipped_companions or []):
+                if comp_key:
+                    writer.writerow(['equipped_companion', str(slot_idx), '', comp_key])
 
             # Maple Rank - handle nested stat_levels dict
             for key, value in data.maple_rank.items():
@@ -240,6 +266,15 @@ def load_user_data(username: str) -> UserData:
                         data.weapons[key] = {}
                     data.weapons[key][subkey] = _parse_value(value)
 
+                elif section == 'weapon_inv':
+                    idx = int(key)
+                    while len(data.weapon_inventory) <= idx:
+                        data.weapon_inventory.append({})
+                    data.weapon_inventory[idx][subkey] = _parse_value(value)
+
+                elif section == 'equipped_weapon':
+                    data.equipped_weapon = int(value)
+
                 elif section == 'companion_equipped':
                     if key not in data.companions_equipped:
                         data.companions_equipped[key] = {}
@@ -249,6 +284,15 @@ def load_user_data(username: str) -> UserData:
                     if key not in data.companions_inventory:
                         data.companions_inventory[key] = {}
                     data.companions_inventory[key][subkey] = _parse_value(value)
+
+                elif section == 'companion_level':
+                    data.companion_levels[key] = int(value)
+
+                elif section == 'equipped_companion':
+                    slot_idx = int(key)
+                    while len(data.equipped_companions) <= slot_idx:
+                        data.equipped_companions.append(None)
+                    data.equipped_companions[slot_idx] = value
 
                 elif section == 'maple_rank':
                     # Skip stat_levels if saved as string (legacy format)
@@ -432,10 +476,19 @@ def export_user_data_csv(data: UserData) -> str:
     for key, value in data.artifacts_resonance.items():
         writer.writerow(['artifact_resonance', key, '', str(value)])
 
-    # Weapons
+    # Weapons (old format)
     for weapon_id, weapon in data.weapons.items():
         for key, value in weapon.items():
             writer.writerow(['weapon', weapon_id, key, str(value)])
+
+    # Weapon inventory (new format)
+    for idx, weapon in enumerate(data.weapon_inventory or []):
+        for key, value in weapon.items():
+            writer.writerow(['weapon_inv', str(idx), key, str(value)])
+
+    # Equipped weapon (new format)
+    if data.equipped_weapon is not None:
+        writer.writerow(['equipped_weapon', 'index', '', str(data.equipped_weapon)])
 
     # Companions equipped
     for slot, companion in data.companions_equipped.items():
@@ -446,6 +499,15 @@ def export_user_data_csv(data: UserData) -> str:
     for comp_id, companion in data.companions_inventory.items():
         for key, value in companion.items():
             writer.writerow(['companion_inventory', comp_id, key, str(value)])
+
+    # Companion levels (new format)
+    for comp_key, level in data.companion_levels.items():
+        writer.writerow(['companion_level', comp_key, '', str(level)])
+
+    # Equipped companions (new format)
+    for slot_idx, comp_key in enumerate(data.equipped_companions or []):
+        if comp_key:
+            writer.writerow(['equipped_companion', str(slot_idx), '', comp_key])
 
     # Maple Rank - handle nested stat_levels dict
     for key, value in data.maple_rank.items():
@@ -535,6 +597,15 @@ def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
                     data.weapons[key] = {}
                 data.weapons[key][subkey] = _parse_value(value)
 
+            elif section == 'weapon_inv':
+                idx = int(key)
+                while len(data.weapon_inventory) <= idx:
+                    data.weapon_inventory.append({})
+                data.weapon_inventory[idx][subkey] = _parse_value(value)
+
+            elif section == 'equipped_weapon':
+                data.equipped_weapon = int(value)
+
             elif section == 'companion_equipped':
                 if key not in data.companions_equipped:
                     data.companions_equipped[key] = {}
@@ -544,6 +615,15 @@ def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
                 if key not in data.companions_inventory:
                     data.companions_inventory[key] = {}
                 data.companions_inventory[key][subkey] = _parse_value(value)
+
+            elif section == 'companion_level':
+                data.companion_levels[key] = int(value)
+
+            elif section == 'equipped_companion':
+                slot_idx = int(key)
+                while len(data.equipped_companions) <= slot_idx:
+                    data.equipped_companions.append(None)
+                data.equipped_companions[slot_idx] = value
 
             elif section == 'maple_rank':
                 if key == 'stat_levels':
