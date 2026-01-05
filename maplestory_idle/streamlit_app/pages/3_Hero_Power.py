@@ -79,9 +79,12 @@ with tab1:
         line_key = f'line{i}'
         line = data.hero_power_lines[line_key]
 
-        tier_str = line.get('tier', 'common')
+        tier_str = line.get('tier', 'common').lower()  # Normalize to lowercase
         stat_str = line.get('stat', '')
-        tier_color = TIER_COLORS.get(HeroPowerTier(tier_str) if tier_str else HeroPowerTier.COMMON, "#888888")
+        try:
+            tier_color = TIER_COLORS.get(HeroPowerTier(tier_str), "#888888")
+        except ValueError:
+            tier_color = "#888888"
 
         col_lock, col_tier, col_stat, col_val = st.columns([0.8, 1.5, 2.5, 1.5])
 
