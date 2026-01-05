@@ -1,0 +1,7 @@
+slot,stat_type,value,tier,is_locked,preset_name
+1,def_pen,19.0,mystic,True,Default
+2,min_dmg_mult,7.9,epic,False,Default
+3,def_pen,16.5,mystic,True,Default
+4,max_dmg_mult,32.0,mystic,False,Default
+5,min_dmg_mult,36.0,mystic,False,Default
+6,normal_damage,19.4,legendary,False,Default
