@@ -653,6 +653,8 @@ BOWMASTER_SKILLS: Dict[str, SkillData] = {
         base_targets=1,
         damage_per_level=4.09,  # (980 - 800) / 44
         cooldown=40.0,
+        attack_interval=0.248,  # Base seconds per arrow (~4 arrows/sec at 0% AS)
+        # Tested: 20 arrows in 2.5s at 98.2% AS → base interval = 2.5 * 1.982 / 20 = 0.248
         scales_with_attack_speed=True,
     ),
 
@@ -800,9 +802,28 @@ class CharacterState:
         )
 
     def get_effective_skill_level(self, skill_name: str) -> int:
-        """Get effective skill level including +All Skills bonus."""
+        """
+        Get effective skill level including:
+        - Base level (1)
+        - Job-specific skill points from leveling (3 per level in that job)
+        - +All Skills bonus from gear
+
+        Example at level 103 with +44 All Skills:
+        - 1st Job skill: 1 + 87 + 44 = 132
+        - 2nd Job skill: 1 + 90 + 44 = 135
+        - 3rd Job skill: 1 + 120 + 44 = 165
+        - 4th Job skill: 1 + 9 + 44 = 54
+        """
         base = self.skill_levels.get(skill_name, 1)
-        return base + self.all_skills_bonus
+
+        # Get job-specific skill point bonus
+        if skill_name in BOWMASTER_SKILLS:
+            skill_job = BOWMASTER_SKILLS[skill_name].job
+            job_skill_points = get_skill_points_for_job(self.level, skill_job)
+        else:
+            job_skill_points = 0
+
+        return base + job_skill_points + self.all_skills_bonus
 
     def get_current_job(self) -> Job:
         """Get current job advancement."""
@@ -936,6 +957,7 @@ class DPSCalculator:
         Mortal Blow activates after 50 hits, lasts 5 sec (+ 5 sec with mastery = 10 sec).
         Hit sources that COUNT:
         - Arrow Stream/basic attacks (5 hits per attack)
+        - Hurricane (20 hits base, 35 with mastery)
         - Phoenix (1 hit per attack)
         - Final Attack procs (1 hit)
         - Flash Mirage procs (1 hit)
@@ -960,6 +982,14 @@ class DPSCalculator:
             basic_hits = self.get_skill_hits(basic_skill_name)
             attacks_per_second = 1 / cast_time
             hits_per_second += basic_hits * attacks_per_second
+
+        # Hurricane (20 hits base, 35 with mastery, 40s CD)
+        if self.char.is_skill_unlocked("hurricane"):
+            hurricane_hits = self.get_skill_hits("hurricane")
+            hurricane_cd = self.char.get_effective_skill_cooldown(
+                BOWMASTER_SKILLS["hurricane"].cooldown, 0
+            )
+            hits_per_second += hurricane_hits / hurricane_cd
 
         # Phoenix (attacks every 3 seconds, 1 hit, independent of AS)
         if self.char.is_skill_unlocked("phoenix"):
@@ -1243,7 +1273,21 @@ class DPSCalculator:
                 continue
 
             skill = BOWMASTER_SKILLS[skill_name]
-            skill_cast_time = self.get_cast_time(1.0, skill.scales_with_attack_speed)
+            hits = self.get_skill_hits(skill_name)
+
+            # Calculate cast time
+            if skill.attack_interval > 0:
+                # Hurricane: fires arrows over time, attack speed affects firing rate
+                # Base cast time = hits × interval (e.g., 20 × 0.248 = ~5 seconds)
+                # At 98.2% AS: 5.0 / 1.982 = 2.5 seconds (verified from testing)
+                base_cast_time = hits * skill.attack_interval
+                if skill.scales_with_attack_speed:
+                    skill_cast_time = base_cast_time / self.get_effective_attack_speed()
+                else:
+                    skill_cast_time = base_cast_time
+            else:
+                # Default: 1 second base cast time for instant-cast skills
+                skill_cast_time = self.get_cast_time(1.0, skill.scales_with_attack_speed)
 
             if skill.cooldown > 0:
                 # Apply skill CD reduction from hat potential
@@ -1257,7 +1301,6 @@ class DPSCalculator:
                     skill.damage_type,
                     skill_name,
                 )
-                hits = self.get_skill_hits(skill_name)
                 total_damage = damage * hits * uses_per_rotation
                 active_dps += total_damage / rotation_length
                 skills_used.append(skill_name)
