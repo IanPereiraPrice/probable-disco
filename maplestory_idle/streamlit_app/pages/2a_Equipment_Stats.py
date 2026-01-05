@@ -102,13 +102,18 @@ SCROLL_DIAMOND_COST = 50   # Each scroll ~50 diamonds
 
 
 def ensure_item_fields(item: dict) -> dict:
-    """Ensure all item fields exist."""
+    """Ensure all item fields exist with defaults matching the old app."""
     defaults = {
+        # Basic info
         'name': '', 'rarity': 'Normal', 'tier': 1, 'stars': 0, 'is_special': False,
+        # Main stats (Main Amplify)
         'base_attack': 0, 'base_max_hp': 0, 'base_third_stat': 0,
+        # Default sub stats (Sub Amplify) - available on all equipment
         'sub_boss_damage': 0, 'sub_normal_damage': 0, 'sub_crit_rate': 0,
         'sub_crit_damage': 0, 'sub_attack_flat': 0,
+        # Job skill bonuses (Sub Amplify) - available on all equipment
         'sub_skill_1st': 0, 'sub_skill_2nd': 0, 'sub_skill_3rd': 0, 'sub_skill_4th': 0,
+        # Special stats (Sub Amplify) - only on special items
         'special_stat_type': 'damage_pct', 'special_stat_value': 0,
     }
     for k, v in defaults.items():
@@ -357,6 +362,7 @@ with tab_equip:
         st.markdown("---")
         st.markdown("**Sub Stats** (Sub Amplify)")
 
+        # Row 1: Boss, Normal, CR, CD
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             new_boss = st.number_input("Boss%", 0.0, 100.0, float(item.get('sub_boss_damage', 0)), step=0.1, key="eq_boss")
@@ -380,6 +386,72 @@ with tab_equip:
                 auto_save()
 
         st.caption(f"After SF: Boss {new_boss*sub_mult:.1f}% | Normal {new_normal*sub_mult:.1f}% | CR {new_cr*sub_mult:.1f}% | CD {new_cd*sub_mult:.1f}%")
+
+        # Row 2: Attack Flat
+        col1, col2 = st.columns(2)
+        with col1:
+            new_atk_flat = st.number_input("Attack Flat", 0, 99999, int(item.get('sub_attack_flat', 0)), key="eq_atk_flat")
+            if new_atk_flat != item.get('sub_attack_flat'):
+                item['sub_attack_flat'] = new_atk_flat
+                auto_save()
+        with col2:
+            st.metric("After SF", f"{new_atk_flat * sub_mult:,.0f}")
+
+        # Row 3: Job Skill Bonuses
+        st.markdown("**Job Skill Bonuses** (Sub Amplify)")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            new_skill_1st = st.number_input("1st Job", 0, 100, int(item.get('sub_skill_1st', 0)), key="eq_skill_1st")
+            if new_skill_1st != item.get('sub_skill_1st'):
+                item['sub_skill_1st'] = new_skill_1st
+                auto_save()
+        with col2:
+            new_skill_2nd = st.number_input("2nd Job", 0, 100, int(item.get('sub_skill_2nd', 0)), key="eq_skill_2nd")
+            if new_skill_2nd != item.get('sub_skill_2nd'):
+                item['sub_skill_2nd'] = new_skill_2nd
+                auto_save()
+        with col3:
+            new_skill_3rd = st.number_input("3rd Job", 0, 100, int(item.get('sub_skill_3rd', 0)), key="eq_skill_3rd")
+            if new_skill_3rd != item.get('sub_skill_3rd'):
+                item['sub_skill_3rd'] = new_skill_3rd
+                auto_save()
+        with col4:
+            new_skill_4th = st.number_input("4th Job", 0, 100, int(item.get('sub_skill_4th', 0)), key="eq_skill_4th")
+            if new_skill_4th != item.get('sub_skill_4th'):
+                item['sub_skill_4th'] = new_skill_4th
+                auto_save()
+
+        st.caption(f"After SF: 1st +{int(new_skill_1st*sub_mult)} | 2nd +{int(new_skill_2nd*sub_mult)} | 3rd +{int(new_skill_3rd*sub_mult)} | 4th +{int(new_skill_4th*sub_mult)}")
+
+        # Row 4: Special Item Stats
+        st.markdown("---")
+        st.markdown("**Special Item Stats** (only for special gear)")
+
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            new_is_special = st.checkbox("Is Special", value=item.get('is_special', False), key="eq_is_special")
+            if new_is_special != item.get('is_special'):
+                item['is_special'] = new_is_special
+                auto_save()
+
+        if new_is_special:
+            with col2:
+                special_types = list(SPECIAL_STAT_OPTIONS.keys())
+                special_labels = list(SPECIAL_STAT_OPTIONS.values())
+                current_type = item.get('special_stat_type', 'damage_pct')
+                type_idx = special_types.index(current_type) if current_type in special_types else 0
+                new_special_type = st.selectbox("Special Stat", special_labels, index=type_idx, key="eq_special_type")
+                new_special_type_key = special_types[special_labels.index(new_special_type)]
+                if new_special_type_key != item.get('special_stat_type'):
+                    item['special_stat_type'] = new_special_type_key
+                    auto_save()
+            with col3:
+                new_special_value = st.number_input("Value", 0.0, 100.0, float(item.get('special_stat_value', 0)), step=0.1, key="eq_special_value")
+                if new_special_value != item.get('special_stat_value'):
+                    item['special_stat_value'] = new_special_value
+                    auto_save()
+
+            st.caption(f"After SF: {SPECIAL_STAT_OPTIONS.get(item.get('special_stat_type', 'damage_pct'), 'Damage %')} +{new_special_value*sub_mult:.1f}")
 
 
 # ============================================================================
