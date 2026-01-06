@@ -4,21 +4,57 @@ MapleStory Idle - Complete Damage & Stat Formulas
 Verified through empirical testing on Bowmaster character.
 Last Updated: December 2025
 
-This module contains all verified formulas for damage calculation,
-stat stacking, and game mechanics.
+DEPRECATED: This module now re-exports from core/ for backwards compatibility.
+All new code should import directly from core/:
+
+    from core import (
+        calculate_damage,
+        calculate_defense_pen,
+        calculate_final_damage_mult,
+        calculate_attack_speed,
+        ...
+    )
+
+This file is maintained for backwards compatibility only.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 from enum import Enum
 
+# Re-export from core module for backwards compatibility
+from core import (
+    calculate_damage as _core_calculate_damage,
+    calculate_total_dex as _core_calculate_total_dex,
+    calculate_stat_proportional_damage as _core_stat_prop,
+    calculate_damage_amp_multiplier as _core_damage_amp,
+    calculate_final_damage_mult as _core_final_damage_mult,
+    calculate_final_damage_total as _core_final_damage_total,
+    calculate_defense_pen as _core_defense_pen,
+    calculate_defense_multiplier as _core_defense_mult,
+    calculate_effective_crit_multiplier as _core_crit_mult,
+    calculate_attack_speed as _core_attack_speed,
+    DamageResult as _CoreDamageResult,
+    BASE_CRIT_DMG,
+    BASE_MIN_DMG,
+    BASE_MAX_DMG,
+    DEF_PEN_CAP,
+    ATK_SPD_CAP,
+    ENEMY_DEFENSE_VALUES as CORE_ENEMY_DEFENSE_VALUES,
+    get_enemy_defense,
+    StatStackingType as CoreStatStackingType,
+    STAT_STACKING as CORE_STAT_STACKING,
+)
+
 
 # =============================================================================
-# CORE CONSTANTS
+# CORE CONSTANTS (kept for backwards compatibility)
 # =============================================================================
 
-# Damage Amplification constant (discovered through testing)
-DAMAGE_AMP_DIVISOR = 396.5  # Formula: 1 + (DamageAmp / 396.5)
+# DEPRECATED: Old damage amp divisor was incorrect
+# The correct formula is: 1 + (damage_amp / 100)
+# Kept here for reference only
+DAMAGE_AMP_DIVISOR = 396.5  # OLD FORMULA - DO NOT USE
 
 
 # =============================================================================
@@ -62,29 +98,30 @@ STAT_STACKING = {
 
 
 # =============================================================================
-# DEX CALCULATION
+# DEX CALCULATION (delegates to core)
 # =============================================================================
 
 def calculate_total_dex(flat_dex_pool: float, percent_dex: float) -> float:
     """
     Calculate total DEX from flat pool and percentage bonus.
-    
-    Formula (VERIFIED):
-        Total_DEX = Flat_DEX_Pool × (1 + %DEX)
-    
-    Test Evidence:
-        - Companion +19 flat → +43 DEX (multiplier 2.26x) ✓
-        - Hero Ability -560 flat → -1,178 DEX (multiplier 2.10x) ✓
-        - Artifact -7% → -1,305 DEX (pool calc: 18,643) ✓
-    
+
+    DELEGATES TO: core.damage.calculate_total_dex
+
+    Formula:
+        Total_DEX = Flat_DEX_Pool × (1 + %DEX/100)
+
+    Note: The core version expects percent_dex as a percentage (e.g., 126.5),
+    but this wrapper preserves backwards compatibility with decimal input.
+
     Args:
         flat_dex_pool: Sum of all flat DEX sources (base + equipment + skills)
         percent_dex: Total %DEX bonus as decimal (1.265 for 126.5%)
-    
+
     Returns:
         Total DEX value
     """
-    return flat_dex_pool * (1 + percent_dex)
+    # Convert from decimal to percentage for core function
+    return _core_calculate_total_dex(flat_dex_pool, percent_dex * 100)
 
 
 def dex_equivalent(percent_dex_bonus: float, flat_dex_pool: float) -> float:
@@ -174,24 +211,22 @@ def calculate_damage_percent(
 def calculate_damage_amp_multiplier(damage_amp_percent: float) -> float:
     """
     Calculate Damage Amplification multiplier.
-    
-    Formula (VERIFIED):
-        Multiplier = 1 + (DamageAmp% / 396.5)
-    
-    Source: Scrolls ONLY (does NOT affect displayed Damage %)
-    
-    Test Evidence:
-        - Removed 2.4% Damage Amp via scroll reset
-        - Displayed Damage % unchanged (493.6% → 493.6%)
-        - Confirms it's a separate multiplier
-    
+
+    DELEGATES TO: core.damage.calculate_damage_amp_multiplier
+
+    Formula (CORRECTED):
+        Multiplier = 1 + (DamageAmp% / 100)
+
+    NOTE: The old formula using 396.5 divisor was INCORRECT.
+    Damage amp is a straight percentage multiplier.
+
     Args:
         damage_amp_percent: Total Damage Amplification % from scrolls
-    
+
     Returns:
         Damage Amplification multiplier
     """
-    return 1 + (damage_amp_percent / DAMAGE_AMP_DIVISOR)
+    return _core_damage_amp(damage_amp_percent)
 
 
 # =============================================================================
@@ -201,69 +236,47 @@ def calculate_damage_amp_multiplier(damage_amp_percent: float) -> float:
 def calculate_final_damage(sources: Dict[str, float]) -> float:
     """
     Calculate total Final Damage from multiplicative sources.
-    
-    Formula (VERIFIED):
+
+    DELEGATES TO: core.damage.calculate_final_damage_total
+
+    Formula:
         Final Damage % = [(1 + FD₁) × (1 + FD₂) × (1 + FD₃) × ...] - 1
-    
-    Test Evidence:
-        | State                   | Final Damage | Calculation             |
-        |-------------------------|--------------|-------------------------|
-        | Base (no Mortal/Flower) | 51.8%        | -                       |
-        | + Mortal Blow           | 73.6%        | 1.518 × 1.144 = 1.737 ✓ |
-        | + Fire Flower           | 94.5%        | 1.736 × 1.12 = 1.944 ✓  |
-    
+
     Args:
         sources: Dictionary of {source_name: fd_percent_as_decimal}
                  Example: {"bottom": 0.13, "guild": 0.10, "extreme_archery": 0.217}
-    
+
     Returns:
         Total Final Damage as decimal (0.945 for 94.5%)
     """
-    multiplier = 1.0
-    for fd_value in sources.values():
-        multiplier *= (1 + fd_value)
-    return multiplier - 1
+    return _core_final_damage_total(list(sources.values()))
 
 
-# Known Final Damage sources for Bowmaster
-BOWMASTER_FD_SOURCES = {
-    "bottom_pot_bonus": 0.13,      # Bottom equipment potential + bonus
-    "guild_skill": 0.10,           # Guild passive
-    "extreme_archery_bow": 0.217,  # Skill passive (always active)
-    "mortal_blow": 0.144,          # Conditional: after 50 hits, 5s duration
-    "fire_flower": 0.12,           # Artifact: max 10 targets, 1.2% each
-}
+# DEPRECATED: Hardcoded FD sources removed - these are now tracked dynamically in user data
 
 
 # =============================================================================
 # DEFENSE PENETRATION (IED - MULTIPLICATIVE)
 # =============================================================================
 
-def calculate_defense_penetration(sources: list[float]) -> float:
+def calculate_defense_penetration(sources: List[float]) -> float:
     """
     Calculate total Defense Penetration from multiplicative sources.
-    
-    Formula (VERIFIED):
+
+    DELEGATES TO: core.damage.calculate_defense_pen
+
+    Formula:
         Remaining = (1 - IED₁) × (1 - IED₂) × (1 - IED₃) × ...
         Total Def Pen = 1 - Remaining
-    
-    Test Evidence:
-        Base: 42.4%
-        + Hero Ability 19%: (1-0.424) × (1-0.19) = remaining 46.7%
-        + Hero Ability 16.5%: × (1-0.165) = remaining 38.9%
-        Total Def Pen = 1 - 0.389 = 61.1% (Actual: 60.9%) ✓
-    
+
     Args:
         sources: List of Defense Penetration values as decimals
                  Example: [0.424, 0.19, 0.165]
-    
+
     Returns:
-        Total Defense Penetration as decimal
+        Total Defense Penetration as decimal (capped at 1.0)
     """
-    remaining = 1.0
-    for ied in sources:
-        remaining *= (1 - ied)
-    return 1 - remaining
+    return _core_defense_pen(sources)
 
 
 # =============================================================================
@@ -277,34 +290,25 @@ def calculate_damage_vs_defense(
 ) -> float:
     """
     Calculate actual damage after enemy defense.
-    
-    Formula (VERIFIED):
+
+    DELEGATES TO: core.damage.calculate_defense_multiplier
+
+    Formula:
         Damage = BaseDamage / (1 + EnemyDefValue × (1 - YourDefPen))
-    
-    Known Enemy Defense Values:
-        - Maple Island 1-1: 0.0
-        - Aquarium 14: 0.388
-        - Mu Lung 27-1: 0.752
-        - World Boss (King Castle Golem): 6.527
-    
+
     Args:
         base_damage: Your damage before defense calculation
         def_pen: Your total defense penetration as decimal
         enemy_def_value: Enemy's raw defense value (not percentage)
-    
+
     Returns:
         Actual damage dealt
     """
-    return base_damage / (1 + enemy_def_value * (1 - def_pen))
+    return base_damage * _core_defense_mult(def_pen, enemy_def_value)
 
 
-# Known enemy defense values from testing
-ENEMY_DEFENSE_VALUES = {
-    "Maple Island 1-1": 0.0,
-    "Aquarium 14": 0.388,
-    "Mu Lung 27-1": 0.752,
-    "World Boss (King Castle Golem)": 6.527,
-}
+# Re-export enemy defense values from core
+ENEMY_DEFENSE_VALUES = CORE_ENEMY_DEFENSE_VALUES
 
 
 # =============================================================================

@@ -24,7 +24,7 @@ class UserData:
     # Character info
     username: str = ""
     character_level: int = 100
-    all_skills: int = 44
+    all_skills: int = 0  # Auto-calculated from equipment potentials & sub stats
     combat_mode: str = "stage"
     chapter: str = "Chapter 27"
 
@@ -75,6 +75,9 @@ class UserData:
 
     # Manual adjustments
     manual_adjustments: Dict[str, float] = field(default_factory=dict)
+
+    # Guild skills
+    guild_skills: Dict[str, float] = field(default_factory=dict)
 
 
 def _get_user_file(username: str) -> str:
@@ -201,6 +204,10 @@ def save_user_data(username: str, data: UserData) -> bool:
             # Manual adjustments
             for stat, value in data.manual_adjustments.items():
                 writer.writerow(['manual_adj', stat, '', str(value)])
+
+            # Guild skills
+            for stat, value in data.guild_skills.items():
+                writer.writerow(['guild_skill', stat, '', str(value)])
 
         return True
     except Exception as e:
@@ -339,6 +346,9 @@ def load_user_data(username: str) -> UserData:
 
                 elif section == 'manual_adj':
                     data.manual_adjustments[key] = float(value)
+
+                elif section == 'guild_skill':
+                    data.guild_skills[key] = float(value)
 
     except Exception as e:
         print(f"Error loading user data: {e}")
@@ -562,6 +572,10 @@ def export_user_data_csv(data: UserData) -> str:
     for stat, value in data.manual_adjustments.items():
         writer.writerow(['manual_adj', stat, '', str(value)])
 
+    # Guild skills
+    for stat, value in data.guild_skills.items():
+        writer.writerow(['guild_skill', stat, '', str(value)])
+
     return output.getvalue()
 
 
@@ -691,6 +705,9 @@ def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
 
             elif section == 'manual_adj':
                 data.manual_adjustments[key] = float(value)
+
+            elif section == 'guild_skill':
+                data.guild_skills[key] = float(value)
 
         return data
     except Exception as e:

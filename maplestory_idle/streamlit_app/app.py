@@ -2,9 +2,19 @@
 MapleStory Idle Calculator - Streamlit Web App
 Main entry point with login/registration flow.
 """
+import os
 import streamlit as st
 from utils.auth import authenticate, create_user, user_exists
 from utils.data_manager import load_user_data, save_user_data, UserData
+
+# =============================================================================
+# LOCAL DEV BYPASS - Set to True to skip login during development
+# =============================================================================
+# Option 1: Set this directly to True for local testing
+# Option 2: Set environment variable MAPLE_DEV_MODE=true
+DEV_MODE = True  # <-- Toggle this for local dev
+# DEV_MODE = os.environ.get("MAPLE_DEV_MODE", "false").lower() == "true"
+DEV_USERNAME = "dev_user"
 
 # Page config
 st.set_page_config(
@@ -192,9 +202,26 @@ def main_app():
     """)
 
 
+def dev_auto_login():
+    """Auto-login for development mode."""
+    if not st.session_state.logged_in:
+        st.session_state.logged_in = True
+        st.session_state.username = DEV_USERNAME
+        # Load or create dev user data
+        try:
+            st.session_state.user_data = load_user_data(DEV_USERNAME)
+        except Exception:
+            st.session_state.user_data = UserData()
+
+
 def main():
     """Main entry point."""
     init_session_state()
+
+    # Dev mode bypass
+    if DEV_MODE:
+        dev_auto_login()
+        st.sidebar.warning("🔧 DEV MODE - Auth bypassed")
 
     if st.session_state.logged_in:
         main_app()

@@ -116,6 +116,9 @@ class CubeRecommendation:
     yellow_count: int
     useful_line_count: int
 
+    # Debug info (default value, must come last)
+    baseline_dps: float = 0.0    # Baseline DPS for this slot (DEBUG)
+
 
 def convert_streamlit_lines_to_potential_lines(
     slot_pots: Dict[str, Any],
@@ -189,6 +192,13 @@ def analyze_slot_potentials(
     Returns:
         CubeRecommendation or None if no data
     """
+    # SANITY CHECK: baseline_dps should be at least 1000 for meaningful calculations
+    # If it's too low, the character has almost no stats configured
+    if baseline_dps < 1000:
+        import logging
+        logging.warning(f"analyze_slot_potentials: baseline_dps={baseline_dps} is very low for slot={slot}, is_bonus={is_bonus}")
+        # Still continue but results may not be meaningful
+
     prefix = "bonus_" if is_bonus else ""
     tier_key = f"{prefix}tier" if is_bonus else "tier"
     pity_key = f"{prefix}pity" if is_bonus else "regular_pity"
@@ -275,6 +285,7 @@ def analyze_slot_potentials(
         best_possible_dps_gain=item_score.best_possible_dps_gain,
         dps_efficiency=item_score.dps_relative_score,
         percentile_score=item_score.total_score,
+        baseline_dps=baseline_dps,  # DEBUG field
         line1_stat=line_stats[0],
         line1_value=line_values[0],
         line1_dps_gain=line_dps_gains[0],

@@ -1,10 +1,12 @@
 """
 Character Settings Page
-Configure character level, skills, combat mode, and chapter.
+Configure character level, combat mode, and chapter.
+All Skills bonus is auto-calculated from equipment sources.
 """
 import streamlit as st
-from utils.data_manager import save_user_data, export_user_data_csv, import_user_data_csv
+from utils.data_manager import save_user_data, export_user_data_csv, import_user_data_csv, EQUIPMENT_SLOTS
 from constants import ENEMY_DEFENSE_VALUES
+from equipment import get_amplify_multiplier
 
 st.set_page_config(page_title="Character Settings", page_icon="⚔️", layout="wide")
 
@@ -19,6 +21,47 @@ data = st.session_state.user_data
 def auto_save():
     """Save data after changes."""
     save_user_data(st.session_state.username, data)
+
+
+def calculate_all_skills() -> int:
+    """
+    Calculate total All Skills bonus from all equipment sources.
+
+    Sources:
+    1. Equipment potentials (regular and bonus) with 'all_skills' stat
+       - Potentials are NOT affected by starforce
+    2. Equipment special stats (sub stats) where special_stat_type == 'all_skills'
+       - Sub stats ARE affected by starforce sub amplify multiplier
+
+    Returns:
+        Total All Skills bonus as an integer
+    """
+    total = 0
+
+    for slot in EQUIPMENT_SLOTS:
+        # Get equipment item for starforce multiplier (sub stats only)
+        item = data.equipment_items.get(slot, {})
+        stars = int(item.get('stars', 0))
+        sub_mult = get_amplify_multiplier(stars, is_sub=True)
+
+        # Check potentials (regular and bonus) - NOT affected by starforce
+        pots = data.equipment_potentials.get(slot, {})
+        for prefix in ['', 'bonus_']:
+            for i in range(1, 4):
+                stat = pots.get(f'{prefix}line{i}_stat', '')
+                value = pots.get(f'{prefix}line{i}_value', 0)
+                if stat == 'all_skills' and value > 0:
+                    total += int(value)
+
+        # Check special sub stats (only if item is marked as special)
+        # Sub stats ARE affected by starforce sub amplify multiplier
+        if item.get('is_special', False):
+            special_type = item.get('special_stat_type', '')
+            special_value = item.get('special_stat_value', 0)
+            if special_type == 'all_skills' and special_value > 0:
+                total += int(special_value * sub_mult)
+
+    return total
 
 
 st.title("⚔️ Character Settings")
@@ -42,17 +85,18 @@ with col1:
         data.character_level = new_level
         auto_save()
 
-    # All Skills
-    new_skills = st.number_input(
+    # All Skills (calculated automatically)
+    calculated_all_skills = calculate_all_skills()
+    st.metric(
         "All Skills Bonus",
-        min_value=0,
-        max_value=100,
-        value=data.all_skills,
-        step=1,
-        help="Total +All Skills from equipment (excluding cube lines)"
+        f"+{calculated_all_skills}",
+        help="Auto-calculated from equipment potentials and special sub stats"
     )
-    if new_skills != data.all_skills:
-        data.all_skills = new_skills
+    st.caption("*From ring/necklace potentials + special sub stats*")
+
+    # Update stored value if different
+    if calculated_all_skills != data.all_skills:
+        data.all_skills = calculated_all_skills
         auto_save()
 
     st.divider()

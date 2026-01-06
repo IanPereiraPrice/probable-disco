@@ -1,15 +1,96 @@
 """
 Upgrade Path Optimizer Page
 Comprehensive upgrade recommendations with detailed DPS analysis and specific targets.
-Mirrors the old Tkinter app's Upgrade Path tab functionality.
+Includes optimal stat distribution analysis with marginal value optimization.
+
+Uses core/ module for all damage calculations - single source of truth.
+All DPS calculations use the same method as the original Tkinter app:
+- Calculate baseline DPS with current stats
+- Calculate DPS with modified stats
+- Compare the difference
+
+Key principle: Calculate REAL DPS gains by actually running damage formulas,
+not arbitrary weights or estimates.
 """
 import streamlit as st
-from typing import Dict, List, Any, Optional
-from utils.data_manager import save_user_data, EQUIPMENT_SLOTS
+from typing import Dict, List, Any, Optional, Tuple
+import sys
+import os
+from pathlib import Path
+import copy
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from core import (
+    calculate_damage,
+    calculate_total_dex,
+    calculate_final_damage_mult,
+    calculate_defense_pen,
+    calculate_attack_speed,
+    calculate_effective_crit_multiplier,
+    BASE_CRIT_DMG,
+    BASE_MIN_DMG,
+    BASE_MAX_DMG,
+    EQUIPMENT_SLOTS,
+    ENEMY_DEFENSE_VALUES,
+    get_enemy_defense,
+)
+from utils.data_manager import save_user_data
 from utils.cube_analyzer import (
     analyze_all_cube_priorities, CubeRecommendation,
     format_stat_display, REGULAR_DIAMOND_PER_CUBE, BONUS_DIAMOND_PER_CUBE
 )
+from optimal_stats import (
+    calculate_slot_efficiency, calculate_source_ranking, calculate_optimal_distribution,
+    get_optimal_stat_for_slot, format_stat_name, SLOT_EXCLUSIVE_STATS,
+    EQUIPMENT_SLOTS as OPTIMAL_EQUIPMENT_SLOTS, HERO_POWER_VALUES, ARTIFACT_POTENTIAL_VALUES
+)
+from starforce_optimizer import (
+    calculate_total_cost_markov,
+    find_optimal_per_stage_strategy,
+    MESO_TO_DIAMOND as SF_MESO_TO_DIAMOND,
+    SCROLL_DIAMOND_COST as SF_SCROLL_COST,
+)
+from equipment import STARFORCE_TABLE, get_amplify_multiplier
+from utils.dps_calculator import (
+    aggregate_stats as shared_aggregate_stats,
+    calculate_dps as shared_calculate_dps,
+    get_all_skills_dps_value,
+    calculate_ba_percent_of_dps,
+    calculate_skill_cd_dps_value,
+    calculate_buff_duration_dps_value,
+    get_combat_mode_enum,
+    calculate_crit_rate_dps_value,
+    BASE_MIN_DMG,
+    BASE_MAX_DMG,
+)
+
+
+# =============================================================================
+# Wrapper functions for shared DPS calculator (uses user data from session)
+# =============================================================================
+def aggregate_stats(star_overrides: Dict[str, int] = None) -> Dict[str, Any]:
+    """Wrapper that calls shared aggregate_stats with user data."""
+    return shared_aggregate_stats(data, star_overrides)
+
+
+def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: float = None, book_of_ancient_stars: int = 5) -> Dict[str, Any]:
+    """Wrapper that calls shared calculate_dps with correct enemy defense for combat mode."""
+    # Determine enemy defense based on combat mode if not explicitly provided
+    if enemy_def is None:
+        if combat_mode == 'world_boss':
+            enemy_def = ENEMY_DEFENSE_VALUES.get('World Boss', 6.527)
+        else:
+            # Get chapter number from user data (e.g., "Chapter 27" -> 27)
+            chapter_str = getattr(data, 'chapter', 'Chapter 27')
+            try:
+                chapter_num = int(chapter_str.replace('Chapter ', '').strip())
+            except (ValueError, AttributeError):
+                chapter_num = 27  # Default fallback
+            enemy_def = get_enemy_defense(chapter_num)
+    return shared_calculate_dps(stats, combat_mode, enemy_def, book_of_ancient_stars)
+
 
 st.set_page_config(page_title="Upgrade Optimizer", page_icon="📈", layout="wide")
 
@@ -20,12 +101,8 @@ if 'logged_in' not in st.session_state or not st.session_state.logged_in:
 data = st.session_state.user_data
 
 # ==============================================================================
-# Constants
+# Constants (imported from core, plus optimizer-specific ones)
 # ==============================================================================
-HEX_MULTIPLIER = 1.24
-BASE_MIN_DMG = 60.0
-BASE_MAX_DMG = 100.0
-BASE_CRIT_DMG = 30.0
 
 # Starforce data: (success_rate, destroy_rate, meso_cost)
 STARFORCE_DATA = {
@@ -90,152 +167,14 @@ SLOT_TARGET_STATS = {
 }
 
 
-# ==============================================================================
-# Stat Aggregation and DPS Calculation
-# ==============================================================================
-def aggregate_stats() -> Dict[str, float]:
-    """Aggregate all stats from user data."""
-    stats = {
-        'flat_dex': 0,
-        'dex_percent': 0,
-        'damage_percent': 0,
-        'boss_damage': 0,
-        'normal_damage': 0,
-        'crit_damage': 0,
-        'crit_rate': 0,
-        'final_damage': 0,
-        'defense_pen': 0,
-        'min_dmg_mult': 0,
-        'max_dmg_mult': 0,
-        'attack_speed': 0,
-        'base_attack': 0,
-    }
-
-    # Equipment potentials (regular and bonus)
-    for slot in EQUIPMENT_SLOTS:
-        pots = data.equipment_potentials.get(slot, {})
-        for prefix in ['', 'bonus_']:
-            for i in range(1, 4):
-                stat = pots.get(f'{prefix}line{i}_stat', '')
-                value = float(pots.get(f'{prefix}line{i}_value', 0))
-
-                if stat == 'damage':
-                    stats['damage_percent'] += value
-                elif stat == 'boss_damage':
-                    stats['boss_damage'] += value
-                elif stat == 'crit_damage':
-                    stats['crit_damage'] += value
-                elif stat == 'final_damage':
-                    stats['final_damage'] += value
-                elif stat == 'def_pen':
-                    stats['defense_pen'] += value
-                elif stat == 'normal_damage':
-                    stats['normal_damage'] += value
-                elif stat == 'min_dmg_mult':
-                    stats['min_dmg_mult'] += value
-                elif stat == 'max_dmg_mult':
-                    stats['max_dmg_mult'] += value
-                elif stat in ('dex_pct', 'str_pct', 'int_pct', 'luk_pct'):
-                    stats['dex_percent'] += value
-                elif stat in ('dex_flat', 'str_flat', 'int_flat', 'luk_flat'):
-                    stats['flat_dex'] += value
-                elif stat == 'crit_rate':
-                    stats['crit_rate'] += value
-
-    # Equipment base stats
-    for slot in EQUIPMENT_SLOTS:
-        item = data.equipment_items.get(slot, {})
-        stats['base_attack'] += item.get('base_attack', 0)
-
-    # Hero Power lines
-    for line_key, line in data.hero_power_lines.items():
-        stat = line.get('stat', '')
-        value = float(line.get('value', 0))
-
-        if stat == 'damage':
-            stats['damage_percent'] += value
-        elif stat == 'boss_damage':
-            stats['boss_damage'] += value
-        elif stat == 'crit_damage':
-            stats['crit_damage'] += value
-        elif stat == 'def_pen':
-            stats['defense_pen'] += value
-        elif stat == 'min_dmg_mult':
-            stats['min_dmg_mult'] += value
-        elif stat == 'max_dmg_mult':
-            stats['max_dmg_mult'] += value
-
-    # Hero Power passives
-    passives = data.hero_power_passives
-    stats['flat_dex'] += passives.get('main_stat', 0) * 100
-    stats['damage_percent'] += passives.get('damage', 0) * 2
-
-    # Maple Rank
-    mr = data.maple_rank
-    stage = mr.get('current_stage', 1)
-    ms_level = mr.get('main_stat_level', 0)
-    special = mr.get('special_main_stat', 0)
-    stats['flat_dex'] += (stage - 1) * 100 + ms_level * 10 + special
-
-    stat_levels = mr.get('stat_levels', {})
-    if isinstance(stat_levels, dict):
-        stats['attack_speed'] += stat_levels.get('attack_speed', 0) * 0.5
-        stats['crit_rate'] += stat_levels.get('crit_rate', 0) * 1
-        stats['damage_percent'] += stat_levels.get('damage', 0) * 2
-        stats['boss_damage'] += stat_levels.get('boss_damage', 0) * 2
-        stats['normal_damage'] += stat_levels.get('normal_damage', 0) * 2
-        stats['crit_damage'] += stat_levels.get('crit_damage', 0) * 2
-
-    # Equipment sets
-    stats['flat_dex'] += data.equipment_sets.get('medal', 0)
-    stats['flat_dex'] += data.equipment_sets.get('costume', 0)
-
-    return stats
-
-
-def calculate_dps(stats: Dict[str, float], combat_mode: str = 'stage', enemy_def: float = 0.752) -> Dict[str, Any]:
-    """Calculate DPS from stats."""
-    total_dex = stats['flat_dex'] * (1 + stats['dex_percent'] / 100)
-    stat_multiplier = 1 + (total_dex / 10000)
-
-    hex_mult = HEX_MULTIPLIER ** 3
-    total_damage_pct = (stats['damage_percent'] / 100) * hex_mult
-    base_damage_mult = 1 + total_damage_pct
-
-    if combat_mode in ('boss', 'world_boss'):
-        damage_multiplier = base_damage_mult * (1 + stats['boss_damage'] / 100)
-    else:
-        normal_weight = 0.60
-        boss_weight = 0.40
-        mult_vs_normal = base_damage_mult * (1 + stats['normal_damage'] / 100)
-        mult_vs_boss = base_damage_mult * (1 + stats['boss_damage'] / 100)
-        damage_multiplier = (normal_weight * mult_vs_normal) + (boss_weight * mult_vs_boss)
-
-    fd_multiplier = 1 + stats['final_damage'] / 100
-    total_crit_dmg = BASE_CRIT_DMG + stats['crit_damage']
-    crit_multiplier = 1 + (total_crit_dmg / 100)
-
-    def_pen_decimal = stats['defense_pen'] / 100
-    defense_multiplier = 1 / (1 + enemy_def * (1 - def_pen_decimal))
-
-    final_min = BASE_MIN_DMG + stats['min_dmg_mult']
-    final_max = BASE_MAX_DMG + stats['max_dmg_mult']
-    avg_mult = (final_min + final_max) / 2
-    dmg_range_mult = avg_mult / 100
-
-    atk_spd_mult = 1 + (stats['attack_speed'] / 100)
-    base_atk = max(stats['base_attack'], 10000)
-
-    total = (base_atk * stat_multiplier * damage_multiplier *
-             fd_multiplier * crit_multiplier * defense_multiplier *
-             dmg_range_mult * atk_spd_mult)
-
-    return {'total': total}
+# NOTE: aggregate_stats() and calculate_dps() are now imported from utils/dps_calculator.py
+# The wrapper functions at the top of this file (lines 73-80) call the shared module.
 
 
 # ==============================================================================
 # Detailed Upgrade Analysis
 # ==============================================================================
+
 def get_potential_lines_summary(slot: str, is_bonus: bool = False) -> Dict:
     """Get summary of current potential lines for a slot."""
     pots = data.equipment_potentials.get(slot, {})
@@ -314,141 +253,101 @@ def calculate_best_possible_dps(slot: str, tier: str) -> float:
     return best_dps
 
 
-def analyze_cube_priorities_detailed() -> List[Dict]:
-    """Analyze cube priorities with detailed breakdown."""
-    results = []
-
-    for slot in EQUIPMENT_SLOTS:
-        for is_bonus in [False, True]:
-            summary = get_potential_lines_summary(slot, is_bonus)
-            pot_type = "Bonus" if is_bonus else "Regular"
-            diamond_cost = BONUS_DIAMOND_PER_CUBE if is_bonus else REGULAR_DIAMOND_PER_CUBE
-
-            current_dps = summary['total_dps']
-            best_dps = calculate_best_possible_dps(slot, summary['tier'])
-            improvement_room = best_dps - current_dps
-
-            # Score based on current vs best
-            if best_dps > 0:
-                score = (current_dps / best_dps) * 100
-            else:
-                score = 100
-
-            # Expected cubes to improve
-            if score < 30:
-                cubes_to_improve = 10
-                difficulty = "Easy"
-            elif score < 50:
-                cubes_to_improve = 25
-                difficulty = "Medium"
-            elif score < 70:
-                cubes_to_improve = 50
-                difficulty = "Hard"
-            else:
-                cubes_to_improve = 100
-                difficulty = "Very Hard"
-
-            expected_cost = cubes_to_improve * diamond_cost
-            expected_gain = improvement_room * 0.4  # Conservative estimate
-
-            efficiency = (expected_gain / (expected_cost / 1000)) if expected_cost > 0 else 0
-
-            # Score indicator
-            if score < 30:
-                indicator = "🔴"
-            elif score < 60:
-                indicator = "🟡"
-            else:
-                indicator = "🟢"
-
-            results.append({
-                'slot': slot,
-                'is_bonus': is_bonus,
-                'pot_type': pot_type,
-                'tier': summary['tier'],
-                'pity': summary['pity'],
-                'lines': summary['lines'],
-                'current_dps': current_dps * 100,  # Convert to %
-                'best_dps': best_dps * 100,
-                'improvement_room': improvement_room * 100,
-                'score': score,
-                'indicator': indicator,
-                'cubes_to_improve': cubes_to_improve,
-                'expected_cost': expected_cost,
-                'expected_gain': expected_gain * 100,
-                'efficiency': efficiency,
-                'difficulty': difficulty,
-                'target_stats': SLOT_TARGET_STATS.get(slot, [])[:3],
-            })
-
-    # Sort by efficiency (highest first)
-    results.sort(key=lambda x: x['efficiency'], reverse=True)
-
-    # Add rank
-    for i, r in enumerate(results):
-        r['rank'] = i + 1
-
-    return results
+# NOTE: Custom cube analysis functions moved to utils/unused_optimizer_functions.py
+# Now using analyze_all_cube_priorities from cube_analyzer.py (same as Tkinter app)
 
 
-def analyze_starforce_detailed() -> List[Dict]:
-    """Analyze starforce with detailed cost breakdown."""
+def analyze_starforce_detailed(baseline_dps: float) -> List[Dict]:
+    """
+    Analyze starforce with detailed cost breakdown and REAL DPS calculations.
+
+    Uses:
+    - Markov chain analysis from starforce_optimizer for accurate cost estimates
+    - Actual DPS calculations to determine real gain from stat amplification
+
+    Args:
+        baseline_dps: The current total DPS (calculated once and passed in)
+
+    This correctly accounts for the equipment's actual sub-stats when calculating
+    DPS gain, not a rough estimate.
+    """
     results = []
 
     for slot in EQUIPMENT_SLOTS:
         item = data.equipment_items.get(slot, {})
-        current_stars = item.get('stars', 0)
+        current_stars = int(item.get('stars', 0))
 
         if current_stars >= 25 or current_stars < 10:
             continue
 
         target_stars = current_stars + 1
 
-        # Detailed cost calculation
-        if target_stars in STARFORCE_DATA:
-            success_rate, destroy_rate, meso_cost = STARFORCE_DATA[target_stars - 1]
+        # Use Markov chain analysis for accurate cost estimate
+        # Get optimal strategy for this single stage transition
+        stage_strategies, markov_result = find_optimal_per_stage_strategy(current_stars, target_stars)
+        optimal_strat = stage_strategies.get(current_stars, 'none')
 
-            # Base cost per attempt
-            base_diamond_cost = meso_cost * MESO_TO_DIAMOND + SCROLL_COST
+        # Total cost in diamonds from Markov analysis
+        total_cost = markov_result.total_cost
+        destroy_prob = markov_result.destroy_probability
+
+        # Get stage data for additional info
+        sf_data = STARFORCE_TABLE.get(current_stars)
+        if sf_data:
+            success_rate = sf_data.success_rate
             expected_attempts = 1 / success_rate if success_rate > 0 else 100
-
-            # Destruction risk
-            if destroy_rate > 0:
-                expected_destructions = destroy_rate * expected_attempts
-                destruction_cost = expected_destructions * DESTRUCTION_FEE
-                total_cost = base_diamond_cost * expected_attempts + destruction_cost
-            else:
-                total_cost = base_diamond_cost * expected_attempts
-                expected_destructions = 0
         else:
-            total_cost = 5000
             expected_attempts = 2
-            expected_destructions = 0
 
-        # DPS gain
-        current_amp = STARFORCE_SUB_AMPLIFY.get(current_stars, 0)
-        target_amp = STARFORCE_SUB_AMPLIFY.get(target_stars, current_amp)
-        amp_gain = target_amp - current_amp
-        dps_gain = amp_gain * 30  # Rough: 0.1 amp = 3% DPS
+        # Calculate REAL DPS gain by comparing baseline vs upgraded
+        # Create star overrides with this slot at target stars
+        upgraded_stats = aggregate_stats(star_overrides={slot: target_stars})
+        upgraded_dps_result = calculate_dps(upgraded_stats, data.combat_mode)
+        upgraded_dps = upgraded_dps_result['total']
+
+        # Calculate actual DPS gain percentage
+        if baseline_dps > 0:
+            dps_gain = ((upgraded_dps / baseline_dps) - 1) * 100
+        else:
+            dps_gain = 0
+
+        # Get amplify multipliers for display
+        current_amp = get_amplify_multiplier(current_stars, is_sub=True)
+        target_amp = get_amplify_multiplier(target_stars, is_sub=True)
 
         efficiency = (dps_gain / (total_cost / 1000)) if total_cost > 0 else 0
 
-        # Risk level
-        if target_stars <= 14:
+        # Risk level based on destruction probability
+        if destroy_prob <= 0:
             risk = "Safe"
             risk_color = "🟢"
-        elif target_stars == 15:
-            risk = "Low (3%)"
+        elif destroy_prob < 0.05:
+            risk = f"Low ({destroy_prob*100:.0f}%)"
             risk_color = "🟡"
-        elif target_stars <= 17:
-            risk = "Medium (4-5%)"
+        elif destroy_prob < 0.15:
+            risk = f"Medium ({destroy_prob*100:.0f}%)"
             risk_color = "🟠"
-        elif target_stars <= 20:
-            risk = "High (6-11%)"
+        elif destroy_prob < 0.30:
+            risk = f"High ({destroy_prob*100:.0f}%)"
             risk_color = "🔴"
         else:
-            risk = "Very High"
+            risk = f"Very High ({destroy_prob*100:.0f}%)"
             risk_color = "🔴"
+
+        # Get the actual sub-stats being amplified for display
+        sub_stats_detail = []
+        if item.get('sub_boss_damage', 0) > 0:
+            sub_stats_detail.append(f"Boss {item['sub_boss_damage']:.1f}%")
+        if item.get('sub_crit_damage', 0) > 0:
+            sub_stats_detail.append(f"CD {item['sub_crit_damage']:.1f}%")
+        if item.get('sub_crit_rate', 0) > 0:
+            sub_stats_detail.append(f"CR {item['sub_crit_rate']:.1f}%")
+        if item.get('sub_attack_flat', 0) > 0:
+            sub_stats_detail.append(f"ATK {item['sub_attack_flat']:.0f}")
+        if item.get('is_special', False) and item.get('special_stat_value', 0) > 0:
+            special_type = item.get('special_stat_type', 'damage_pct')
+            special_name = {'damage_pct': 'Dmg%', 'final_damage': 'FD%', 'all_skills': 'AllSkill'}.get(special_type, special_type)
+            sub_stats_detail.append(f"{special_name} {item['special_stat_value']:.1f}")
 
         results.append({
             'slot': slot,
@@ -456,13 +355,17 @@ def analyze_starforce_detailed() -> List[Dict]:
             'target_stars': target_stars,
             'total_cost': total_cost,
             'expected_attempts': expected_attempts,
-            'expected_destructions': expected_destructions,
+            'destroy_prob': destroy_prob,
+            'optimal_strategy': optimal_strat,
             'dps_gain': dps_gain,
             'efficiency': efficiency,
             'risk': risk,
             'risk_color': risk_color,
             'amp_before': current_amp,
             'amp_after': target_amp,
+            'baseline_dps': baseline_dps,
+            'upgraded_dps': upgraded_dps,
+            'sub_stats_detail': sub_stats_detail,
         })
 
     results.sort(key=lambda x: x['efficiency'], reverse=True)
@@ -588,165 +491,96 @@ with col2:
 with col3:
     budget = st.number_input("Diamond Budget", min_value=0, max_value=10000000, value=100000, step=10000)
 
-st.divider()
+# Warning if DPS is too low for meaningful analysis
+if current_dps < 10000:
+    st.warning("""
+    ⚠️ **Low DPS Warning**: Your calculated DPS is very low ({:,.0f}).
 
-# ==============================================================================
-# CUBE PRIORITY (Most Important)
-# ==============================================================================
-st.subheader("🎲 CUBE PRIORITY RANKING")
-st.caption("Sorted by efficiency (DPS gain per diamond spent)")
+    This usually means your character stats aren't fully configured. Please ensure you have:
+    - Base Attack values set in **Equipment Stats**
+    - Main stats (DEX/STR/etc.) configured
+    - Weapon stats set in **Weapons** page
 
-cube_analysis = analyze_cube_priorities_detailed()
-
-if cube_analysis:
-    # Top recommendations table
-    cube_table = []
-    for rec in cube_analysis[:15]:
-        lines_preview = " | ".join([
-            f"{l['stat_display'][:8]}:{l['value']:.0f}" if l['stat'] else "---"
-            for l in rec['lines']
-        ])
-
-        cube_table.append({
-            "Rank": f"#{rec['rank']}",
-            "Slot": f"{rec['slot'].title()} ({rec['pot_type']})",
-            "Tier": rec['tier'],
-            "Score": f"{rec['indicator']} {rec['score']:.0f}/100",
-            "Current": f"+{rec['current_dps']:.1f}%",
-            "Best": f"+{rec['best_dps']:.1f}%",
-            "Room": f"+{rec['improvement_room']:.1f}%",
-            "Cubes": f"~{rec['cubes_to_improve']:.0f}",
-            "Cost": f"{rec['expected_cost']:,.0f}💎",
-            "Difficulty": rec['difficulty'],
-        })
-
-    st.dataframe(cube_table, hide_index=True, use_container_width=True)
-
-    # Detailed breakdown for top 5
-    st.markdown("### Detailed Analysis - Top 5 Targets")
-
-    for rec in cube_analysis[:5]:
-        with st.expander(f"#{rec['rank']} {rec['slot'].title()} ({rec['pot_type']}) - {rec['indicator']} Score: {rec['score']:.0f}/100"):
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.markdown("**Current Lines:**")
-                for j, line in enumerate(rec['lines'], 1):
-                    if line['stat']:
-                        yellow_tag = "[Y]" if line.get('is_yellow') else "[G]"
-                        st.markdown(f"L{j}: {yellow_tag} {line['stat_display']} {line['value']:.1f}%")
-                    else:
-                        st.markdown(f"L{j}: (empty)")
-
-            with col2:
-                st.markdown("**DPS Impact:**")
-                st.markdown(f"- Current Roll: **+{rec['current_dps']:.2f}%** DPS")
-                st.markdown(f"- Best Possible: **+{rec['best_dps']:.2f}%** DPS")
-                st.markdown(f"- Room to Improve: **+{rec['improvement_room']:.2f}%** DPS")
-                st.markdown(f"- Expected Gain: **+{rec['expected_gain']:.2f}%** DPS")
-
-            with col3:
-                st.markdown("**Target Stats:**")
-                for stat in rec['target_stats']:
-                    st.markdown(f"- {format_stat_display(stat)}")
-
-                st.markdown("")
-                st.markdown("**Cost Analysis:**")
-                st.markdown(f"- ~{rec['cubes_to_improve']} cubes")
-                st.markdown(f"- ~{rec['expected_cost']:,.0f} diamonds")
-                st.markdown(f"- Efficiency: {rec['efficiency']:.4f}")
-
-            # Pity progress
-            if rec['pity'] > 0:
-                st.info(f"Tier-up pity: {rec['pity']} cubes used (closer to guaranteed tier-up!)")
+    The upgrade recommendations below may not be accurate until your stats are properly configured.
+    """.format(current_dps))
 
 st.divider()
 
 # ==============================================================================
-# STARFORCE ANALYSIS
+# Run all analyses (used for overall recommendations)
 # ==============================================================================
-st.subheader("⭐ STARFORCE PRIORITY")
 
-sf_analysis = analyze_starforce_detailed()
+# Cube analysis using original Tkinter app system
+cube_analysis = analyze_all_cube_priorities(
+    user_data=data,
+    aggregate_stats_func=aggregate_stats,
+    calculate_dps_func=calculate_dps,
+)
 
-if sf_analysis:
-    sf_table = []
-    for sf in sf_analysis[:10]:
-        sf_table.append({
-            "Slot": sf['slot'].title(),
-            "Current": f"★{sf['current_stars']}",
-            "Target": f"★{sf['target_stars']}",
-            "Cost": f"{sf['total_cost']:,.0f}💎",
-            "DPS Gain": f"+{sf['dps_gain']:.1f}%",
-            "Efficiency": f"{sf['efficiency']:.4f}",
-            "Risk": f"{sf['risk_color']} {sf['risk']}",
-            "Amp": f"{sf['amp_before']:.0%} → {sf['amp_after']:.0%}",
-        })
+# Starforce analysis
+sf_analysis = analyze_starforce_detailed(current_dps)
 
-    st.dataframe(sf_table, hide_index=True, use_container_width=True)
-
-    # Warning for risky upgrades
-    risky = [sf for sf in sf_analysis if sf['target_stars'] >= 15]
-    if risky:
-        with st.expander("Starforce Risk Analysis"):
-            for sf in risky[:5]:
-                st.markdown(f"**{sf['slot'].title()} ★{sf['current_stars']} → ★{sf['target_stars']}**")
-                st.markdown(f"- Expected attempts: {sf['expected_attempts']:.1f}")
-                st.markdown(f"- Destruction risk: {sf['expected_destructions']:.2f} expected destructions")
-                st.markdown(f"- Recommendation: {'Use protection' if sf['target_stars'] >= 17 else 'Consider risk carefully'}")
-                st.markdown("---")
-else:
-    st.success("All equipment at max stars or below ★10!")
-
-st.divider()
-
-# ==============================================================================
-# HERO POWER ANALYSIS
-# ==============================================================================
-st.subheader("⚡ HERO POWER ANALYSIS")
-
+# Hero power analysis
 hp_analysis = analyze_hero_power_detailed()
 
-# Current lines display
-st.markdown(f"**Preset {hp_analysis['preset']} - Line Analysis:**")
+# ==============================================================================
+# DEBUG: Cube Analysis Raw Values
+# ==============================================================================
+with st.expander("🔧 DEBUG: Raw Cube Analysis Data (for troubleshooting)"):
+    st.write(f"**Overall Current DPS:** {current_dps:,.0f}")
+    st.write(f"**Number of cube analyses:** {len(cube_analysis) if cube_analysis else 0}")
 
-line_cols = st.columns(6)
-for i, line in enumerate(hp_analysis['lines']):
-    with line_cols[i]:
-        st.markdown(f"**L{line['line']}** {line['indicator']}")
-        st.caption(f"{line['stat_display']}")
-        if line['value'] > 0:
-            st.caption(f"{line['value']:.1f}%")
-        st.caption(f"*{line['tier'][:3]}*")
-        st.caption(f"Score: {line['score']:.0f}")
+    # Show what potentials are configured for first slot
+    first_slot = EQUIPMENT_SLOTS[0]
+    first_pots = data.equipment_potentials.get(first_slot, {})
+    st.write(f"---")
+    st.write(f"**Sample: {first_slot} potential data:**")
+    st.write(f"- Tier: {first_pots.get('tier', 'N/A')}")
+    st.write(f"- Line1: {first_pots.get('line1_stat', 'empty')} = {first_pots.get('line1_value', 0)}")
+    st.write(f"- Line2: {first_pots.get('line2_stat', 'empty')} = {first_pots.get('line2_value', 0)}")
+    st.write(f"- Line3: {first_pots.get('line3_stat', 'empty')} = {first_pots.get('line3_value', 0)}")
+    st.write(f"- Bonus Tier: {first_pots.get('bonus_tier', 'N/A')}")
+    st.write(f"- Bonus Line1: {first_pots.get('bonus_line1_stat', 'empty')} = {first_pots.get('bonus_line1_value', 0)}")
 
-# Summary
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Total DPS Contribution", f"+{hp_analysis['total_dps']:.1f}%")
-with col2:
-    lock_str = ", ".join([f"L{l}" for l in hp_analysis['lines_to_lock']]) or "None"
-    st.metric("Lines to Lock", lock_str)
-with col3:
-    reroll_str = ", ".join([f"L{l}" for l in hp_analysis['lines_to_reroll']]) or "None"
-    st.metric("Lines to Reroll", reroll_str)
+    if cube_analysis:
+        debug_data = []
+        for i, rec in enumerate(cube_analysis[:10]):  # Show first 10
+            debug_data.append({
+                "Slot": rec.slot,
+                "Type": "Bonus" if rec.is_bonus else "Regular",
+                "Tier": rec.tier,
+                "Baseline DPS": f"{rec.baseline_dps:,.0f}",
+                "Current DPS Gain%": f"{rec.current_dps_gain:.2f}%",
+                "Best Possible%": f"{rec.best_possible_dps_gain:.2f}%",
+                "DPS Efficiency": f"{rec.dps_efficiency:.1f}%",
+                "Exp. Cubes": f"{rec.expected_cubes_to_improve:.1f}",
+                "Efficiency Score": f"{rec.efficiency_score:.4f}",
+                "L1 Stat": rec.line1_stat or "(empty)",
+                "L1 Value": f"{rec.line1_value:.1f}",
+            })
+        st.dataframe(debug_data, use_container_width=True)
 
-# Recommendation
-if hp_analysis['lines_to_reroll']:
-    st.info(f"""
-**Reroll Strategy:**
-- Lock {hp_analysis['num_locks']} lines (cost: {hp_analysis['cost_per_reroll']} medals/reroll)
-- Estimated rerolls needed: ~{hp_analysis['estimated_rerolls']:.0f}
-- Total medal cost: ~{hp_analysis['total_medal_cost']:,.0f} medals ({hp_analysis['diamond_equivalent']:,.0f} diamond equivalent)
-- Expected DPS gain: +{hp_analysis['expected_gain']:.1f}%
-""")
-else:
-    st.success("All lines are good! Consider focusing on other upgrades.")
+        # Show a specific example in detail
+        if cube_analysis:
+            first = cube_analysis[0]
+            st.write("---")
+            st.write("**First recommendation details:**")
+            st.write(f"- Slot: {first.slot} ({'Bonus' if first.is_bonus else 'Regular'})")
+            st.write(f"- **Baseline DPS (for this slot):** {first.baseline_dps:,.0f}")
+            st.write(f"- Current lines: L1={first.line1_stat}:{first.line1_value}, L2={first.line2_stat}:{first.line2_value}, L3={first.line3_stat}:{first.line3_value}")
+            st.write(f"- Current DPS gain: {first.current_dps_gain:.2f}%")
+            st.write(f"- Best possible DPS gain: {first.best_possible_dps_gain:.2f}%")
+            st.write(f"- Expected cubes to improve: {first.expected_cubes_to_improve:.1f}")
+            st.write(f"- Diamond cost per cube: {BONUS_DIAMOND_PER_CUBE if first.is_bonus else REGULAR_DIAMOND_PER_CUBE} (monthly pkg rate)")
+            st.write(f"- Estimated diamond cost: {first.expected_cubes_to_improve * (BONUS_DIAMOND_PER_CUBE if first.is_bonus else REGULAR_DIAMOND_PER_CUBE):,.0f}")
 
-st.divider()
+            if first.baseline_dps < 1000:
+                st.error("⚠️ Baseline DPS is very low! This indicates stats are not properly configured, leading to unrealistic cube recommendations.")
+    else:
+        st.warning("No cube analysis results!")
 
 # ==============================================================================
-# OPTIMAL UPGRADE PATH
+# OVERALL RECOMMENDED UPGRADE PATH
 # ==============================================================================
 st.subheader("🎯 RECOMMENDED UPGRADE PATH")
 st.caption(f"Budget: {budget:,} diamonds | Sorted by efficiency")
@@ -755,21 +589,34 @@ st.caption(f"Budget: {budget:,} diamonds | Sorted by efficiency")
 all_upgrades = []
 
 # Cube upgrades
-for rec in cube_analysis:
+for rec in (cube_analysis or []):
+    pot_type = "Bonus" if rec.is_bonus else "Regular"
+    diamond_cost = BONUS_DIAMOND_PER_CUBE if rec.is_bonus else REGULAR_DIAMOND_PER_CUBE
+    expected_cost = rec.expected_cubes_to_improve * diamond_cost
+    improvement_room = rec.best_possible_dps_gain - rec.current_dps_gain
+
+    # Get indicator based on score
+    if rec.dps_efficiency < 30:
+        indicator = "🔴"
+    elif rec.dps_efficiency < 60:
+        indicator = "🟡"
+    else:
+        indicator = "🟢"
+
     all_upgrades.append({
         'type': 'Cube',
-        'subtype': rec['pot_type'],
-        'target': rec['slot'],
-        'description': f"{rec['slot'].title()} {rec['pot_type']} ({rec['tier']}) {rec['indicator']}",
-        'cost': rec['expected_cost'],
-        'dps_gain': rec['expected_gain'],
-        'efficiency': rec['efficiency'],
+        'subtype': pot_type,
+        'target': rec.slot,
+        'description': f"{rec.slot.title()} {pot_type} ({rec.tier}) {indicator}",
+        'cost': expected_cost,
+        'dps_gain': improvement_room * 0.4,  # Conservative estimate of expected gain
+        'efficiency': rec.efficiency_score,
         'details': {
-            'current_dps': rec['current_dps'],
-            'best_dps': rec['best_dps'],
-            'improvement_room': rec['improvement_room'],
-            'cubes': rec['cubes_to_improve'],
-            'difficulty': rec['difficulty'],
+            'current_dps': rec.current_dps_gain,
+            'best_dps': rec.best_possible_dps_gain,
+            'improvement_room': improvement_room,
+            'cubes': rec.expected_cubes_to_improve,
+            'difficulty': rec.improvement_difficulty,
         },
     })
 
@@ -786,7 +633,8 @@ for sf in sf_analysis:
         'details': {
             'risk': sf['risk'],
             'attempts': sf['expected_attempts'],
-            'destructions': sf['expected_destructions'],
+            'destroy_prob': sf['destroy_prob'],
+            'optimal_strategy': sf['optimal_strategy'],
         },
     })
 
@@ -934,3 +782,267 @@ Higher efficiency = better value for your diamonds.
 | **Hat** | Skill CD Reduction, Damage% |
 | **Top** | BA Targets, Final Damage |
 """)
+
+# ==============================================================================
+# ADVANCED: OPTIMAL STAT DISTRIBUTION ANALYSIS
+# ==============================================================================
+st.divider()
+st.header("📊 Advanced: Optimal Stat Distribution")
+st.caption("Theoretical optimal stat allocation - expand sections below for detailed analysis")
+
+# Create a DPS function wrapper for the optimizer
+def calc_dps_for_optimizer(stats: Dict[str, float]) -> float:
+    """Wrapper for DPS calculation compatible with optimal_stats module."""
+    return calculate_dps(stats, data.combat_mode)['total']
+
+# Tier mode selection
+tier_col1, tier_col2 = st.columns(2)
+with tier_col1:
+    tier_mode = st.selectbox(
+        "Tier Mode",
+        ["mystic", "legendary", "unique"],
+        help="Mystic = theoretical max, or select your current average tier"
+    )
+with tier_col2:
+    include_artifacts = st.checkbox("Include Artifacts", value=True)
+
+# Get current stats for efficiency calculation
+efficiency_stats = current_stats.copy()
+
+# ==============================================================================
+# SLOT EFFICIENCY ANALYSIS
+# ==============================================================================
+st.subheader("🔍 Slot Efficiency Analysis")
+st.caption("For each slot, shows how efficient each stat option is (DPS gain per stat point)")
+
+# Show efficiency for each slot with exclusive stats
+slots_with_exclusive = ['shoulder', 'gloves', 'cape', 'bottom', 'ring', 'necklace', 'top', 'hat']
+
+efficiency_tabs = st.tabs([s.title() for s in slots_with_exclusive])
+
+for i, slot in enumerate(slots_with_exclusive):
+    with efficiency_tabs[i]:
+        efficiency = calculate_slot_efficiency(slot, efficiency_stats, calc_dps_for_optimizer, tier_mode)
+
+        if efficiency:
+            # Display as bar chart
+            eff_data = []
+            for e in efficiency[:6]:  # Top 6 options
+                stat_name = format_stat_name(e['stat'])
+                exclusive_tag = " (EXCLUSIVE)" if e['is_exclusive'] else ""
+                eff_data.append({
+                    'Stat': f"{stat_name}{exclusive_tag}",
+                    'Max Value': f"{e['max_value']:.0f}%",
+                    'DPS Gain': f"+{e['dps_gain']:.2f}%",
+                    'Efficiency': e['efficiency_normalized'],
+                })
+
+            # Show as table with visual bars
+            for j, e in enumerate(eff_data):
+                bar_width = int(e['Efficiency'])
+                bar = "█" * (bar_width // 5) + "░" * ((100 - bar_width) // 5)
+
+                cols = st.columns([2, 1, 1, 4])
+                with cols[0]:
+                    st.write(e['Stat'])
+                with cols[1]:
+                    st.write(e['Max Value'])
+                with cols[2]:
+                    st.write(e['DPS Gain'])
+                with cols[3]:
+                    st.write(f"{bar} {e['Efficiency']:.0f}%")
+
+            # Highlight if exclusive stat available
+            if slot in SLOT_EXCLUSIVE_STATS:
+                exclusive_stats = list(SLOT_EXCLUSIVE_STATS[slot].keys())
+                st.info(f"**Exclusive stats on {slot.title()}:** {', '.join([format_stat_name(s) for s in exclusive_stats])}")
+
+st.divider()
+
+# ==============================================================================
+# SOURCE RANKING FOR KEY STATS
+# ==============================================================================
+st.subheader("Source Ranking by Stat")
+st.caption("For key stats, shows which sources provide the best value")
+
+key_stats = ['def_pen', 'crit_damage', 'final_atk_dmg', 'damage', 'boss_damage']
+stat_tabs = st.tabs([format_stat_name(s) for s in key_stats])
+
+for i, stat in enumerate(key_stats):
+    with stat_tabs[i]:
+        ranking = calculate_source_ranking(stat, efficiency_stats, calc_dps_for_optimizer, tier_mode, include_artifacts)
+
+        if ranking:
+            st.markdown(f"**Where to get {format_stat_name(stat)}?**")
+
+            ranking_table = []
+            for r in ranking[:8]:
+                source_display = r['slot'].title() if r['slot'] else r['source_type'].replace('_', ' ').title()
+                exclusive_tag = " (EXCLUSIVE)" if r['is_exclusive'] else ""
+
+                ranking_table.append({
+                    'Rank': f"#{r['rank']}",
+                    'Source': f"{source_display}{exclusive_tag}",
+                    'Max Value': f"{r['max_value']:.0f}%",
+                    'DPS Gain': f"+{r['dps_gain']:.2f}%",
+                    'Efficiency': f"{r['efficiency']:.4f}",
+                })
+
+            st.dataframe(ranking_table, hide_index=True, use_container_width=True)
+
+            # Best source recommendation
+            if ranking:
+                best = ranking[0]
+                source_name = best['slot'].title() if best['slot'] else best['source_type'].replace('_', ' ').title()
+                st.success(f"**Best source for {format_stat_name(stat)}:** {source_name} ({best['max_value']:.0f}% max)")
+        else:
+            st.warning(f"{format_stat_name(stat)} is not available at {tier_mode} tier")
+
+st.divider()
+
+# ==============================================================================
+# OPTIMAL BUILD TEMPLATE
+# ==============================================================================
+st.subheader("Optimal Build Template")
+st.caption(f"Theoretically optimal stat distribution at {tier_mode.title()} tier")
+
+# Calculate optimal distribution
+try:
+    optimal_build = calculate_optimal_distribution(
+        current_stats, calc_dps_for_optimizer, tier_mode, include_artifacts
+    )
+
+    # Group allocations by slot/source
+    alloc_by_slot = {}
+    for alloc in optimal_build.allocations:
+        key = alloc.slot or alloc.source_type
+        if key not in alloc_by_slot:
+            alloc_by_slot[key] = []
+        alloc_by_slot[key].append(alloc)
+
+    # Display as expandable sections
+    for slot_key in sorted(alloc_by_slot.keys()):
+        allocs = alloc_by_slot[slot_key]
+
+        with st.expander(f"{slot_key.title().replace('_', ' ')} - {len(allocs)} lines", expanded=False):
+            for alloc in allocs:
+                exclusive_tag = " (EXCLUSIVE)" if alloc.is_exclusive else ""
+                st.markdown(f"- **{format_stat_name(alloc.stat_type)}** {alloc.value:.0f}%{exclusive_tag}")
+
+            # Show total DPS contribution from this slot
+            slot_dps = sum(a.efficiency_score * a.value for a in allocs)
+            st.caption(f"Efficiency score: {slot_dps:.2f}")
+
+    # Summary stats
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Allocations", len(optimal_build.allocations))
+    with col2:
+        st.metric("Tier Mode", tier_mode.title())
+    with col3:
+        if include_artifacts:
+            st.metric("Includes", "Equipment + HP + Artifacts")
+        else:
+            st.metric("Includes", "Equipment + Hero Power")
+
+except Exception as e:
+    st.error(f"Could not calculate optimal distribution: {e}")
+    st.caption("This may occur if base stats are not fully configured.")
+
+st.divider()
+
+# ==============================================================================
+# CURRENT VS OPTIMAL COMPARISON
+# ==============================================================================
+st.subheader("Current vs Optimal Gap")
+st.caption("Shows how your current build compares to optimal")
+
+# Build current allocations from user data
+current_allocations = []
+
+# Equipment potentials
+for slot in EQUIPMENT_SLOTS:
+    pots = data.equipment_potentials.get(slot, {})
+    for prefix in ['', 'bonus_']:
+        for i in range(1, 4):
+            stat = pots.get(f'{prefix}line{i}_stat', '')
+            value = float(pots.get(f'{prefix}line{i}_value', 0))
+            if stat and value > 0:
+                current_allocations.append({
+                    'slot': slot,
+                    'stat': stat,
+                    'value': value,
+                    'source_type': f'equipment_{prefix.rstrip("_") or "regular"}',
+                })
+
+# Hero Power
+for line_key, line in data.hero_power_lines.items():
+    stat = line.get('stat', '')
+    value = float(line.get('value', 0))
+    if stat and value > 0:
+        current_allocations.append({
+            'slot': None,
+            'stat': stat,
+            'value': value,
+            'source_type': 'hero_power',
+        })
+
+# Calculate gap for each slot
+if current_allocations:
+    st.markdown("**Slot-by-Slot Analysis:**")
+
+    gap_analysis = []
+    for slot in EQUIPMENT_SLOTS:
+        # Current stats for this slot
+        current_slot = [a for a in current_allocations if a.get('slot') == slot]
+        current_stats_slot = {}
+        for a in current_slot:
+            current_stats_slot[a['stat']] = current_stats_slot.get(a['stat'], 0) + a['value']
+
+        # Get optimal for this slot
+        optimal_info = get_optimal_stat_for_slot(slot, efficiency_stats, calc_dps_for_optimizer, tier_mode)
+
+        if optimal_info.get('best_stat'):
+            best_stat = optimal_info['best_stat']
+            best_value = optimal_info['max_value']
+
+            # Check if user has this stat
+            user_value = current_stats_slot.get(best_stat, 0)
+            gap = best_value - user_value
+
+            # Calculate efficiency score
+            if user_value >= best_value * 0.8:
+                status = "Good"
+                indicator = "green"
+            elif user_value >= best_value * 0.5:
+                status = "Fair"
+                indicator = "orange"
+            else:
+                status = "Needs Work"
+                indicator = "red"
+
+            gap_analysis.append({
+                'Slot': slot.title(),
+                'Best Stat': format_stat_name(best_stat),
+                'Optimal': f"{best_value:.0f}%",
+                'Current': f"{user_value:.0f}%",
+                'Gap': f"{gap:.0f}%",
+                'Status': status,
+            })
+
+    if gap_analysis:
+        # Sort by gap (largest first)
+        gap_analysis.sort(key=lambda x: float(x['Gap'].rstrip('%')), reverse=True)
+        st.dataframe(gap_analysis, hide_index=True, use_container_width=True)
+
+        # Priority fixes
+        needs_work = [g for g in gap_analysis if g['Status'] == 'Needs Work']
+        if needs_work:
+            st.warning(f"**Priority Fixes:** {', '.join([g['Slot'] for g in needs_work[:5]])}")
+
+        good_slots = [g for g in gap_analysis if g['Status'] == 'Good']
+        if good_slots:
+            st.success(f"**Well Optimized:** {', '.join([g['Slot'] for g in good_slots])}")
+else:
+    st.info("Configure your equipment potentials and hero power to see gap analysis.")

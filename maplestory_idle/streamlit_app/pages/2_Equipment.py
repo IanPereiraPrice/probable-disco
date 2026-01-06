@@ -3,8 +3,16 @@ Equipment Page - Compact Layout with Cube Priority Recommendations
 Matches original Tkinter app design with all potentials visible + DPS-based recommendations.
 """
 import streamlit as st
+import sys
+from pathlib import Path
+
+# Add parent directory to path for core imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from core import ENEMY_DEFENSE_VALUES, get_enemy_defense
 from utils.data_manager import save_user_data, EQUIPMENT_SLOTS
 from utils.cube_analyzer import analyze_all_cube_priorities, format_stat_display, CubeRecommendation
+from utils.dps_calculator import aggregate_stats, calculate_dps
 from typing import Dict, Any, List
 
 st.set_page_config(page_title="Equipment", page_icon="🛡️", layout="wide")
@@ -327,178 +335,29 @@ def auto_save():
 
 
 # ============================================================================
-# DPS CALCULATION FUNCTIONS (for cube priority analysis)
+# DPS CALCULATION FUNCTIONS (using shared module)
 # ============================================================================
 
-HEX_MULTIPLIER = 1.24
-BASE_MIN_DMG = 60.0
-BASE_MAX_DMG = 100.0
-BASE_CRIT_DMG = 30.0
+def aggregate_stats_for_dps() -> Dict[str, Any]:
+    """Wrapper that calls shared aggregate_stats with user data."""
+    return aggregate_stats(data)
 
 
-def aggregate_stats_for_dps() -> Dict[str, float]:
-    """Aggregate all stats from user data for DPS calculation."""
-    stats = {
-        'flat_dex': 0,
-        'dex_percent': 0,
-        'damage_percent': 0,
-        'boss_damage': 0,
-        'normal_damage': 0,
-        'crit_damage': 0,
-        'crit_rate': 0,
-        'final_damage': 0,
-        'defense_pen': 0,
-        'min_dmg_mult': 0,
-        'max_dmg_mult': 0,
-        'attack_speed': 0,
-        'base_attack': 0,
-    }
-
-    # Equipment potentials
-    for slot in EQUIPMENT_SLOTS:
-        pots = data.equipment_potentials.get(slot, {})
-        for prefix in ["", "bonus_"]:
-            for i in range(1, 4):
-                stat = pots.get(f'{prefix}line{i}_stat', '')
-                value = float(pots.get(f'{prefix}line{i}_value', 0))
-
-                if stat == 'damage':
-                    stats['damage_percent'] += value
-                elif stat == 'boss_damage':
-                    stats['boss_damage'] += value
-                elif stat == 'crit_damage':
-                    stats['crit_damage'] += value
-                elif stat == 'final_damage':
-                    stats['final_damage'] += value
-                elif stat == 'def_pen':
-                    stats['defense_pen'] += value
-                elif stat == 'normal_damage':
-                    stats['normal_damage'] += value
-                elif stat == 'min_dmg_mult':
-                    stats['min_dmg_mult'] += value
-                elif stat == 'max_dmg_mult':
-                    stats['max_dmg_mult'] += value
-                elif stat in ('dex_flat', 'str_flat', 'int_flat', 'luk_flat'):
-                    stats['flat_dex'] += value
-                elif stat in ('dex_pct', 'str_pct', 'int_pct', 'luk_pct'):
-                    stats['dex_percent'] += value
-                elif stat == 'crit_rate':
-                    stats['crit_rate'] += value
-
-    # Equipment base stats
-    for slot in EQUIPMENT_SLOTS:
-        item = data.equipment_items.get(slot, {})
-        stats['base_attack'] += item.get('base_attack', 0)
-
-    # Hero Power lines
-    for line_key, line in data.hero_power_lines.items():
-        stat = line.get('stat', '')
-        value = float(line.get('value', 0))
-
-        if stat == 'damage':
-            stats['damage_percent'] += value
-        elif stat == 'boss_damage':
-            stats['boss_damage'] += value
-        elif stat == 'crit_damage':
-            stats['crit_damage'] += value
-        elif stat == 'def_pen':
-            stats['defense_pen'] += value
-        elif stat == 'min_dmg_mult':
-            stats['min_dmg_mult'] += value
-        elif stat == 'max_dmg_mult':
-            stats['max_dmg_mult'] += value
-
-    # Hero Power passives
-    passives = data.hero_power_passives
-    stats['flat_dex'] += passives.get('main_stat', 0) * 100
-    stats['damage_percent'] += passives.get('damage', 0) * 2
-
-    # Maple Rank
-    mr = data.maple_rank
-    stage = mr.get('current_stage', 1)
-    ms_level = mr.get('main_stat_level', 0)
-    special = mr.get('special_main_stat', 0)
-    stats['flat_dex'] += (stage - 1) * 100 + ms_level * 10 + special
-
-    stat_levels = mr.get('stat_levels', {})
-    if isinstance(stat_levels, dict):
-        stats['attack_speed'] += stat_levels.get('attack_speed', 0) * 0.5
-        stats['crit_rate'] += stat_levels.get('crit_rate', 0) * 1
-        stats['damage_percent'] += stat_levels.get('damage', 0) * 2
-        stats['boss_damage'] += stat_levels.get('boss_damage', 0) * 2
-        stats['normal_damage'] += stat_levels.get('normal_damage', 0) * 2
-        stats['crit_damage'] += stat_levels.get('crit_damage', 0) * 2
-
-    # Equipment sets
-    stats['flat_dex'] += data.equipment_sets.get('medal', 0)
-    stats['flat_dex'] += data.equipment_sets.get('costume', 0)
-
-    # Weapons
-    for weapon in data.weapons.values():
-        stats['base_attack'] *= (1 + weapon.get('atk_pct', 0) / 100)
-
-    return stats
-
-
-def calculate_dps_from_stats(stats: Dict[str, float], combat_mode: str = 'stage', enemy_def: float = 0.752) -> Dict[str, Any]:
-    """Calculate DPS from stats."""
-    # DEX multiplier
-    total_dex = stats['flat_dex'] * (1 + stats['dex_percent'] / 100)
-    stat_multiplier = 1 + (total_dex / 10000)
-
-    # Damage multiplier with hex
-    hex_mult = HEX_MULTIPLIER ** 3
-    total_damage_pct = (stats['damage_percent'] / 100) * hex_mult
-    base_damage_mult = 1 + total_damage_pct
-
-    # Combat mode weighting
-    if combat_mode in ('boss', 'world_boss'):
-        damage_multiplier = base_damage_mult * (1 + stats['boss_damage'] / 100)
-    else:
-        normal_weight = 0.60
-        boss_weight = 0.40
-        mult_vs_normal = base_damage_mult * (1 + stats['normal_damage'] / 100)
-        mult_vs_boss = base_damage_mult * (1 + stats['boss_damage'] / 100)
-        damage_multiplier = (normal_weight * mult_vs_normal) + (boss_weight * mult_vs_boss)
-
-    # Final damage (multiplicative)
-    fd_multiplier = 1 + stats['final_damage'] / 100
-
-    # Crit damage
-    total_crit_dmg = BASE_CRIT_DMG + stats['crit_damage']
-    crit_multiplier = 1 + (total_crit_dmg / 100)
-
-    # Defense penetration
-    def_pen_decimal = stats['defense_pen'] / 100
-    defense_multiplier = 1 / (1 + enemy_def * (1 - def_pen_decimal))
-
-    # Min/Max damage range
-    final_min = BASE_MIN_DMG + stats['min_dmg_mult']
-    final_max = BASE_MAX_DMG + stats['max_dmg_mult']
-    avg_mult = (final_min + final_max) / 2
-    dmg_range_mult = avg_mult / 100
-
-    # Attack speed
-    atk_spd_mult = 1 + (stats['attack_speed'] / 100)
-
-    # Base attack
-    base_atk = max(stats['base_attack'], 10000)
-
-    # Total DPS
-    total = (base_atk * stat_multiplier * damage_multiplier *
-             fd_multiplier * crit_multiplier * defense_multiplier *
-             dmg_range_mult * atk_spd_mult)
-
-    return {
-        'total': total,
-        'stat_mult': stat_multiplier,
-        'damage_mult': damage_multiplier,
-        'fd_mult': fd_multiplier,
-        'crit_mult': crit_multiplier,
-        'def_mult': defense_multiplier,
-        'range_mult': dmg_range_mult,
-        'speed_mult': atk_spd_mult,
-    }
+def calculate_dps_from_stats(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: float = None) -> Dict[str, Any]:
+    """Wrapper that calls shared calculate_dps with correct enemy defense."""
+    # Determine enemy defense based on combat mode if not explicitly provided
+    if enemy_def is None:
+        if combat_mode == 'world_boss':
+            enemy_def = ENEMY_DEFENSE_VALUES.get('World Boss', 6.527)
+        else:
+            # Get chapter number from user data
+            chapter_str = getattr(data, 'chapter', 'Chapter 27')
+            try:
+                chapter_num = int(chapter_str.replace('Chapter ', '').strip())
+            except (ValueError, AttributeError):
+                chapter_num = 27
+            enemy_def = get_enemy_defense(chapter_num)
+    return calculate_dps(stats, combat_mode, enemy_def)
 
 
 @st.cache_data(ttl=30)
