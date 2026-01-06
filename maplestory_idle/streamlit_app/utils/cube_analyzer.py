@@ -26,8 +26,8 @@ EQUIPMENT_SLOTS = [
 ]
 
 # Cost per cube in diamonds
-REGULAR_DIAMOND_PER_CUBE = 600
-BONUS_DIAMOND_PER_CUBE = 1200
+REGULAR_DIAMOND_PER_CUBE = 1000
+BONUS_DIAMOND_PER_CUBE = 2000
 
 # Mapping from Streamlit stat names to StatType enum
 STAT_NAME_TO_TYPE = {
@@ -370,6 +370,7 @@ def analyze_all_cube_priorities(
                     stats = aggregate_stats_func()
                     result = calculate_dps_func(stats, user_data.combat_mode)
                     new_dps = result['total']
+
                 finally:
                     # Restore original
                     user_data.equipment_potentials[slot_to_test] = original_pots
@@ -395,6 +396,17 @@ def analyze_all_cube_priorities(
                 stats = aggregate_stats_func()
                 result = calculate_dps_func(stats, user_data.combat_mode)
                 baseline = result['total']
+
+                # DEBUG: Store baseline for sanity check
+                if not hasattr(user_data, '_cube_debug'):
+                    user_data._cube_debug = {}
+                key = f"{slot_to_test}_{'bonus' if is_bonus_to_test else 'reg'}"
+                user_data._cube_debug[key] = {
+                    'baseline': baseline,
+                    'slot': slot_to_test,
+                    'is_bonus': is_bonus_to_test,
+                    'cleared_pots': {k: v for k, v in test_pots.items() if 'line' in k and 'stat' in k},
+                }
             finally:
                 user_data.equipment_potentials[slot_to_test] = original_pots
 

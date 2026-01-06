@@ -29,7 +29,13 @@ from core.damage import (
     calculate_attack_speed,
 )
 from equipment import get_amplify_multiplier
-from artifacts import calculate_book_of_ancient_bonus
+from artifacts import (
+    calculate_book_of_ancient_bonus,
+    calculate_hex_multiplier,
+    ARTIFACTS,
+)
+from companions import COMPANIONS
+from weapons import calculate_weapon_atk_str
 from skills import (
     calculate_all_skills_value, create_character_at_level, DPSCalculator,
     BOWMASTER_SKILLS
@@ -346,7 +352,7 @@ def calculate_crit_rate_dps_value(
     return 0.0
 
 
-def aggregate_stats(user_data, star_overrides: Dict[str, int] = None) -> Dict[str, Any]:
+def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adjustments: bool = True) -> Dict[str, Any]:
     """
     Aggregate all stats from user data for DPS calculation.
 
@@ -363,6 +369,8 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None) -> Dict[st
     Args:
         user_data: The user's data object from session state
         star_overrides: Optional dict of slot -> star level for "what-if" calculations
+        apply_adjustments: Whether to apply manual adjustments from user_data.manual_adjustments
+                          (default True - set to False for Character Stats page raw values)
 
     Returns dict with:
     - Additive stats as totals
@@ -381,6 +389,9 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None) -> Dict[st
         'min_dmg_mult': 0,
         'max_dmg_mult': 0,
         'base_attack': 0,
+        'attack_percent': 0,  # Attack % (separate from base_attack)
+        'skill_damage': 0,    # Skill Damage %
+        'accuracy': 0,        # Accuracy stat
         'all_skills': 0,
         'skill_cd': 0,
         'buff_duration': 0,
@@ -389,6 +400,8 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None) -> Dict[st
         'final_damage_sources': [],
         'defense_pen_sources': [],  # List of (source_name, value, priority) tuples
         'attack_speed_sources': [],
+        # Special multipliers
+        'hex_multiplier': 1.0,  # Hexagon Necklace damage multiplier (default 1.0 = no effect)
     }
 
     star_overrides = star_overrides or {}
@@ -584,20 +597,81 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None) -> Dict[st
     stats['flat_dex'] += user_data.equipment_sets.get('medal', 0)
     stats['flat_dex'] += user_data.equipment_sets.get('costume', 0)
 
-    # Weapons
+    # Weapons (old format - for backward compatibility)
     for weapon in user_data.weapons.values():
         stats['base_attack'] *= (1 + weapon.get('atk_pct', 0) / 100)
 
-    # Companions (equipped companions)
-    companions_equipped = getattr(user_data, 'companions_equipped', {})
-    if companions_equipped:
-        for comp_data in companions_equipped.values():
-            stat_type = comp_data.get('stat_type', '')
-            value = float(comp_data.get('stat_value', 0))
-            if stat_type == 'attack_speed' and value > 0:
-                stats['attack_speed_sources'].append(('Companion', value))
-            else:
-                _add_stat(stat_type, value, 'companion')
+    # Weapons (new format - weapon_inventory + equipped_weapon)
+    weapon_inventory = getattr(user_data, 'weapon_inventory', []) or []
+    equipped_weapon_idx = getattr(user_data, 'equipped_weapon', None)
+
+    total_weapon_atk_pct = 0.0
+    for idx, weapon in enumerate(weapon_inventory):
+        if not weapon:
+            continue
+        rarity = weapon.get('rarity', 'normal')
+        tier = weapon.get('tier', 4)
+        level = weapon.get('level', 1)
+
+        weapon_stats = calculate_weapon_atk_str(rarity, tier, level)
+
+        # Inventory ATK% always applies (from all owned weapons)
+        total_weapon_atk_pct += weapon_stats['inventory_atk']
+
+        # On-equip ATK% only from equipped weapon
+        if equipped_weapon_idx == idx:
+            total_weapon_atk_pct += weapon_stats['on_equip_atk']
+
+    # Apply weapon ATK% as multiplier to base attack
+    if total_weapon_atk_pct > 0:
+        stats['attack_percent'] += total_weapon_atk_pct
+
+    # Companions - using new format: equipped_companions (list) + companion_levels (dict)
+    equipped_companions = getattr(user_data, 'equipped_companions', []) or []
+    companion_levels = getattr(user_data, 'companion_levels', {}) or {}
+
+    # On-equip stats from equipped companions
+    for comp_key in equipped_companions:
+        if not comp_key or comp_key not in COMPANIONS:
+            continue
+        level = companion_levels.get(comp_key, 0)
+        if level <= 0:
+            continue
+
+        companion = COMPANIONS[comp_key]
+        stat_type = companion.on_equip_type.value  # e.g., 'attack_speed', 'boss_damage'
+        value = companion.get_on_equip_value(level)
+
+        if stat_type == 'attack_speed' and value > 0:
+            stats['attack_speed_sources'].append(('Companions (Equipped)', value))
+        elif stat_type == 'flat_attack' and value > 0:
+            stats['base_attack'] += value
+        elif stat_type == 'min_dmg_mult' and value > 0:
+            stats['min_dmg_mult'] += value
+        elif stat_type == 'max_dmg_mult' and value > 0:
+            stats['max_dmg_mult'] += value
+        elif stat_type == 'boss_damage' and value > 0:
+            stats['boss_damage'] += value
+        elif stat_type == 'normal_damage' and value > 0:
+            stats['normal_damage'] += value
+        elif stat_type == 'crit_rate' and value > 0:
+            stats['crit_rate'] += value
+
+    # Inventory stats from ALL owned companions (any with level > 0)
+    for comp_key, level in companion_levels.items():
+        if level <= 0 or comp_key not in COMPANIONS:
+            continue
+
+        companion = COMPANIONS[comp_key]
+        inv_stats = companion.get_inventory_stats(level)
+
+        # Inventory stats: attack, main_stat, max_hp, damage
+        if 'attack' in inv_stats:
+            stats['base_attack'] += inv_stats['attack']
+        if 'main_stat' in inv_stats:
+            stats['flat_dex'] += inv_stats['main_stat']
+        if 'damage' in inv_stats:
+            stats['damage_percent'] += inv_stats['damage']
 
     # Guild skills (all stats)
     guild_skills = getattr(user_data, 'guild_skills', {})
@@ -618,6 +692,167 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None) -> Dict[st
         stats['crit_damage'] += guild_skills.get('crit_damage', 0)
         stats['dex_percent'] += guild_skills.get('main_stat', 0)
         stats['base_attack'] += guild_skills.get('attack', 0)
+
+    # Artifacts - equipped active effects and inventory effects
+    # Build name->key mapping
+    artifact_key_by_name = {defn.name: key for key, defn in ARTIFACTS.items()}
+
+    # Equipped artifacts (active effects)
+    artifacts_equipped = getattr(user_data, 'artifacts_equipped', {})
+    if artifacts_equipped:
+        for slot_key in ['slot0', 'slot1', 'slot2']:
+            slot_data = artifacts_equipped.get(slot_key, {})
+            if not isinstance(slot_data, dict):
+                continue
+
+            name = slot_data.get('name', '')
+            if not name or name == '(Empty)':
+                continue
+
+            artifact_key = artifact_key_by_name.get(name)
+            if not artifact_key or artifact_key not in ARTIFACTS:
+                continue
+
+            stars = int(slot_data.get('stars', 0))
+            defn = ARTIFACTS[artifact_key]
+
+            # Handle specific active effects
+            if artifact_key == 'hexagon_necklace':
+                # Hex multiplier applied separately in calculate_dps
+                stats['hex_multiplier'] = calculate_hex_multiplier(stars, stacks=3)
+
+            elif artifact_key == 'book_of_ancient':
+                # Crit rate from Book of Ancient (as %)
+                cr_bonus = defn.get_active_value(stars)  # Returns decimal
+                stats['crit_rate'] += cr_bonus * 100
+                # CR->CD conversion handled in calculate_dps
+
+            elif artifact_key == 'star_rock':
+                # Boss damage from Star Rock
+                boss_dmg = defn.get_active_value(stars)  # Returns decimal
+                stats['boss_damage'] += boss_dmg * 100
+
+            elif artifact_key == 'sayrams_necklace':
+                # Normal damage from Sayram's
+                normal_dmg = defn.get_active_value(stars)
+                stats['normal_damage'] += normal_dmg * 100
+
+            elif artifact_key == 'chalice':
+                # Conditional Final Damage (add as FD source)
+                fd = defn.get_active_value(stars)
+                if fd > 0:
+                    stats['final_damage_sources'].append(fd)
+
+            elif artifact_key == 'lit_lamp':
+                # World Boss Final Damage (only in world_boss mode)
+                if user_data.combat_mode == 'world_boss':
+                    fd = defn.get_active_value(stars)
+                    if fd > 0:
+                        stats['final_damage_sources'].append(fd)
+
+    # Artifact inventory effects (passive bonuses from all owned artifacts)
+    artifacts_inventory = getattr(user_data, 'artifacts_inventory', {})
+    if artifacts_inventory:
+        for art_key, art_data in artifacts_inventory.items():
+            if art_key not in ARTIFACTS:
+                continue
+            if not isinstance(art_data, dict):
+                continue
+
+            defn = ARTIFACTS[art_key]
+            stars = int(art_data.get('stars', 0))
+
+            # Inventory stat
+            inv_stat = defn.inventory_stat
+            inv_value = defn.get_inventory_value(stars)
+
+            if inv_value > 0:
+                if inv_stat == 'attack_flat':
+                    stats['base_attack'] += inv_value
+                elif inv_stat == 'damage':
+                    stats['damage_percent'] += inv_value * 100
+                elif inv_stat == 'boss_damage':
+                    stats['boss_damage'] += inv_value * 100
+                elif inv_stat == 'crit_damage_conditional':
+                    stats['crit_damage'] += inv_value * 100
+
+            # Artifact potentials
+            potentials = art_data.get('potentials', [])
+            if isinstance(potentials, list):
+                for pot in potentials:
+                    if isinstance(pot, dict):
+                        pot_stat = pot.get('stat', '')
+                        pot_value = float(pot.get('value', 0))
+                        if pot_value > 0:
+                            if pot_stat == 'main_stat':
+                                stats['dex_percent'] += pot_value
+                            elif pot_stat == 'damage':
+                                stats['damage_percent'] += pot_value
+                            elif pot_stat == 'boss_damage':
+                                stats['boss_damage'] += pot_value
+                            elif pot_stat == 'normal_damage':
+                                stats['normal_damage'] += pot_value
+                            elif pot_stat == 'crit_rate':
+                                stats['crit_rate'] += pot_value
+                            elif pot_stat == 'def_pen':
+                                stats['defense_pen_sources'].append(('Artifact Potential', pot_value / 100, 100))
+                            elif pot_stat == 'min_max_damage':
+                                stats['min_dmg_mult'] += pot_value
+                                stats['max_dmg_mult'] += pot_value
+
+    # =========================================================================
+    # PASS 3: Apply Manual Adjustments (if enabled)
+    # =========================================================================
+    # Manual adjustments from Character Stats page help account for
+    # stats from sources we don't track (passive skills, buffs, etc.)
+    if apply_adjustments:
+        manual_adj = getattr(user_data, 'manual_adjustments', {}) or {}
+        if manual_adj:
+            # Map adjustment keys to stat keys
+            # Most keys match directly, but some need special handling
+            adjustment_mapping = {
+                'flat_dex': 'flat_dex',
+                'dex_percent': 'dex_percent',
+                'base_attack': 'base_attack',
+                'attack_percent': 'attack_percent',
+                'damage_percent': 'damage_percent',
+                'boss_damage': 'boss_damage',
+                'normal_damage': 'normal_damage',
+                'crit_rate': 'crit_rate',
+                'crit_damage': 'crit_damage',
+                'min_dmg_mult': 'min_dmg_mult',
+                'max_dmg_mult': 'max_dmg_mult',
+                'skill_damage': 'skill_damage',
+                'accuracy': 'accuracy',
+            }
+
+            for adj_key, stat_key in adjustment_mapping.items():
+                adj_value = manual_adj.get(adj_key, 0)
+                if adj_value != 0 and stat_key in stats:
+                    stats[stat_key] += adj_value
+
+            # Special handling for multiplicative stats:
+            # defense_pen adjustment - add as a manual source
+            def_pen_adj = manual_adj.get('defense_pen', 0)
+            if def_pen_adj != 0:
+                # Convert percentage to decimal and add as lowest priority source
+                stats['defense_pen_sources'].append(('Manual Adjustment', def_pen_adj / 100, 999))
+
+            # attack_speed adjustment - add as a manual source
+            atk_spd_adj = manual_adj.get('attack_speed', 0)
+            if atk_spd_adj != 0:
+                stats['attack_speed_sources'].append(('Manual Adjustment', atk_spd_adj))
+
+            # final_damage adjustment - add as additional source
+            fd_adj = manual_adj.get('final_damage', 0)
+            if fd_adj != 0:
+                stats['final_damage_sources'].append(fd_adj / 100)
+
+            # total_dex and total_attack adjustments need special handling
+            # They are derived stats, so we track adjustment separately
+            # These will be applied in calculate_dps
+            stats['total_dex_adjustment'] = manual_adj.get('total_dex', 0)
+            stats['total_attack_adjustment'] = manual_adj.get('total_attack', 0)
 
     return stats
 
@@ -650,8 +885,15 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     )
     fd_mult = calculate_final_damage_mult(stats.get('final_damage_sources', []))
 
-    # DEX calculation
+    # DEX calculation (with manual adjustment if present)
     total_dex = calculate_total_dex(stats['flat_dex'], stats['dex_percent'])
+    total_dex += stats.get('total_dex_adjustment', 0)
+
+    # Total attack = base_attack * (1 + attack_percent/100) + manual adjustment
+    base_attack = max(stats['base_attack'], 10000)
+    attack_percent = stats.get('attack_percent', 0)
+    base_atk = base_attack * (1 + attack_percent / 100)
+    base_atk += stats.get('total_attack_adjustment', 0)
 
     # Book of Ancient: Convert portion of Crit Rate to Crit Damage
     crit_rate = stats['crit_rate']
@@ -661,7 +903,7 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
 
     # Use core damage function
     result = calculate_damage(
-        base_atk=max(stats['base_attack'], 10000),
+        base_atk=base_atk,
         dex_flat=stats['flat_dex'],
         dex_percent=stats['dex_percent'],
         damage_percent=stats['damage_percent'],
@@ -681,7 +923,7 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
         boss_weight = 0.40
 
         result_normal = calculate_damage(
-            base_atk=max(stats['base_attack'], 10000),
+            base_atk=base_atk,
             dex_flat=stats['flat_dex'],
             dex_percent=stats['dex_percent'],
             damage_percent=stats['damage_percent'] + stats['normal_damage'],
@@ -695,7 +937,7 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
         )
 
         result_boss = calculate_damage(
-            base_atk=max(stats['base_attack'], 10000),
+            base_atk=base_atk,
             dex_flat=stats['flat_dex'],
             dex_percent=stats['dex_percent'],
             damage_percent=stats['damage_percent'],

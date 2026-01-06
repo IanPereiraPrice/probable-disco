@@ -7,3 +7,4 @@ __pycache__/
 
 # Data files
 *.csv
+!maplestory_idle/streamlit_app/data/default_character.csv

@@ -5,7 +5,7 @@ Main entry point with login/registration flow.
 import os
 import streamlit as st
 from utils.auth import authenticate, create_user, user_exists
-from utils.data_manager import load_user_data, save_user_data, UserData
+from utils.data_manager import load_user_data, save_user_data, UserData, import_user_data_csv, DATA_DIR
 
 # =============================================================================
 # LOCAL DEV BYPASS - Set to True to skip login during development
@@ -202,16 +202,29 @@ def main_app():
     """)
 
 
+def load_default_character() -> UserData:
+    """Load default character data from default_character.csv for demo/testing."""
+    default_file = os.path.join(DATA_DIR, "default_character.csv")
+    if os.path.exists(default_file):
+        try:
+            with open(default_file, 'r', encoding='utf-8') as f:
+                csv_content = f.read()
+            data = import_user_data_csv(csv_content, DEV_USERNAME)
+            if data:
+                return data
+        except Exception as e:
+            print(f"Error loading default character: {e}")
+    # Fallback to empty UserData
+    return UserData(username=DEV_USERNAME)
+
+
 def dev_auto_login():
-    """Auto-login for development mode."""
+    """Auto-login for development mode with default character data."""
     if not st.session_state.logged_in:
         st.session_state.logged_in = True
         st.session_state.username = DEV_USERNAME
-        # Load or create dev user data
-        try:
-            st.session_state.user_data = load_user_data(DEV_USERNAME)
-        except Exception:
-            st.session_state.user_data = UserData()
+        # Load default character data for testing
+        st.session_state.user_data = load_default_character()
 
 
 def main():

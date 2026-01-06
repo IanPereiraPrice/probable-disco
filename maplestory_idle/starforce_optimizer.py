@@ -45,7 +45,7 @@ DESTRUCTION_RESET_STAR = 12  # Item resets to this star level
 #   - Arena shop: FREE (25/week)
 
 MESO_TO_DIAMOND = 4.0 / 1000  # 4 diamonds per 1000 meso
-SCROLL_DIAMOND_COST = 350  # Using weekly package rate as baseline
+SCROLL_DIAMOND_COST = 500  # Normal shop rate
 
 # Destruction fee in diamonds: 1M meso = 4,000 diamonds
 DESTRUCTION_FEE_DIAMONDS = DESTRUCTION_FEE_MESO * MESO_TO_DIAMOND  # 4,000 diamonds
