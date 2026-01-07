@@ -6,18 +6,36 @@ Provides cube priority recommendations using the original DPS calculation method
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass
 
-# Import from the cubes module in streamlit_app
+# Import from the cubes module in streamlit_app using importlib for explicit path
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import importlib.util
 
-from cubes import (
-    PotentialLine, PotentialTier, StatType, CubeType,
-    create_item_score_result, calculate_expected_cubes_fast,
-    calculate_efficiency_score, calculate_stat_rankings,
-    ItemScoreResult, ExpectedCubesMetrics, EnhancedCubeRecommendation,
-    POTENTIAL_STATS, get_stat_display_name
-)
+# Get the path to streamlit_app/cubes.py explicitly
+_cubes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cubes.py")
+_spec = importlib.util.spec_from_file_location("streamlit_cubes", _cubes_path)
+_cubes_module = importlib.util.module_from_spec(_spec)
+sys.modules["streamlit_cubes"] = _cubes_module
+_spec.loader.exec_module(_cubes_module)
+
+# Import from the loaded module
+PotentialLine = _cubes_module.PotentialLine
+PotentialTier = _cubes_module.PotentialTier
+StatType = _cubes_module.StatType
+CubeType = _cubes_module.CubeType
+create_item_score_result = _cubes_module.create_item_score_result
+calculate_expected_cubes_fast = _cubes_module.calculate_expected_cubes_fast
+calculate_efficiency_score = _cubes_module.calculate_efficiency_score
+calculate_stat_rankings = _cubes_module.calculate_stat_rankings
+ItemScoreResult = _cubes_module.ItemScoreResult
+ExpectedCubesMetrics = _cubes_module.ExpectedCubesMetrics
+EnhancedCubeRecommendation = _cubes_module.EnhancedCubeRecommendation
+POTENTIAL_STATS = _cubes_module.POTENTIAL_STATS
+get_stat_display_name = _cubes_module.get_stat_display_name
+get_cached_roll_distribution = _cubes_module.get_cached_roll_distribution
+format_lines_for_hover = _cubes_module.format_lines_for_hover
+ExactRollDistribution = _cubes_module.ExactRollDistribution
+get_exact_roll_distribution = _cubes_module.get_exact_roll_distribution
 
 # Equipment slots
 EQUIPMENT_SLOTS = [
@@ -239,13 +257,13 @@ def analyze_slot_potentials(
         n_cached_rolls=3000,  # Slightly fewer for faster analysis
     )
 
-    # Calculate efficiency score
+    # Calculate efficiency score using actual DPS values
+    # Efficiency = Expected DPS% gain per 100k diamonds spent
     diamond_cost = BONUS_DIAMOND_PER_CUBE if is_bonus else REGULAR_DIAMOND_PER_CUBE
     efficiency = calculate_efficiency_score(
-        current_score=item_score.dps_relative_score,
-        tier=tier,
         expected_cubes_to_improve=expected_cubes.cubes_to_any_improvement,
         diamond_cost_per_cube=diamond_cost,
+        median_dps_improvement=expected_cubes.median_dps_improvement,
         tier_up_efficiency_bonus=expected_cubes.tier_up_efficiency_bonus,
     )
 
@@ -471,3 +489,153 @@ def format_stat_display(stat_name: str) -> str:
         "skill_cd": "CDR", "buff_duration": "Buff%", "stat_per_level": "S/Lv", "ba_targets": "BA+",
     }
     return DISPLAY_NAMES.get(stat_name, stat_name.upper())
+
+
+def get_distribution_data_for_slot(
+    user_data,
+    slot: str,
+    is_bonus: bool,
+    aggregate_stats_func: Callable[[], Dict[str, float]],
+    calculate_dps_func: Callable[[Dict[str, float]], Dict[str, Any]],
+    main_stat_type: StatType = StatType.DEX_PCT,
+    use_exact: bool = True,
+) -> Optional[Dict]:
+    """
+    Get distribution data for a specific equipment slot's potential.
+
+    This uses either the ExactRollDistribution (combinatorial, exact probabilities)
+    or CachedRollDistribution (Monte Carlo sampling) to create data suitable
+    for a Plotly distribution chart.
+
+    Args:
+        user_data: Streamlit UserData object
+        slot: Equipment slot name (e.g., "hat", "gloves")
+        is_bonus: True for bonus potential, False for regular
+        aggregate_stats_func: Function to aggregate all stats
+        calculate_dps_func: Function to calculate DPS from stats dict
+        main_stat_type: Player's main stat type
+        use_exact: If True (default), use exact probability calculation.
+                   If False, use Monte Carlo sampling.
+
+    Returns:
+        Dict with distribution data or None if no data available:
+        - percentiles: List[int] (0-100)
+        - dps_gains: List[float] (DPS % at each percentile)
+        - lines_text: List[str] (formatted lines text for hover)
+        - median_dps_gain: float (median DPS gain)
+        - current_dps_gain: float (current roll's DPS gain)
+        - is_exact: bool (True if using exact probabilities)
+    """
+    slot_pots = user_data.equipment_potentials.get(slot, {})
+
+    # Get tier
+    tier_key = "bonus_tier" if is_bonus else "tier"
+    tier_str = slot_pots.get(tier_key, "Legendary")
+    tier = get_tier_enum(tier_str)
+
+    # Check if tier has stats
+    tier_stats = POTENTIAL_STATS.get(tier, [])
+    if not tier_stats:
+        return None
+
+    # Create DPS calculation function for this slot/type
+    def calc_dps_with_lines(test_lines: List[PotentialLine]) -> float:
+        """Calculate DPS with the given potential lines on this slot."""
+        original_pots = user_data.equipment_potentials.get(slot, {}).copy()
+
+        prefix = "bonus_" if is_bonus else ""
+        test_pots = original_pots.copy()
+
+        # Clear the lines
+        for i in range(1, 4):
+            test_pots[f"{prefix}line{i}_stat"] = ""
+            test_pots[f"{prefix}line{i}_value"] = 0
+
+        # Apply test lines
+        for line in test_lines:
+            i = line.slot
+            stat_name = get_stat_name_from_type(line.stat_type)
+            test_pots[f"{prefix}line{i}_stat"] = stat_name
+            test_pots[f"{prefix}line{i}_value"] = line.value
+
+        # Temporarily update user data
+        user_data.equipment_potentials[slot] = test_pots
+
+        try:
+            stats = aggregate_stats_func()
+            result = calculate_dps_func(stats, user_data.combat_mode)
+            new_dps = result['total']
+        finally:
+            user_data.equipment_potentials[slot] = original_pots
+
+        return new_dps
+
+    # Get baseline DPS (with empty potential lines)
+    def get_baseline_dps() -> float:
+        original_pots = user_data.equipment_potentials.get(slot, {}).copy()
+
+        prefix = "bonus_" if is_bonus else ""
+        test_pots = original_pots.copy()
+        for i in range(1, 4):
+            test_pots[f"{prefix}line{i}_stat"] = ""
+            test_pots[f"{prefix}line{i}_value"] = 0
+
+        user_data.equipment_potentials[slot] = test_pots
+
+        try:
+            stats = aggregate_stats_func()
+            result = calculate_dps_func(stats, user_data.combat_mode)
+            baseline = result['total']
+        finally:
+            user_data.equipment_potentials[slot] = original_pots
+
+        return max(baseline, 1)
+
+    baseline_dps = get_baseline_dps()
+
+    if use_exact:
+        # Use exact probability distribution (combinatorial enumeration)
+        exact_dist = get_exact_roll_distribution(
+            tier, slot, calc_dps_with_lines, baseline_dps, main_stat_type
+        )
+
+        # Get distribution data for chart with high-resolution tail
+        dist_data = exact_dist.get_distribution_data_for_chart(num_points=101, high_res_tail=True)
+
+        # Get current roll's DPS gain
+        current_lines = convert_streamlit_lines_to_potential_lines(slot_pots, is_bonus)
+        if current_lines:
+            current_dps = calc_dps_with_lines(current_lines)
+            current_dps_gain = ((current_dps / baseline_dps) - 1) * 100 if baseline_dps > 0 else 0
+        else:
+            current_dps_gain = 0.0
+
+        # Get median from exact stats
+        stats = exact_dist.get_dps_distribution_stats()
+        dist_data["current_dps_gain"] = current_dps_gain
+        dist_data["median_dps_gain"] = stats["median"]
+        dist_data["is_exact"] = True
+        dist_data["total_combinations"] = exact_dist.get_total_combinations()
+        dist_data["total_arrangements"] = exact_dist.get_total_arrangements()
+    else:
+        # Use Monte Carlo sampling (legacy method)
+        cache = get_cached_roll_distribution(tier, n_rolls=3000)
+
+        # Score the rolls for this slot
+        cache.score_rolls_for_slot(slot, calc_dps_with_lines, baseline_dps, main_stat_type)
+
+        # Get distribution data for chart
+        dist_data = cache.get_distribution_data_for_chart(num_points=101)
+
+        # Get current roll's DPS gain
+        current_lines = convert_streamlit_lines_to_potential_lines(slot_pots, is_bonus)
+        current_item_score = create_item_score_result(
+            current_lines, tier, slot, calc_dps_with_lines, baseline_dps, main_stat_type, cache
+        )
+
+        # Add current DPS gain to the return data
+        dist_data["current_dps_gain"] = current_item_score.current_dps_gain
+        dist_data["median_dps_gain"] = dist_data["dps_gains"][50] if len(dist_data["dps_gains"]) > 50 else 0
+        dist_data["is_exact"] = False
+
+    return dist_data

@@ -1215,6 +1215,87 @@ class CachedRollDistribution:
             "mean": sum(scores) / n,
         }
 
+    def get_distribution_data_for_chart(self, num_points: int = 101) -> Dict:
+        """
+        Get distribution data formatted for Plotly chart with hover info.
+
+        Returns dict with:
+        - percentiles: List[int] (0-100)
+        - dps_gains: List[float] (DPS % at each percentile)
+        - lines_text: List[str] (formatted lines text for hover)
+        - representative_rolls: List[CachedRoll] (the actual roll objects)
+        """
+        if not self._scored:
+            raise RuntimeError("Must call score_rolls_for_slot first")
+
+        # Sort rolls by DPS gain (ascending - worst to best)
+        sorted_rolls = sorted(self._scored_rolls, key=lambda r: r.dps_gain_pct)
+        n = len(sorted_rolls)
+
+        percentiles = []
+        dps_gains = []
+        lines_text = []
+        representative_rolls = []
+
+        for i in range(num_points):
+            percentile = i  # 0 to 100
+            # Map percentile to index in sorted rolls
+            idx = min(int(percentile / 100 * n), n - 1)
+            roll = sorted_rolls[idx]
+
+            percentiles.append(percentile)
+            dps_gains.append(roll.dps_gain_pct)
+            lines_text.append(format_lines_for_hover(roll.lines))
+            representative_rolls.append(roll)
+
+        return {
+            "percentiles": percentiles,
+            "dps_gains": dps_gains,
+            "lines_text": lines_text,
+            "representative_rolls": representative_rolls,
+        }
+
+    def get_roll_at_percentile(self, percentile: float) -> Optional['CachedRoll']:
+        """Get a representative roll at a specific percentile (0-100)."""
+        if not self._scored:
+            raise RuntimeError("Must call score_rolls_for_slot first")
+
+        sorted_rolls = sorted(self._scored_rolls, key=lambda r: r.dps_gain_pct)
+        n = len(sorted_rolls)
+        idx = min(int(percentile / 100 * n), n - 1)
+        return sorted_rolls[idx]
+
+
+def format_lines_for_hover(lines: List[PotentialLine]) -> str:
+    """
+    Format potential lines for display in chart hover tooltip.
+
+    Example output:
+    "DEX +8% (Yellow)
+    Crit Rate +3%
+    Damage +5%"
+    """
+    formatted = []
+    for line in lines:
+        name = get_stat_display_name(line.stat_type)
+        tier_indicator = " (Yellow)" if line.is_yellow else ""
+        special_indicator = " [SPECIAL]" if line.is_special else ""
+
+        # Flat stats (no % sign)
+        flat_stats = {
+            StatType.MAIN_STAT_FLAT, StatType.DEX_FLAT, StatType.STR_FLAT,
+            StatType.INT_FLAT, StatType.LUK_FLAT, StatType.ALL_SKILLS
+        }
+
+        if line.stat_type in flat_stats:
+            formatted.append(f"{name}: +{int(line.value)}{tier_indicator}{special_indicator}")
+        elif line.stat_type == StatType.SKILL_CD:
+            formatted.append(f"{name}: -{line.value}s{tier_indicator}{special_indicator}")
+        else:
+            formatted.append(f"{name}: +{line.value:.1f}%{tier_indicator}{special_indicator}")
+
+    return "<br>".join(formatted)
+
 
 # Global cache for roll distributions (one per tier)
 _ROLL_DISTRIBUTION_CACHE: Dict[PotentialTier, CachedRollDistribution] = {}
@@ -1231,6 +1312,494 @@ def clear_roll_distribution_cache():
     """Clear the roll distribution cache (call when tier probabilities change)."""
     global _ROLL_DISTRIBUTION_CACHE
     _ROLL_DISTRIBUTION_CACHE = {}
+
+
+# =============================================================================
+# EXACT PROBABILITY DISTRIBUTION SYSTEM
+# =============================================================================
+# Instead of Monte Carlo sampling, enumerate all unique DPS outcomes and
+# calculate exact probabilities using combinatorics.
+
+@dataclass
+class ExactDPSOutcome:
+    """A unique DPS outcome with its exact probability."""
+    dps_gain_pct: float
+    probability: float  # Exact probability of this outcome
+    representative_lines: List[PotentialLine]  # One example arrangement
+    arrangement_count: int  # How many line arrangements produce this DPS
+
+
+class ExactRollDistribution:
+    """
+    Exact probability distribution for cube rolls using combinatorial math.
+
+    Instead of Monte Carlo sampling (5000 random rolls), this class:
+    1. Enumerates all unique stat combinations (order-independent for DPS)
+    2. Calculates DPS once per unique combination
+    3. Sums probabilities of all arrangements that produce each DPS outcome
+    4. Stores one representative arrangement per DPS bucket for display
+
+    This gives exact probabilities instead of sampled estimates.
+
+    Usage:
+        exact_dist = ExactRollDistribution(PotentialTier.MYSTIC)
+        exact_dist.score_for_slot(
+            slot="gloves",
+            dps_calc_func=my_dps_func,
+            current_dps=1000000,
+            main_stat_type=StatType.DEX_PCT
+        )
+        data = exact_dist.get_distribution_data_for_chart()
+    """
+
+    def __init__(self, tier: PotentialTier):
+        self.tier = tier
+        self._outcomes: List[ExactDPSOutcome] = []
+        self._scored = False
+        self._slot = None
+
+        # Pre-compute tier stats and their probabilities
+        self._tier_stats = POTENTIAL_STATS.get(tier, [])
+        self._prev_tier_stats = POTENTIAL_STATS.get(tier.prev_tier(), []) if tier.prev_tier() else self._tier_stats
+
+        # Normalize probabilities
+        self._yellow_probs = self._normalize_probs(self._tier_stats)
+        self._grey_probs = self._normalize_probs(self._prev_tier_stats)
+
+    def _normalize_probs(self, stats: List[PotentialStat]) -> Dict[int, float]:
+        """Normalize stat probabilities to sum to 1, return dict of stat_idx -> prob."""
+        total = sum(s.probability for s in stats)
+        if total == 0:
+            return {}
+        return {i: s.probability / total for i, s in enumerate(stats)}
+
+    def score_for_slot(
+        self,
+        slot: str,
+        dps_calc_func,
+        current_dps: float,
+        main_stat_type: StatType = StatType.DEX_PCT,
+    ):
+        """
+        Calculate exact probability distribution for a specific slot.
+
+        This enumerates all possible roll combinations and calculates:
+        - The DPS gain for each unique stat combination
+        - The exact probability of each outcome
+        """
+        self._slot = slot
+
+        # Pre-calculate DPS weights for each stat
+        stat_weights = self._calculate_stat_weights(slot, dps_calc_func, current_dps, main_stat_type)
+
+        # Check for special potential
+        has_special = slot in SPECIAL_POTENTIALS
+        special_def = SPECIAL_POTENTIALS.get(slot) if has_special else None
+        special_available = has_special and self.tier in special_def.values if special_def else False
+
+        # Build list of (stat_idx, value, weight, is_special) for yellow and grey
+        # Pass is_yellow=True for yellow stats (current tier), False for grey (previous tier)
+        yellow_stats = self._build_stat_list(self._tier_stats, stat_weights, is_yellow=True)
+        grey_stats = self._build_stat_list(self._prev_tier_stats, stat_weights, is_yellow=False)
+
+        # Add special potential to yellow stats if available
+        if special_available:
+            special_weight = stat_weights.get((special_def.stat_type, True, True), 0.0)
+            special_value = special_def.values[self.tier]
+            # Special replaces 1% of the distribution - we'll handle this specially
+            yellow_stats_with_special = yellow_stats + [(len(self._tier_stats), special_value, special_weight, True, special_def.stat_type)]
+        else:
+            yellow_stats_with_special = yellow_stats
+
+        # Yellow line probabilities: 24% for line 2, 8% for line 3
+        # Line 1 is always yellow
+        yellow_rates = {1: 1.0, 2: 0.24, 3: 0.08}
+
+        # Enumerate all possible line configurations
+        # For each configuration, calculate DPS and probability
+        dps_buckets: Dict[float, Dict] = {}  # dps_gain -> {prob: float, lines: List, count: int}
+
+        # We need to enumerate all combinations of:
+        # Line 1: yellow stat (always yellow)
+        # Line 2: yellow stat (24%) or grey stat (76%)
+        # Line 3: yellow stat (8%) or grey stat (92%)
+
+        # Get normalized probabilities including special potential
+        yellow_probs = self._get_stat_probs_with_special(slot, special_available)
+        grey_probs = self._grey_probs
+
+        # Enumerate all combinations
+        for i1, (_, val1, weight1, is_special1, st1) in enumerate(yellow_stats_with_special):
+            prob1 = yellow_probs.get(i1, 0)
+            if prob1 == 0:
+                continue
+
+            # Line 2 possibilities
+            for is_yellow2 in [True, False]:
+                stats2 = yellow_stats_with_special if is_yellow2 else grey_stats
+                probs2 = yellow_probs if is_yellow2 else grey_probs
+                line2_yellow_prob = yellow_rates[2] if is_yellow2 else (1 - yellow_rates[2])
+
+                for i2, (stat_idx2, val2, weight2, is_special2, st2) in enumerate(stats2):
+                    prob2 = probs2.get(i2, 0) * line2_yellow_prob
+                    if prob2 == 0:
+                        continue
+
+                    # Line 3 possibilities
+                    for is_yellow3 in [True, False]:
+                        stats3 = yellow_stats_with_special if is_yellow3 else grey_stats
+                        probs3 = yellow_probs if is_yellow3 else grey_probs
+                        line3_yellow_prob = yellow_rates[3] if is_yellow3 else (1 - yellow_rates[3])
+
+                        for i3, (stat_idx3, val3, weight3, is_special3, st3) in enumerate(stats3):
+                            prob3 = probs3.get(i3, 0) * line3_yellow_prob
+                            if prob3 == 0:
+                                continue
+
+                            # Calculate total probability of this exact arrangement
+                            total_prob = prob1 * prob2 * prob3
+
+                            # Calculate DPS gain (weights are already % gain per stat)
+                            dps_gain = weight1 + weight2 + weight3
+
+                            # Round DPS to avoid floating point issues when bucketing
+                            dps_key = round(dps_gain, 4)
+
+                            # Add to bucket
+                            if dps_key not in dps_buckets:
+                                # Create representative lines
+                                lines = [
+                                    PotentialLine(1, st1, val1, True, is_special1),
+                                    PotentialLine(2, st2, val2, is_yellow2, is_special2),
+                                    PotentialLine(3, st3, val3, is_yellow3, is_special3),
+                                ]
+                                dps_buckets[dps_key] = {
+                                    'prob': total_prob,
+                                    'lines': lines,
+                                    'count': 1
+                                }
+                            else:
+                                dps_buckets[dps_key]['prob'] += total_prob
+                                dps_buckets[dps_key]['count'] += 1
+
+        # Convert buckets to sorted outcomes
+        self._outcomes = []
+        for dps_gain, data in sorted(dps_buckets.items()):
+            self._outcomes.append(ExactDPSOutcome(
+                dps_gain_pct=dps_gain,
+                probability=data['prob'],
+                representative_lines=data['lines'],
+                arrangement_count=data['count']
+            ))
+
+        self._scored = True
+
+    def _build_stat_list(
+        self,
+        stats: List[PotentialStat],
+        stat_weights: Dict,
+        is_yellow: bool
+    ) -> List[Tuple[int, float, float, bool, StatType]]:
+        """
+        Build list of (idx, value, weight, is_special, stat_type) for stats.
+
+        Args:
+            stats: List of PotentialStat objects
+            stat_weights: Dict with keys (stat_type, is_yellow) -> weight
+            is_yellow: True for yellow (current tier) stats, False for grey (previous tier)
+        """
+        result = []
+        for i, stat in enumerate(stats):
+            # Use the correct weight for yellow vs grey
+            weight = stat_weights.get((stat.stat_type, is_yellow), 0.0)
+            result.append((i, stat.value, weight, False, stat.stat_type))
+        return result
+
+    def _get_stat_probs_with_special(self, slot: str, special_available: bool) -> Dict[int, float]:
+        """Get stat probabilities including special potential (1% rate)."""
+        if not special_available:
+            return self._yellow_probs
+
+        # Special takes 1% of the probability mass
+        special_rate = SPECIAL_POTENTIAL_RATE  # 0.01
+        regular_rate = 1 - special_rate  # 0.99
+
+        result = {}
+        for idx, prob in self._yellow_probs.items():
+            result[idx] = prob * regular_rate
+
+        # Special gets the last index
+        special_idx = len(self._tier_stats)
+        result[special_idx] = special_rate
+
+        return result
+
+    def _calculate_stat_weights(
+        self,
+        slot: str,
+        dps_calc_func,
+        current_dps: float,
+        main_stat_type: StatType,
+    ) -> Dict:
+        """
+        Pre-calculate DPS weight for each stat type and tier.
+
+        Keys are:
+        - (stat_type, True) for yellow stats
+        - (stat_type, False) for grey stats
+        - (stat_type, True, True) for special potentials
+        """
+        weights = {}
+
+        # Test each stat in current tier (yellow lines)
+        for stat in self._tier_stats:
+            key = (stat.stat_type, True)  # (stat_type, is_yellow)
+            if key in weights:
+                continue
+            test_lines = [PotentialLine(1, stat.stat_type, stat.value, True, False)]
+            new_dps = dps_calc_func(test_lines)
+            gain = ((new_dps / current_dps) - 1) * 100 if current_dps > 0 else 0
+            weights[key] = gain
+
+        # Test previous tier stats (grey lines) - these have LOWER values
+        for stat in self._prev_tier_stats:
+            key = (stat.stat_type, False)  # (stat_type, is_yellow=False for grey)
+            if key in weights:
+                continue
+            test_lines = [PotentialLine(1, stat.stat_type, stat.value, False, False)]
+            new_dps = dps_calc_func(test_lines)
+            gain = ((new_dps / current_dps) - 1) * 100 if current_dps > 0 else 0
+            weights[key] = gain
+
+        # Test special potential if available
+        if slot in SPECIAL_POTENTIALS:
+            special = SPECIAL_POTENTIALS[slot]
+            if self.tier in special.values:
+                test_lines = [PotentialLine(1, special.stat_type, special.values[self.tier], True, True)]
+                new_dps = dps_calc_func(test_lines)
+                gain = ((new_dps / current_dps) - 1) * 100 if current_dps > 0 else 0
+                weights[(special.stat_type, True, True)] = gain  # (stat_type, is_yellow, is_special)
+
+        return weights
+
+    def get_distribution_data_for_chart(self, num_points: int = 101, high_res_tail: bool = True) -> Dict:
+        """
+        Get distribution data formatted for Plotly chart with hover info.
+
+        Args:
+            num_points: Number of points for the main distribution (default 101 for 0-100)
+            high_res_tail: If True, add extra resolution at the tail (90-100%)
+                          with 0.1% increments for P90-99, and 0.01% for P99-100
+
+        Returns dict with:
+        - percentiles: List[float] (0-100, with decimals in tail)
+        - dps_gains: List[float] (DPS % at each percentile)
+        - lines_text: List[str] (formatted lines text for hover)
+        - probabilities: List[float] (exact probability at each point)
+        """
+        if not self._scored:
+            raise RuntimeError("Must call score_for_slot first")
+
+        # Build cumulative probability distribution
+        cumulative_prob = 0.0
+        cumulative_data = []  # [(cumulative_prob, dps_gain, lines, prob)]
+
+        for outcome in self._outcomes:
+            cumulative_prob += outcome.probability
+            cumulative_data.append((
+                cumulative_prob,
+                outcome.dps_gain_pct,
+                outcome.representative_lines,
+                outcome.probability
+            ))
+
+        # Build list of percentiles to sample
+        # Main points: 0, 1, 2, ... 89 (integer percentiles up to 89)
+        # Then high-res tail if enabled
+        sample_percentiles = []
+
+        # 0-89 by 1%
+        for i in range(90):
+            sample_percentiles.append(float(i))
+
+        if high_res_tail:
+            # 90-98 by 0.5%
+            for i in range(90, 98):
+                sample_percentiles.append(float(i))
+                sample_percentiles.append(float(i) + 0.5)
+
+            # 98-99 by 0.1%
+            for i in range(10):
+                pct = 98.0 + i * 0.1
+                sample_percentiles.append(round(pct, 1))
+
+            # 99-100 by 0.01% (ultra high resolution for the extreme tail)
+            for i in range(101):
+                pct = 99.0 + i * 0.01
+                sample_percentiles.append(round(pct, 2))
+
+            # Ensure 100.0 is included
+            sample_percentiles.append(100.0)
+        else:
+            # Just 90-100 by 1%
+            for i in range(90, 101):
+                sample_percentiles.append(float(i))
+
+        # Sort and deduplicate
+        sample_percentiles = sorted(set(sample_percentiles))
+
+        # Sample at each percentile
+        percentiles = []
+        dps_gains = []
+        lines_text = []
+        probabilities = []
+
+        for pct in sample_percentiles:
+            target = pct / 100.0  # Convert to 0.0-1.0
+
+            # Find the outcome at this cumulative percentile
+            found = False
+            for cum_prob, dps_gain, lines, prob in cumulative_data:
+                if cum_prob >= target:
+                    percentiles.append(pct)
+                    dps_gains.append(dps_gain)
+                    lines_text.append(format_lines_for_hover(lines))
+                    probabilities.append(prob)
+                    found = True
+                    break
+
+            if not found and cumulative_data:
+                # Edge case: use the last outcome
+                _, dps_gain, lines, prob = cumulative_data[-1]
+                percentiles.append(pct)
+                dps_gains.append(dps_gain)
+                lines_text.append(format_lines_for_hover(lines))
+                probabilities.append(prob)
+
+        return {
+            "percentiles": percentiles,
+            "dps_gains": dps_gains,
+            "lines_text": lines_text,
+            "probabilities": probabilities,
+        }
+
+    def get_dps_distribution_stats(self) -> Dict[str, float]:
+        """Get DPS gain distribution statistics."""
+        if not self._scored:
+            raise RuntimeError("Must call score_for_slot first")
+
+        # Build CDF for percentile lookups
+        cumulative = 0.0
+        p10_dps = p25_dps = median_dps = p75_dps = p90_dps = 0.0
+
+        for outcome in self._outcomes:
+            prev_cumulative = cumulative
+            cumulative += outcome.probability
+
+            if prev_cumulative < 0.10 <= cumulative:
+                p10_dps = outcome.dps_gain_pct
+            if prev_cumulative < 0.25 <= cumulative:
+                p25_dps = outcome.dps_gain_pct
+            if prev_cumulative < 0.50 <= cumulative:
+                median_dps = outcome.dps_gain_pct
+            if prev_cumulative < 0.75 <= cumulative:
+                p75_dps = outcome.dps_gain_pct
+            if prev_cumulative < 0.90 <= cumulative:
+                p90_dps = outcome.dps_gain_pct
+
+        return {
+            "min": self._outcomes[0].dps_gain_pct if self._outcomes else 0,
+            "p10": p10_dps,
+            "p25": p25_dps,
+            "median": median_dps,
+            "p75": p75_dps,
+            "p90": p90_dps,
+            "max": self._outcomes[-1].dps_gain_pct if self._outcomes else 0,
+        }
+
+    def get_percentile_of_dps_gain(self, dps_gain: float) -> float:
+        """Get percentile rank of a DPS gain (0-100)."""
+        if not self._scored:
+            raise RuntimeError("Must call score_for_slot first")
+
+        cumulative = 0.0
+        for outcome in self._outcomes:
+            if outcome.dps_gain_pct >= dps_gain:
+                return cumulative * 100
+            cumulative += outcome.probability
+
+        return 100.0
+
+    def get_expected_cubes_to_dps_gain(self, target_dps_gain: float) -> float:
+        """Get expected cubes to reach a target DPS gain."""
+        if not self._scored:
+            raise RuntimeError("Must call score_for_slot first")
+
+        prob_above = sum(o.probability for o in self._outcomes if o.dps_gain_pct >= target_dps_gain)
+        if prob_above <= 0:
+            return float('inf')
+        return 1 / prob_above
+
+    def get_expected_cubes_to_improve_dps(self, current_dps_gain: float) -> float:
+        """Get expected cubes to get any DPS improvement over current."""
+        if not self._scored:
+            raise RuntimeError("Must call score_for_slot first")
+
+        prob_better = sum(o.probability for o in self._outcomes if o.dps_gain_pct > current_dps_gain)
+        if prob_better <= 0:
+            return float('inf')
+        return 1 / prob_better
+
+    def get_prob_improve_dps_in_n_cubes(self, current_dps_gain: float, n_cubes: int) -> float:
+        """Get probability of improving DPS in N cubes."""
+        if not self._scored:
+            raise RuntimeError("Must call score_for_slot first")
+
+        prob_better = sum(o.probability for o in self._outcomes if o.dps_gain_pct > current_dps_gain)
+        if prob_better <= 0:
+            return 0.0
+        return 1 - ((1 - prob_better) ** n_cubes)
+
+    def get_total_combinations(self) -> int:
+        """Get total number of unique DPS outcomes."""
+        return len(self._outcomes)
+
+    def get_total_arrangements(self) -> int:
+        """Get total number of line arrangements enumerated."""
+        return sum(o.arrangement_count for o in self._outcomes)
+
+
+# Global cache for exact distributions
+_EXACT_DISTRIBUTION_CACHE: Dict[Tuple[PotentialTier, str], ExactRollDistribution] = {}
+
+
+def get_exact_roll_distribution(
+    tier: PotentialTier,
+    slot: str,
+    dps_calc_func,
+    current_dps: float,
+    main_stat_type: StatType = StatType.DEX_PCT,
+) -> ExactRollDistribution:
+    """
+    Get or create an exact roll distribution for a tier/slot combination.
+
+    Unlike the Monte Carlo version, this computes exact probabilities.
+    """
+    cache_key = (tier, slot)
+
+    # Always recompute since DPS function may have changed
+    # In production, could add more sophisticated caching
+    dist = ExactRollDistribution(tier)
+    dist.score_for_slot(slot, dps_calc_func, current_dps, main_stat_type)
+    _EXACT_DISTRIBUTION_CACHE[cache_key] = dist
+
+    return dist
+
+
+def clear_exact_distribution_cache():
+    """Clear the exact distribution cache."""
+    global _EXACT_DISTRIBUTION_CACHE
+    _EXACT_DISTRIBUTION_CACHE = {}
 
 
 # =============================================================================
@@ -1297,6 +1866,8 @@ class ExpectedCubesMetrics:
     cubes_to_tier_up: float = 0         # Expected cubes to tier up (accounting for pity)
     tier_up_score_gain: float = 0       # Expected score improvement from tier-up
     tier_up_efficiency_bonus: float = 0 # Additional efficiency from tier-up potential
+    # Median improvement for efficiency calculation
+    median_dps_improvement: float = 0.0 # Median DPS gain when rolling better than current
 
 
 @dataclass
@@ -1566,6 +2137,89 @@ def _get_best_single_line_dps_gain(
     return best_gain
 
 
+def _get_best_triple_line_dps_gain(
+    tier: PotentialTier,
+    slot: str,
+    dps_calc_func,
+    current_dps: float,
+    main_stat_type: StatType = StatType.DEX_PCT,
+) -> float:
+    """
+    Get the best possible DPS gain from 3 lines at this tier/slot.
+
+    This tests combinations properly to account for diminishing returns
+    on stats like crit rate that cap at 100%.
+
+    Tests top 3 best stats applied together, not just best_single * 3.
+    """
+    tier_stats = POTENTIAL_STATS.get(tier, [])
+
+    # Get all useful stats with their values
+    useful_stats = []
+    for stat in tier_stats:
+        stat_tier = STAT_TIER_RANKINGS.get(stat.stat_type, "F")
+        if stat_tier in ("S", "A"):
+            useful_stats.append((stat.stat_type, stat.value))
+
+    # Add special potential if available
+    if slot in SPECIAL_POTENTIALS:
+        special = SPECIAL_POTENTIALS[slot]
+        if tier in special.values:
+            useful_stats.append((special.stat_type, special.values[tier]))
+
+    if not useful_stats:
+        return 0.0
+
+    # Test each stat individually to find the top 3 by DPS gain
+    stat_gains = []
+    for stat_type, value in useful_stats:
+        test_lines = [PotentialLine(1, stat_type, value, True, False)]
+        new_dps = dps_calc_func(test_lines)
+        gain = ((new_dps / current_dps) - 1) * 100 if current_dps > 0 else 0
+        stat_gains.append((stat_type, value, gain))
+
+    # Sort by gain descending
+    stat_gains.sort(key=lambda x: x[2], reverse=True)
+
+    # Now test the ACTUAL best combination of 3 lines
+    # Take top 3 stats and test them together
+    if len(stat_gains) >= 3:
+        # Test top 3 stats together
+        test_lines = [
+            PotentialLine(1, stat_gains[0][0], stat_gains[0][1], True, False),
+            PotentialLine(2, stat_gains[1][0], stat_gains[1][1], True, False),
+            PotentialLine(3, stat_gains[2][0], stat_gains[2][1], True, False),
+        ]
+        new_dps = dps_calc_func(test_lines)
+        best_gain = ((new_dps / current_dps) - 1) * 100 if current_dps > 0 else 0
+
+        # Also test triple of the single best stat to see if that's better
+        # (e.g., 3x DEX% might be better than DEX% + CR + CD)
+        best_stat = stat_gains[0]
+        test_lines_triple = [
+            PotentialLine(1, best_stat[0], best_stat[1], True, False),
+            PotentialLine(2, best_stat[0], best_stat[1], True, False),
+            PotentialLine(3, best_stat[0], best_stat[1], True, False),
+        ]
+        new_dps_triple = dps_calc_func(test_lines_triple)
+        triple_gain = ((new_dps_triple / current_dps) - 1) * 100 if current_dps > 0 else 0
+
+        return max(best_gain, triple_gain)
+
+    elif len(stat_gains) >= 1:
+        # Only 1-2 useful stats, use triple of best
+        best_stat = stat_gains[0]
+        test_lines = [
+            PotentialLine(1, best_stat[0], best_stat[1], True, False),
+            PotentialLine(2, best_stat[0], best_stat[1], True, False),
+            PotentialLine(3, best_stat[0], best_stat[1], True, False),
+        ]
+        new_dps = dps_calc_func(test_lines)
+        return ((new_dps / current_dps) - 1) * 100 if current_dps > 0 else 0
+
+    return 0.0
+
+
 def calculate_combined_score(
     line_scores: List[float],
     is_yellow_flags: List[bool],
@@ -1686,10 +2340,10 @@ def create_item_score_result(
         is_yellow_flags.append(False)
 
     # Calculate best possible DPS gain for reference
-    best_line_dps = _get_best_single_line_dps_gain(
+    # Use actual triple-line test to account for diminishing returns (e.g., crit rate cap)
+    best_possible_dps_gain = _get_best_triple_line_dps_gain(
         tier, slot, dps_calc_func, current_dps, main_stat_type
     )
-    best_possible_dps_gain = best_line_dps * 3  # Approximate for 3 best lines
 
     # Calculate DPS-relative score: current_dps / best_possible * 100
     # This shows how much of the potential's max value you're getting
@@ -2034,6 +2688,9 @@ def calculate_expected_cubes_fast(
         if cubes_to_tier_up > 0 and cubes_to_tier_up < 200:
             tier_up_efficiency_bonus = (tier_up_score_gain / cubes_to_tier_up) * 10
 
+    # Calculate median DPS improvement when rolling better than current
+    median_dps_improvement = cache.get_expected_dps_gain_when_improving(current_dps_gain)
+
     return ExpectedCubesMetrics(
         current_score=current_score,
         cubes_to_any_improvement=cubes_to_any_improvement,
@@ -2049,6 +2706,7 @@ def calculate_expected_cubes_fast(
         cubes_to_tier_up=cubes_to_tier_up,
         tier_up_score_gain=tier_up_score_gain,
         tier_up_efficiency_bonus=tier_up_efficiency_bonus,
+        median_dps_improvement=median_dps_improvement,
     )
 
 
@@ -2208,61 +2866,50 @@ def _simulate_prob_improve_in_n(
 
 
 def calculate_efficiency_score(
-    current_score: float,
-    tier: PotentialTier,
     expected_cubes_to_improve: float,
-    diamond_cost_per_cube: float = 600,
+    diamond_cost_per_cube: float,
+    median_dps_improvement: float,
     tier_up_efficiency_bonus: float = 0,
 ) -> float:
     """
     Calculate efficiency score for cubing this item.
 
-    Formula: Base_Efficiency + Tier_Up_Bonus
+    Formula: Expected DPS% gain per 100k diamonds spent
 
-    Base_Efficiency = (Improvement_Room × Tier_Weight) / (Expected_Cubes × Cost_Factor)
-    Tier_Up_Bonus = (Score_Gain_From_TierUp / Cubes_To_TierUp) × Scale_Factor
+    This uses the actual median DPS improvement from the roll distribution,
+    making it directly comparable with starforce and other upgrade types.
 
-    The tier-up bonus rewards items that are close to tiering up, since
-    each cube brings value from both potential rerolls AND tier-up progress.
+    For cubes: (median_improvement / expected_cubes) / cost_per_cube * 100000
+    For starforce: dps_gain / total_cost * 100000 (same formula, guaranteed outcome)
 
     Args:
-        current_score: Current roll score (0-100)
-        tier: Current potential tier
         expected_cubes_to_improve: Expected cubes to get any improvement
         diamond_cost_per_cube: Cost per cube in diamonds
+        median_dps_improvement: Median DPS% gain when rolling better than current
         tier_up_efficiency_bonus: Pre-calculated bonus from tier-up potential
 
     Returns:
-        Efficiency score (higher = better to cube)
+        Efficiency score: DPS% gain per 100k diamonds (higher = better)
     """
-    TIER_WEIGHTS = {
-        PotentialTier.MYSTIC: 1.5,
-        PotentialTier.LEGENDARY: 1.2,
-        PotentialTier.UNIQUE: 1.0,
-        PotentialTier.EPIC: 0.8,
-        PotentialTier.RARE: 0.6,
-        PotentialTier.NORMAL: 0.4,
-    }
+    if expected_cubes_to_improve <= 0 or median_dps_improvement <= 0:
+        # No room to improve - just tier-up value
+        return tier_up_efficiency_bonus * 10
 
-    improvement_room = (100 - current_score) / 100  # 0 to 1
-    tier_weight = TIER_WEIGHTS.get(tier, 1.0)
-    cost_factor = diamond_cost_per_cube / 600  # Normalize to 600 diamond base
-
-    if expected_cubes_to_improve <= 0 or expected_cubes_to_improve >= 500:
-        # Can't improve or very hard to improve
-        if current_score < 30:
-            # Low score but hard to calculate - still somewhat efficient due to room
-            base_efficiency = improvement_room * tier_weight * 0.1
-        else:
-            base_efficiency = 0
+    if expected_cubes_to_improve >= 500:
+        # Very hard to improve - use minimal efficiency
+        expected_dps_per_cube = median_dps_improvement * 0.002  # ~0.1% chance
     else:
-        base_efficiency = (improvement_room * tier_weight) / (expected_cubes_to_improve * cost_factor)
+        # Expected DPS gain per cube = median_improvement / expected_cubes
+        # This is probability-weighted: (1/expected_cubes) * median_improvement
+        expected_dps_per_cube = median_dps_improvement / expected_cubes_to_improve
+
+    # Efficiency = DPS% per 100k diamonds
+    efficiency = (expected_dps_per_cube / diamond_cost_per_cube) * 100_000
 
     # Add tier-up bonus (items close to tier-up get extra value)
-    # This represents the "hidden value" of progressing pity counter
-    total_efficiency = base_efficiency + tier_up_efficiency_bonus
+    efficiency += tier_up_efficiency_bonus * 10
 
-    return total_efficiency * 1000  # Scale for readability
+    return efficiency
 
 
 # =============================================================================
@@ -2464,3 +3111,75 @@ if __name__ == "__main__":
         print(f"  Pity: {result.pity_count}/{sim._get_pity_threshold()}")
 
     print(f"\nStats: {sim.get_stats()}")
+
+    # Test ExactRollDistribution
+    print("\n" + "=" * 50)
+    print("Testing ExactRollDistribution vs Monte Carlo")
+    print("=" * 50)
+
+    # Simple DPS calculator that just sums up useful stats
+    def simple_dps_calc(lines: List[PotentialLine]) -> float:
+        """Simple DPS: base 1000 + sum of useful stat contributions."""
+        base_dps = 1000.0
+        dps_multiplier = 1.0
+
+        for line in lines:
+            if line.stat_type in (StatType.DEX_PCT, StatType.STR_PCT, StatType.INT_PCT, StatType.LUK_PCT):
+                dps_multiplier += line.value / 100  # Main stat % adds to multiplier
+            elif line.stat_type == StatType.DAMAGE_PCT:
+                dps_multiplier += line.value / 100
+            elif line.stat_type == StatType.CRIT_RATE:
+                dps_multiplier += line.value / 200  # Crit is worth half of main stat
+            elif line.stat_type == StatType.CRIT_DAMAGE:
+                dps_multiplier += line.value / 150  # Crit damage is good
+            elif line.stat_type in (StatType.MIN_DMG_MULT, StatType.MAX_DMG_MULT):
+                dps_multiplier += line.value / 200
+            # Flat stats, DEF, HP, MP contribute nothing
+
+        return base_dps * dps_multiplier
+
+    tier = PotentialTier.MYSTIC
+    slot = "gloves"
+    baseline_dps = 1000.0
+
+    print(f"\nTier: {tier.value}, Slot: {slot}")
+
+    # Test exact distribution
+    print("\n--- Exact Distribution ---")
+    exact = ExactRollDistribution(tier)
+    exact.score_for_slot(slot, simple_dps_calc, baseline_dps)
+
+    exact_stats = exact.get_dps_distribution_stats()
+    print(f"Unique DPS outcomes: {exact.get_total_combinations()}")
+    print(f"Total arrangements: {exact.get_total_arrangements()}")
+    print(f"Min DPS gain: {exact_stats['min']:.2f}%")
+    print(f"P10 DPS gain: {exact_stats['p10']:.2f}%")
+    print(f"P25 DPS gain: {exact_stats['p25']:.2f}%")
+    print(f"Median DPS gain: {exact_stats['median']:.2f}%")
+    print(f"P75 DPS gain: {exact_stats['p75']:.2f}%")
+    print(f"P90 DPS gain: {exact_stats['p90']:.2f}%")
+    print(f"Max DPS gain: {exact_stats['max']:.2f}%")
+
+    # Test Monte Carlo for comparison
+    print("\n--- Monte Carlo (5000 samples) ---")
+    cache = CachedRollDistribution(tier, n_rolls=5000)
+    cache.score_rolls_for_slot(slot, simple_dps_calc, baseline_dps)
+
+    mc_stats = cache.get_dps_distribution_stats()
+    print(f"Min DPS gain: {mc_stats['min']:.2f}%")
+    print(f"P10 DPS gain: {mc_stats['p10']:.2f}%")
+    print(f"P25 DPS gain: {mc_stats['p25']:.2f}%")
+    print(f"Median DPS gain: {mc_stats['median']:.2f}%")
+    print(f"P75 DPS gain: {mc_stats['p75']:.2f}%")
+    print(f"P90 DPS gain: {mc_stats['p90']:.2f}%")
+    print(f"Max DPS gain: {mc_stats['max']:.2f}%")
+
+    # Compare
+    print("\n--- Comparison (Exact - Monte Carlo) ---")
+    print(f"Median difference: {exact_stats['median'] - mc_stats['median']:.4f}%")
+    print(f"P75 difference: {exact_stats['p75'] - mc_stats['p75']:.4f}%")
+    print(f"Max difference: {exact_stats['max'] - mc_stats['max']:.4f}%")
+
+    # Verify probability sums to 1
+    total_prob = sum(o.probability for o in exact._outcomes)
+    print(f"\nTotal probability (should be 1.0): {total_prob:.6f}")

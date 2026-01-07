@@ -38,7 +38,8 @@ from companions import COMPANIONS
 from weapons import calculate_weapon_atk_str
 from skills import (
     calculate_all_skills_value, create_character_at_level, DPSCalculator,
-    BOWMASTER_SKILLS
+    BOWMASTER_SKILLS, JobSkillBonus, create_character_with_job_bonuses,
+    calculate_job_skill_value, Job,
 )
 from cubes import BA_TARGETS_MODE_MULTIPLIER, CombatMode
 from utils.data_manager import EQUIPMENT_SLOTS
@@ -184,6 +185,41 @@ def get_all_skills_dps_value(level: int, current_all_skills: int, base_attack: f
         return value
     except Exception:
         return 0.68  # Fallback
+
+
+def get_job_skill_dps_values(
+    level: int,
+    current_all_skills: int,
+    base_attack: float,
+    crit_damage: float,
+) -> Dict[str, float]:
+    """
+    Calculate the DPS value of +1 skill level for each job tier.
+
+    Returns dict with keys: 'first_job', 'second_job', 'third_job', 'fourth_job'
+    Values are percentage DPS increase per +1 skill level to that job.
+    """
+    # Create current bonuses (All Skills applies equally to all jobs)
+    current_bonuses = JobSkillBonus(
+        first_job=current_all_skills,
+        second_job=current_all_skills,
+        third_job=current_all_skills,
+        fourth_job=current_all_skills,
+    )
+
+    extra_stats = {
+        'attack': base_attack,
+        'crit_rate': 70,
+        'crit_damage': crit_damage,
+        'attack_speed_pct': 50,
+    }
+
+    result = {}
+    for job, key in [(Job.FIRST, 'first_job'), (Job.SECOND, 'second_job'),
+                     (Job.THIRD, 'third_job'), (Job.FOURTH, 'fourth_job')]:
+        result[key] = calculate_job_skill_value(level, job, current_bonuses, **extra_stats)
+
+    return result
 
 
 def calculate_ba_percent_of_dps(level: int, all_skills_bonus: int, base_attack: float, crit_damage: float) -> float:
@@ -438,6 +474,10 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
     ba_dps_pct = calculate_ba_percent_of_dps(
         user_data.character_level, user_data.all_skills, effective_base_attack, effective_crit_damage
     )
+    # Job-specific skill level DPS values
+    job_skill_dps_values = get_job_skill_dps_values(
+        user_data.character_level, user_data.all_skills, effective_base_attack, effective_crit_damage
+    )
     combat_mode_enum = get_combat_mode_enum(user_data.combat_mode)
     ba_mode_mult = BA_TARGETS_MODE_MULTIPLIER.get(combat_mode_enum, 0)
 
@@ -550,19 +590,44 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
         stats['boss_damage'] += item.get('sub_boss_damage', 0) * sub_mult
         stats['normal_damage'] += item.get('sub_normal_damage', 0) * sub_mult
 
-        special_dmg = item.get('special_damage', 0) * sub_mult
-        if special_dmg > 0:
-            stats['damage_percent'] += special_dmg
+        # Handle special stats based on special_stat_type field
+        if item.get('is_special', False):
+            special_type = item.get('special_stat_type', 'damage_pct')
+            special_value = item.get('special_stat_value', 0) * sub_mult
 
-        special_fd = item.get('special_final_damage', 0) * sub_mult
-        if special_fd > 0:
-            stats['final_damage_sources'].append(special_fd / 100)
+            if special_type == 'damage_pct' and special_value > 0:
+                stats['damage_percent'] += special_value
+            elif special_type == 'final_damage' and special_value > 0:
+                stats['final_damage_sources'].append(special_value / 100)
+            elif special_type == 'all_skills' and special_value > 0:
+                fd_from_as = special_value * all_skills_to_dps
+                if fd_from_as > 0:
+                    stats['final_damage_sources'].append(fd_from_as / 100)
 
-        special_as = item.get('special_all_skills', 0) * sub_mult
-        if special_as > 0:
-            fd_from_as = special_as * all_skills_to_dps
-            if fd_from_as > 0:
-                stats['final_damage_sources'].append(fd_from_as / 100)
+        # Job-specific skill level bonuses (sub_skill_1st, sub_skill_2nd, etc.)
+        # These boost specific job skills and are amplified by starforce
+        skill_1st = item.get('sub_skill_1st', 0) * sub_mult
+        skill_2nd = item.get('sub_skill_2nd', 0) * sub_mult
+        skill_3rd = item.get('sub_skill_3rd', 0) * sub_mult
+        skill_4th = item.get('sub_skill_4th', 0) * sub_mult
+
+        # Convert each job's skill bonus to final damage using pre-calculated DPS values
+        if skill_1st > 0:
+            fd_from_skill = skill_1st * job_skill_dps_values['first_job']
+            if fd_from_skill > 0:
+                stats['final_damage_sources'].append(fd_from_skill / 100)
+        if skill_2nd > 0:
+            fd_from_skill = skill_2nd * job_skill_dps_values['second_job']
+            if fd_from_skill > 0:
+                stats['final_damage_sources'].append(fd_from_skill / 100)
+        if skill_3rd > 0:
+            fd_from_skill = skill_3rd * job_skill_dps_values['third_job']
+            if fd_from_skill > 0:
+                stats['final_damage_sources'].append(fd_from_skill / 100)
+        if skill_4th > 0:
+            fd_from_skill = skill_4th * job_skill_dps_values['fourth_job']
+            if fd_from_skill > 0:
+                stats['final_damage_sources'].append(fd_from_skill / 100)
 
     # Hero Power lines
     for line_key, line in user_data.hero_power_lines.items():
@@ -694,8 +759,21 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
         stats['base_attack'] += guild_skills.get('attack', 0)
 
     # Artifacts - equipped active effects and inventory effects
-    # Build name->key mapping
+    # Build name->key mapping for fallback
     artifact_key_by_name = {defn.name: key for key, defn in ARTIFACTS.items()}
+
+    # Track Book of Ancient stars for CR->CD conversion (default 0 if not owned)
+    book_of_ancient_stars = 0
+
+    # First, get Book of Ancient stars from inventory (this is the source of truth)
+    artifacts_inventory = getattr(user_data, 'artifacts_inventory', {})
+    if artifacts_inventory and 'book_of_ancient' in artifacts_inventory:
+        book_data = artifacts_inventory.get('book_of_ancient', {})
+        if isinstance(book_data, dict):
+            book_of_ancient_stars = int(book_data.get('stars', 0))
+
+    # Store in stats for use by calculate_dps
+    stats['book_of_ancient_stars'] = book_of_ancient_stars
 
     # Equipped artifacts (active effects)
     artifacts_equipped = getattr(user_data, 'artifacts_equipped', {})
@@ -705,15 +783,25 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
             if not isinstance(slot_data, dict):
                 continue
 
-            name = slot_data.get('name', '')
-            if not name or name == '(Empty)':
-                continue
+            # Try to get artifact key directly first (new format), fallback to name lookup
+            artifact_key = slot_data.get('artifact', '')
+            if not artifact_key:
+                # Fallback: lookup by name
+                name = slot_data.get('name', '')
+                if not name or name == '(Empty)':
+                    continue
+                artifact_key = artifact_key_by_name.get(name, '')
 
-            artifact_key = artifact_key_by_name.get(name)
             if not artifact_key or artifact_key not in ARTIFACTS:
                 continue
 
-            stars = int(slot_data.get('stars', 0))
+            # Get stars from inventory (source of truth) or fall back to slot data
+            if artifact_key in artifacts_inventory:
+                inv_data = artifacts_inventory.get(artifact_key, {})
+                stars = int(inv_data.get('stars', 0)) if isinstance(inv_data, dict) else 0
+            else:
+                stars = int(slot_data.get('stars', 0))
+
             defn = ARTIFACTS[artifact_key]
 
             # Handle specific active effects
@@ -725,7 +813,7 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                 # Crit rate from Book of Ancient (as %)
                 cr_bonus = defn.get_active_value(stars)  # Returns decimal
                 stats['crit_rate'] += cr_bonus * 100
-                # CR->CD conversion handled in calculate_dps
+                # CR->CD conversion uses book_of_ancient_stars in calculate_dps
 
             elif artifact_key == 'star_rock':
                 # Boss damage from Star Rock
@@ -750,6 +838,21 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                     if fd > 0:
                         stats['final_damage_sources'].append(fd)
 
+            elif artifact_key == 'fire_flower':
+                # Fire Flower: Final Damage per target (max 10)
+                # Assume average 5 targets for stage mode, 1 for boss
+                targets = 5 if user_data.combat_mode == 'stage' else 1
+                fd_per_target = defn.get_active_value(stars)
+                fd = fd_per_target * min(targets, 10)
+                if fd > 0:
+                    stats['final_damage_sources'].append(fd)
+
+            elif artifact_key == 'icy_soul_rock':
+                # Icy Soul Rock: Crit Damage at MP>=50% (doubled at 75%)
+                # Assume MP is at 75%+ for full effect
+                cd_bonus = defn.get_active_value(stars) * 2  # Doubled
+                stats['crit_damage'] += cd_bonus * 100
+
     # Artifact inventory effects (passive bonuses from all owned artifacts)
     artifacts_inventory = getattr(user_data, 'artifacts_inventory', {})
     if artifacts_inventory:
@@ -762,7 +865,7 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
             defn = ARTIFACTS[art_key]
             stars = int(art_data.get('stars', 0))
 
-            # Inventory stat
+            # Inventory stat (passive effect from owning the artifact)
             inv_stat = defn.inventory_stat
             inv_value = defn.get_inventory_value(stars)
 
@@ -773,8 +876,20 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                     stats['damage_percent'] += inv_value * 100
                 elif inv_stat == 'boss_damage':
                     stats['boss_damage'] += inv_value * 100
+                elif inv_stat == 'normal_damage':
+                    stats['normal_damage'] += inv_value * 100
                 elif inv_stat == 'crit_damage_conditional':
+                    # Book of Ancient inventory: CD at MP>=50%, doubled at 75%
+                    # Assume MP is at 75%+ for full effect
+                    stats['crit_damage'] += inv_value * 100 * 2  # Doubled
+                elif inv_stat == 'crit_damage':
+                    # Icy Soul Rock inventory: straight crit damage
                     stats['crit_damage'] += inv_value * 100
+                elif inv_stat == 'max_damage_mult':
+                    stats['max_dmg_mult'] += inv_value * 100
+                elif inv_stat == 'def_pen':
+                    # Silver Pendant inventory: defense penetration
+                    stats['defense_pen_sources'].append(('Artifact Inventory', inv_value, 100))
 
             # Artifact potentials
             potentials = art_data.get('potentials', [])
@@ -782,7 +897,7 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                 for pot in potentials:
                     if isinstance(pot, dict):
                         pot_stat = pot.get('stat', '')
-                        pot_value = float(pot.get('value', 0))
+                        pot_value = float(pot.get('value', 0) or 0)
                         if pot_value > 0:
                             if pot_stat == 'main_stat':
                                 stats['dex_percent'] += pot_value
@@ -794,6 +909,8 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                                 stats['normal_damage'] += pot_value
                             elif pot_stat == 'crit_rate':
                                 stats['crit_rate'] += pot_value
+                            elif pot_stat == 'crit_damage':
+                                stats['crit_damage'] += pot_value
                             elif pot_stat == 'def_pen':
                                 stats['defense_pen_sources'].append(('Artifact Potential', pot_value / 100, 100))
                             elif pot_stat == 'min_max_damage':
@@ -857,7 +974,7 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
     return stats
 
 
-def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: float = 0.752, book_of_ancient_stars: int = 5) -> Dict[str, Any]:
+def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: float = 0.752, book_of_ancient_stars: int = None) -> Dict[str, Any]:
     """
     Calculate DPS using core damage formulas.
 
@@ -869,7 +986,7 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
         stats: Aggregated stats from aggregate_stats()
         combat_mode: 'stage', 'boss', or 'world_boss'
         enemy_def: Enemy defense multiplier (default 0.752)
-        book_of_ancient_stars: Book of Ancient awakening level (default 5)
+        book_of_ancient_stars: Book of Ancient awakening level (uses stats value if None)
 
     Returns:
         Dict with 'total' DPS and component multipliers
@@ -896,6 +1013,10 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     base_atk += stats.get('total_attack_adjustment', 0)
 
     # Book of Ancient: Convert portion of Crit Rate to Crit Damage
+    # Use stats value if parameter not explicitly provided
+    if book_of_ancient_stars is None:
+        book_of_ancient_stars = stats.get('book_of_ancient_stars', 0)
+
     crit_rate = stats['crit_rate']
     base_crit_damage = stats['crit_damage']
     _, cd_from_book = calculate_book_of_ancient_bonus(book_of_ancient_stars, crit_rate / 100)

@@ -5,14 +5,22 @@ Matches original Tkinter app design with all potentials visible + DPS-based reco
 import streamlit as st
 import sys
 from pathlib import Path
+from datetime import datetime
 
 # Add parent directory to path for core imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core import ENEMY_DEFENSE_VALUES, get_enemy_defense
 from utils.data_manager import save_user_data, EQUIPMENT_SLOTS
-from utils.cube_analyzer import analyze_all_cube_priorities, format_stat_display, CubeRecommendation
+from utils.cube_analyzer import analyze_all_cube_priorities, format_stat_display, CubeRecommendation, get_distribution_data_for_slot
 from utils.dps_calculator import aggregate_stats, calculate_dps
+from utils.distribution_chart import (
+    create_dps_distribution_chart,
+    create_expanded_distribution_chart,
+    get_percentile_breakdown_data,
+    get_percentile_label,
+    get_percentile_color,
+)
 from typing import Dict, Any, List
 
 st.set_page_config(page_title="Equipment", page_icon="🛡️", layout="wide")
@@ -330,8 +338,9 @@ def calculate_stat_priorities(pot_totals: dict) -> list:
 
 
 def auto_save():
-    """Save data."""
+    """Save data and update last save timestamp."""
     save_user_data(st.session_state.username, data)
+    st.session_state.last_equip_save_time = datetime.now()
 
 
 # ============================================================================
@@ -512,6 +521,11 @@ with col_editor:
     rating_color = "#66ff66" if rating >= 70 else ("#ffcc00" if rating >= 40 else "#ff6666")
     st.markdown(f"<div style='text-align:center; font-size:18px; color:{rating_color}; margin-top:10px;'>Rating: {rating:.0f}%</div>", unsafe_allow_html=True)
 
+    # Save indicator
+    if 'last_equip_save_time' in st.session_state:
+        save_time = st.session_state.last_equip_save_time
+        st.caption(f"Last saved: {save_time.strftime('%H:%M:%S')}")
+
 # ============================================================================
 # LEFT COLUMN: Equipment Potentials List
 # ============================================================================
@@ -624,11 +638,18 @@ with bottom_right:
                     calculate_dps_func=calculate_dps_from_stats,
                 )
                 st.session_state.cube_recommendations = recommendations
+                st.session_state.cube_analysis_time = datetime.now()
+                st.success(f"Analysis complete! Found {len(recommendations)} recommendations.")
             except Exception as e:
                 st.error(f"Error analyzing: {e}")
                 import traceback
                 st.code(traceback.format_exc())
                 st.session_state.cube_recommendations = []
+
+    # Show when analysis was last run
+    if 'cube_analysis_time' in st.session_state:
+        analysis_time = st.session_state.cube_analysis_time
+        st.caption(f"Last analyzed: {analysis_time.strftime('%H:%M:%S')}")
 
     # Show recommendations if available
     if 'cube_recommendations' in st.session_state and st.session_state.cube_recommendations:
@@ -743,6 +764,116 @@ with bottom_right:
                         stats_html += f"{j}. {stat_name}: <span style='color:#66ff66'>+{dps_gain:.2f}%</span> DPS ({prob:.1f}% chance)<br>"
                     stats_html += "</div>"
                     st.markdown(stats_html, unsafe_allow_html=True)
+
+                # DPS Distribution Chart
+                if st.checkbox(f"Show DPS Distribution", key=f"dist_{rec.slot}_{rec.is_bonus}"):
+                    with st.spinner("Generating distribution..."):
+                        try:
+                            dist_data = get_distribution_data_for_slot(
+                                user_data=data,
+                                slot=rec.slot,
+                                is_bonus=rec.is_bonus,
+                                aggregate_stats_func=aggregate_stats_for_dps,
+                                calculate_dps_func=calculate_dps_from_stats,
+                            )
+                            if dist_data:
+                                fig = create_dps_distribution_chart(
+                                    distribution_data=dist_data,
+                                    current_dps_gain=dist_data["current_dps_gain"],
+                                    slot_name=rec.slot,
+                                    is_bonus=rec.is_bonus,
+                                    height=250,
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+
+                                # Add percentile interpretation
+                                current_pct = rec.percentile_score
+                                label = get_percentile_label(current_pct)
+                                color = get_percentile_color(current_pct)
+                                st.markdown(f"""
+                                <div style='font-family:monospace; font-size:11px; text-align:center;'>
+                                Your roll is <span style='color:{color}; font-weight:bold'>{label}</span>
+                                (beats {current_pct:.0f}% of possible rolls)
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                                # Expanded view dialog
+                                pot_type = "Bonus" if rec.is_bonus else "Regular"
+                                with st.expander(f"View Detailed Breakdown"):
+                                    # Larger chart
+                                    expanded_fig = create_expanded_distribution_chart(
+                                        distribution_data=dist_data,
+                                        current_dps_gain=dist_data["current_dps_gain"],
+                                        slot_name=rec.slot,
+                                        is_bonus=rec.is_bonus,
+                                    )
+                                    st.plotly_chart(expanded_fig, use_container_width=True)
+
+                                    # Percentile breakdown table
+                                    st.markdown("#### Improvement Targets")
+                                    breakdown = get_percentile_breakdown_data(
+                                        dist_data,
+                                        dist_data["current_dps_gain"]
+                                    )
+
+                                    if breakdown:
+                                        # Create table header
+                                        st.markdown("""
+                                        <style>
+                                        .pct-table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 12px; }
+                                        .pct-table th { background: #2a2a4e; padding: 8px; text-align: left; border-bottom: 1px solid #444; }
+                                        .pct-table td { padding: 6px 8px; border-bottom: 1px solid #333; }
+                                        .pct-table tr:hover { background: rgba(255,255,255,0.05); }
+                                        .pct-gold { color: #ffd700; }
+                                        .pct-purple { color: #9370db; }
+                                        .pct-green { color: #4caf50; }
+                                        </style>
+                                        """, unsafe_allow_html=True)
+
+                                        table_html = """
+                                        <table class='pct-table'>
+                                        <tr>
+                                            <th>Percentile</th>
+                                            <th>DPS Gain</th>
+                                            <th>Improvement</th>
+                                            <th>Probability</th>
+                                            <th>Expected Cubes</th>
+                                        </tr>
+                                        """
+
+                                        for row in breakdown:
+                                            pct = row['percentile']
+                                            if pct == 100:
+                                                pct_class = "pct-gold"
+                                                pct_label = "Best"
+                                            elif pct >= 99:
+                                                pct_class = "pct-purple"
+                                                pct_label = f"P{pct}"
+                                            else:
+                                                pct_class = "pct-green"
+                                                pct_label = f"P{pct}"
+
+                                            cubes_str = f"~{row['expected_cubes']:.0f}" if row['expected_cubes'] < 100000 else "Very Rare"
+
+                                            table_html += f"""
+                                            <tr>
+                                                <td class='{pct_class}'>{pct_label}</td>
+                                                <td>+{row['dps_gain']:.2f}%</td>
+                                                <td>+{row['improvement']:.2f}%</td>
+                                                <td>{row['prob_pct']:.2f}%</td>
+                                                <td>{cubes_str}</td>
+                                            </tr>
+                                            """
+
+                                        table_html += "</table>"
+                                        st.markdown(table_html, unsafe_allow_html=True)
+                                    else:
+                                        st.info("You're at the maximum roll!")
+
+                            else:
+                                st.warning("Could not generate distribution for this slot.")
+                        except Exception as e:
+                            st.error(f"Error generating distribution: {e}")
 
     else:
         st.info("Click 'Analyze Cube Priorities' to see which item to cube next based on actual DPS calculations.")

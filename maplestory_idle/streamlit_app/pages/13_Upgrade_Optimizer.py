@@ -18,6 +18,7 @@ import sys
 import os
 from pathlib import Path
 import copy
+from datetime import datetime
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -39,8 +40,10 @@ from core import (
 from utils.data_manager import save_user_data
 from utils.cube_analyzer import (
     analyze_all_cube_priorities, CubeRecommendation,
-    format_stat_display, REGULAR_DIAMOND_PER_CUBE, BONUS_DIAMOND_PER_CUBE
+    format_stat_display, REGULAR_DIAMOND_PER_CUBE, BONUS_DIAMOND_PER_CUBE,
+    get_distribution_data_for_slot
 )
+from utils.distribution_chart import create_dps_distribution_chart, get_percentile_label, get_percentile_color
 from optimal_stats import (
     calculate_slot_efficiency, calculate_source_ranking, calculate_optimal_distribution,
     get_optimal_stat_for_slot, format_stat_name, SLOT_EXCLUSIVE_STATS,
@@ -75,7 +78,7 @@ def aggregate_stats(star_overrides: Dict[str, int] = None) -> Dict[str, Any]:
     return shared_aggregate_stats(data, star_overrides)
 
 
-def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: float = None, book_of_ancient_stars: int = 5) -> Dict[str, Any]:
+def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: float = None, book_of_ancient_stars: int = None) -> Dict[str, Any]:
     """Wrapper that calls shared calculate_dps with correct enemy defense for combat mode."""
     # Determine enemy defense based on combat mode if not explicitly provided
     if enemy_def is None:
@@ -89,6 +92,7 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
             except (ValueError, AttributeError):
                 chapter_num = 27  # Default fallback
             enemy_def = get_enemy_defense(chapter_num)
+    # book_of_ancient_stars=None means use value from stats (from user's artifact inventory)
     return shared_calculate_dps(stats, combat_mode, enemy_def, book_of_ancient_stars)
 
 
@@ -259,7 +263,10 @@ def calculate_best_possible_dps(slot: str, tier: str) -> float:
 
 def analyze_starforce_detailed(baseline_dps: float) -> List[Dict]:
     """
-    Analyze starforce with detailed cost breakdown and REAL DPS calculations.
+    Analyze starforce with milestone targets instead of single-star upgrades.
+
+    For each equipment slot, evaluates reaching key milestones (15, 17, 20, 22, 25)
+    and returns only the ONE most efficient upgrade path per slot.
 
     Uses:
     - Markov chain analysis from starforce_optimizer for accurate cost estimates
@@ -267,11 +274,12 @@ def analyze_starforce_detailed(baseline_dps: float) -> List[Dict]:
 
     Args:
         baseline_dps: The current total DPS (calculated once and passed in)
-
-    This correctly accounts for the equipment's actual sub-stats when calculating
-    DPS gain, not a rough estimate.
     """
     results = []
+
+    # Key milestones to consider - these are the meaningful breakpoints
+    # where sub-stat amplify increases significantly
+    MILESTONES = [15, 17, 20, 22, 25]
 
     for slot in EQUIPMENT_SLOTS:
         item = data.equipment_items.get(slot, {})
@@ -280,93 +288,110 @@ def analyze_starforce_detailed(baseline_dps: float) -> List[Dict]:
         if current_stars >= 25 or current_stars < 10:
             continue
 
-        target_stars = current_stars + 1
+        # Find best milestone target for this slot
+        best_upgrade = None
+        best_efficiency = -1
 
-        # Use Markov chain analysis for accurate cost estimate
-        # Get optimal strategy for this single stage transition
-        stage_strategies, markov_result = find_optimal_per_stage_strategy(current_stars, target_stars)
-        optimal_strat = stage_strategies.get(current_stars, 'none')
+        for target_stars in MILESTONES:
+            if target_stars <= current_stars:
+                continue  # Skip milestones already achieved
 
-        # Total cost in diamonds from Markov analysis
-        total_cost = markov_result.total_cost
-        destroy_prob = markov_result.destroy_probability
+            # Use Markov chain analysis for accurate cost estimate
+            # This calculates the full path cost (e.g., 19→22 includes 19→20→21→22)
+            stage_strategies, markov_result = find_optimal_per_stage_strategy(current_stars, target_stars)
 
-        # Get stage data for additional info
-        sf_data = STARFORCE_TABLE.get(current_stars)
-        if sf_data:
-            success_rate = sf_data.success_rate
-            expected_attempts = 1 / success_rate if success_rate > 0 else 100
-        else:
-            expected_attempts = 2
+            # Total cost in diamonds from Markov analysis
+            total_cost = markov_result.total_cost
+            destroy_prob = markov_result.destroy_probability
 
-        # Calculate REAL DPS gain by comparing baseline vs upgraded
-        # Create star overrides with this slot at target stars
-        upgraded_stats = aggregate_stats(star_overrides={slot: target_stars})
-        upgraded_dps_result = calculate_dps(upgraded_stats, data.combat_mode)
-        upgraded_dps = upgraded_dps_result['total']
+            # Calculate REAL DPS gain by comparing baseline vs upgraded
+            upgraded_stats = aggregate_stats(star_overrides={slot: target_stars})
+            upgraded_dps_result = calculate_dps(upgraded_stats, data.combat_mode)
+            upgraded_dps = upgraded_dps_result['total']
 
-        # Calculate actual DPS gain percentage
-        if baseline_dps > 0:
-            dps_gain = ((upgraded_dps / baseline_dps) - 1) * 100
-        else:
-            dps_gain = 0
+            # Calculate actual DPS gain percentage
+            if baseline_dps > 0:
+                dps_gain = ((upgraded_dps / baseline_dps) - 1) * 100
+            else:
+                dps_gain = 0
 
-        # Get amplify multipliers for display
-        current_amp = get_amplify_multiplier(current_stars, is_sub=True)
-        target_amp = get_amplify_multiplier(target_stars, is_sub=True)
+            # Calculate efficiency: DPS% gain per 100k diamonds (same scale as cube efficiency)
+            # For starforce: dps_gain / total_cost * 100000
+            efficiency = (dps_gain / total_cost) * 100_000 if total_cost > 0 else 0
 
-        efficiency = (dps_gain / (total_cost / 1000)) if total_cost > 0 else 0
+            # Track best option based on efficiency
+            if efficiency > best_efficiency:
+                best_efficiency = efficiency
 
-        # Risk level based on destruction probability
-        if destroy_prob <= 0:
-            risk = "Safe"
-            risk_color = "🟢"
-        elif destroy_prob < 0.05:
-            risk = f"Low ({destroy_prob*100:.0f}%)"
-            risk_color = "🟡"
-        elif destroy_prob < 0.15:
-            risk = f"Medium ({destroy_prob*100:.0f}%)"
-            risk_color = "🟠"
-        elif destroy_prob < 0.30:
-            risk = f"High ({destroy_prob*100:.0f}%)"
-            risk_color = "🔴"
-        else:
-            risk = f"Very High ({destroy_prob*100:.0f}%)"
-            risk_color = "🔴"
+                # Get amplify multipliers for display
+                current_amp = get_amplify_multiplier(current_stars, is_sub=True)
+                target_amp = get_amplify_multiplier(target_stars, is_sub=True)
 
-        # Get the actual sub-stats being amplified for display
-        sub_stats_detail = []
-        if item.get('sub_boss_damage', 0) > 0:
-            sub_stats_detail.append(f"Boss {item['sub_boss_damage']:.1f}%")
-        if item.get('sub_crit_damage', 0) > 0:
-            sub_stats_detail.append(f"CD {item['sub_crit_damage']:.1f}%")
-        if item.get('sub_crit_rate', 0) > 0:
-            sub_stats_detail.append(f"CR {item['sub_crit_rate']:.1f}%")
-        if item.get('sub_attack_flat', 0) > 0:
-            sub_stats_detail.append(f"ATK {item['sub_attack_flat']:.0f}")
-        if item.get('is_special', False) and item.get('special_stat_value', 0) > 0:
-            special_type = item.get('special_stat_type', 'damage_pct')
-            special_name = {'damage_pct': 'Dmg%', 'final_damage': 'FD%', 'all_skills': 'AllSkill'}.get(special_type, special_type)
-            sub_stats_detail.append(f"{special_name} {item['special_stat_value']:.1f}")
+                # Risk level based on destruction probability
+                if destroy_prob <= 0:
+                    risk = "Safe"
+                    risk_color = "🟢"
+                elif destroy_prob < 0.05:
+                    risk = f"Low ({destroy_prob*100:.0f}%)"
+                    risk_color = "🟡"
+                elif destroy_prob < 0.15:
+                    risk = f"Medium ({destroy_prob*100:.0f}%)"
+                    risk_color = "🟠"
+                elif destroy_prob < 0.30:
+                    risk = f"High ({destroy_prob*100:.0f}%)"
+                    risk_color = "🔴"
+                else:
+                    risk = f"Very High ({destroy_prob*100:.0f}%)"
+                    risk_color = "🔴"
 
-        results.append({
-            'slot': slot,
-            'current_stars': current_stars,
-            'target_stars': target_stars,
-            'total_cost': total_cost,
-            'expected_attempts': expected_attempts,
-            'destroy_prob': destroy_prob,
-            'optimal_strategy': optimal_strat,
-            'dps_gain': dps_gain,
-            'efficiency': efficiency,
-            'risk': risk,
-            'risk_color': risk_color,
-            'amp_before': current_amp,
-            'amp_after': target_amp,
-            'baseline_dps': baseline_dps,
-            'upgraded_dps': upgraded_dps,
-            'sub_stats_detail': sub_stats_detail,
-        })
+                # Get the actual sub-stats being amplified for display
+                sub_stats_detail = []
+                if item.get('sub_boss_damage', 0) > 0:
+                    sub_stats_detail.append(f"Boss {item['sub_boss_damage']:.1f}%")
+                if item.get('sub_crit_damage', 0) > 0:
+                    sub_stats_detail.append(f"CD {item['sub_crit_damage']:.1f}%")
+                if item.get('sub_crit_rate', 0) > 0:
+                    sub_stats_detail.append(f"CR {item['sub_crit_rate']:.1f}%")
+                if item.get('sub_attack_flat', 0) > 0:
+                    sub_stats_detail.append(f"ATK {item['sub_attack_flat']:.0f}")
+                if item.get('is_special', False) and item.get('special_stat_value', 0) > 0:
+                    special_type = item.get('special_stat_type', 'damage_pct')
+                    special_name = {'damage_pct': 'Dmg%', 'final_damage': 'FD%', 'all_skills': 'AllSkill'}.get(special_type, special_type)
+                    sub_stats_detail.append(f"{special_name} {item['special_stat_value']:.1f}")
+
+                # Get optimal strategy for display (uses the first stage's strategy)
+                optimal_strat = stage_strategies.get(current_stars, 'none')
+
+                # Estimate expected attempts (rough estimate for display)
+                sf_data = STARFORCE_TABLE.get(current_stars)
+                if sf_data:
+                    success_rate = sf_data.success_rate
+                    expected_attempts = 1 / success_rate if success_rate > 0 else 100
+                else:
+                    expected_attempts = 2
+
+                best_upgrade = {
+                    'slot': slot,
+                    'current_stars': current_stars,
+                    'target_stars': target_stars,
+                    'total_cost': total_cost,
+                    'expected_attempts': expected_attempts,
+                    'destroy_prob': destroy_prob,
+                    'optimal_strategy': optimal_strat,
+                    'dps_gain': dps_gain,
+                    'efficiency': efficiency,
+                    'risk': risk,
+                    'risk_color': risk_color,
+                    'amp_before': current_amp,
+                    'amp_after': target_amp,
+                    'baseline_dps': baseline_dps,
+                    'upgraded_dps': upgraded_dps,
+                    'sub_stats_detail': sub_stats_detail,
+                }
+
+        # Only add the best upgrade for this slot
+        if best_upgrade:
+            results.append(best_upgrade)
 
     results.sort(key=lambda x: x['efficiency'], reverse=True)
     return results
@@ -510,18 +535,45 @@ st.divider()
 # Run all analyses (used for overall recommendations)
 # ==============================================================================
 
-# Cube analysis using original Tkinter app system
-cube_analysis = analyze_all_cube_priorities(
-    user_data=data,
-    aggregate_stats_func=aggregate_stats,
-    calculate_dps_func=calculate_dps,
-)
+# Add refresh button for manual re-analysis
+refresh_col1, refresh_col2 = st.columns([1, 4])
+with refresh_col1:
+    refresh_clicked = st.button("🔄 Refresh Analysis", help="Re-run all upgrade analyses with latest data")
 
-# Starforce analysis
-sf_analysis = analyze_starforce_detailed(current_dps)
+# Run analysis on first load or when refresh is clicked
+if refresh_clicked or 'optimizer_analysis_time' not in st.session_state:
+    # Cube analysis using original Tkinter app system
+    cube_analysis = analyze_all_cube_priorities(
+        user_data=data,
+        aggregate_stats_func=aggregate_stats,
+        calculate_dps_func=calculate_dps,
+    )
 
-# Hero power analysis
-hp_analysis = analyze_hero_power_detailed()
+    # Starforce analysis
+    sf_analysis = analyze_starforce_detailed(current_dps)
+
+    # Hero power analysis
+    hp_analysis = analyze_hero_power_detailed()
+
+    # Cache results in session state
+    st.session_state.optimizer_cube_analysis = cube_analysis
+    st.session_state.optimizer_sf_analysis = sf_analysis
+    st.session_state.optimizer_hp_analysis = hp_analysis
+    st.session_state.optimizer_analysis_time = datetime.now()
+
+    if refresh_clicked:
+        st.success(f"Analysis refreshed! Found {len(cube_analysis or [])} cube recommendations.")
+else:
+    # Use cached results
+    cube_analysis = st.session_state.get('optimizer_cube_analysis', [])
+    sf_analysis = st.session_state.get('optimizer_sf_analysis', [])
+    hp_analysis = st.session_state.get('optimizer_hp_analysis', {})
+
+# Show when analysis was last run
+with refresh_col2:
+    if 'optimizer_analysis_time' in st.session_state:
+        analysis_time = st.session_state.optimizer_analysis_time
+        st.caption(f"Last analyzed: {analysis_time.strftime('%H:%M:%S')}")
 
 # ==============================================================================
 # DEBUG: Cube Analysis Raw Values
@@ -624,8 +676,9 @@ for rec in (cube_analysis or []):
 for sf in sf_analysis:
     all_upgrades.append({
         'type': 'Starforce',
-        'subtype': '',
+        'subtype': f"★{sf['current_stars']}→★{sf['target_stars']}",
         'target': sf['slot'],
+        'target_display': f"{sf['slot'].title()} ★{sf['current_stars']}→★{sf['target_stars']}",
         'description': f"{sf['slot'].title()} ★{sf['current_stars']} → ★{sf['target_stars']} {sf['risk_color']}",
         'cost': sf['total_cost'],
         'dps_gain': sf['dps_gain'],
@@ -635,6 +688,8 @@ for sf in sf_analysis:
             'attempts': sf['expected_attempts'],
             'destroy_prob': sf['destroy_prob'],
             'optimal_strategy': sf['optimal_strategy'],
+            'current_stars': sf['current_stars'],
+            'target_stars': sf['target_stars'],
         },
     })
 
@@ -709,6 +764,54 @@ if selected:
                 if 'rerolls' in upg['details']:
                     st.markdown(f"- ~{upg['details']['rerolls']:.0f} rerolls")
 
+            # Add DPS Distribution Chart for Cube upgrades
+            if upg['type'] == 'Cube':
+                is_bonus = upg['subtype'] == 'Bonus'
+                slot = upg['target']
+                if st.checkbox(f"Show DPS Distribution", key=f"opt_dist_{slot}_{is_bonus}_{i}"):
+                    with st.spinner("Generating distribution..."):
+                        try:
+                            dist_data = get_distribution_data_for_slot(
+                                user_data=data,
+                                slot=slot,
+                                is_bonus=is_bonus,
+                                aggregate_stats_func=aggregate_stats,
+                                calculate_dps_func=calculate_dps,
+                            )
+                            if dist_data:
+                                fig = create_dps_distribution_chart(
+                                    distribution_data=dist_data,
+                                    current_dps_gain=dist_data["current_dps_gain"],
+                                    slot_name=slot,
+                                    is_bonus=is_bonus,
+                                    height=250,
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+
+                                # Show percentile interpretation
+                                # Find the matching recommendation
+                                matching_rec = None
+                                for rec in (cube_analysis or []):
+                                    if rec.slot == slot and rec.is_bonus == is_bonus:
+                                        matching_rec = rec
+                                        break
+
+                                if matching_rec:
+                                    current_pct = matching_rec.percentile_score
+                                    label = get_percentile_label(current_pct)
+                                    color = get_percentile_color(current_pct)
+                                    st.markdown(f"""
+                                    <div style='font-family:monospace; font-size:11px; text-align:center;'>
+                                    Your roll is <span style='color:{color}; font-weight:bold'>{label}</span>
+                                    (beats {current_pct:.0f}% of possible rolls) |
+                                    Median DPS gain: <span style='color:#ffc107'>+{dist_data['median_dps_gain']:.2f}%</span>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                            else:
+                                st.warning("Could not generate distribution for this slot.")
+                        except Exception as e:
+                            st.error(f"Error generating distribution: {e}")
+
             st.markdown("---")
 
     st.caption(f"Remaining budget: {remaining:,.0f}💎")
@@ -734,10 +837,13 @@ with st.expander("📊 All Upgrade Options Ranked"):
         else:
             rank_display = f"#{i}"
 
+        # Use target_display if available (for starforce), otherwise slot name
+        target_text = upg.get('target_display', upg['target'].title())
+
         all_table.append({
             "Rank": rank_display,
             "Type": f"{type_icon} {upg['type']}",
-            "Target": upg['target'].title(),
+            "Target": target_text,
             "DPS Gain": f"+{upg['dps_gain']:.2f}%",
             "Cost": f"{upg['cost']:,.0f}💎",
             "Efficiency": f"{upg['efficiency']:.4f}",
