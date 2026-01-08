@@ -36,64 +36,135 @@ class WeaponRarity(Enum):
 # CONSTANTS
 # =============================================================================
 
-# Base ATK% rates at Tier 4 (T4 is the baseline)
-# Higher rarity = higher base rate
-# VERIFIED from user screenshots (Dec 29, 2025)
-BASE_RATES_T4 = {
-    WeaponRarity.NORMAL: 0.16,      # 32% / 200 = 0.16
-    WeaponRarity.RARE: 0.334,       # 66.8% / 200 = 0.334
-    WeaponRarity.EPIC: 0.816,       # 163.2% / 200 = 0.816
-    WeaponRarity.UNIQUE: 2.517,     # 251.7% / 100 = 2.517
-    WeaponRarity.LEGENDARY: 7.188,  # 718.8% / 100 = 7.188
-    WeaponRarity.MYSTIC: 23.86,     # 2027.8% / 85 = 23.86
-    WeaponRarity.ANCIENT: 66.72,    # 6672.1% / 100 = 66.72
+# =============================================================================
+# BASE ATK% VALUES (from official documentation Jan 2026)
+# =============================================================================
+# These are the BASE ATK% values at level 1 for each weapon
+# Formula: ATK% = BaseATK × LevelMultiplier
+# where LevelMultiplier = (0.997 + 0.003 × Level) for levels 1-100
+
+BASE_ATK = {
+    # Normal: T4 base, then 1.2x, 1.1666x, 1.19x progression
+    ("normal", 4): 15.0,
+    ("normal", 3): 18.0,
+    ("normal", 2): 21.0,
+    ("normal", 1): 25.0,
+    # Rare: 1.25x progression between tiers
+    ("rare", 4): 31.3,
+    ("rare", 3): 39.1,
+    ("rare", 2): 48.9,
+    ("rare", 1): 61.1,
+    # Epic: 1.25x progression
+    ("epic", 4): 76.4,
+    ("epic", 3): 95.5,
+    ("epic", 2): 119.4,
+    ("epic", 1): 149.3,
+    # Unique: 1.3x progression
+    ("unique", 4): 194.1,
+    ("unique", 3): 252.3,
+    ("unique", 2): 328.0,
+    ("unique", 1): 426.4,
+    # Legendary: 1.3x progression
+    ("legendary", 4): 554.3,
+    ("legendary", 3): 720.6,
+    ("legendary", 2): 936.8,
+    ("legendary", 1): 1217.8,
+    # Mystic: 1.33x progression
+    ("mystic", 4): 1619.7,
+    ("mystic", 3): 2154.2,
+    ("mystic", 2): 2865.1,
+    ("mystic", 1): 3810.6,
+    # Ancient: 1.35x from Mystic T1, only T4 exists currently
+    ("ancient", 4): 5144.3,
+    ("ancient", 3): 6944.8,   # Estimated: 5144.3 × 1.35
+    ("ancient", 2): 9375.5,   # Estimated: 6944.8 × 1.35
 }
 
-# String keys for convenience
-BASE_RATES_T4_STR = {
-    "normal": 0.16,
-    "rare": 0.334,
-    "epic": 0.816,
-    "unique": 2.517,
-    "legendary": 7.188,
-    "mystic": 23.86,
-    "ancient": 66.72,
+# =============================================================================
+# LEVEL-UP COST (Weapon Enhancers per level)
+# =============================================================================
+# Base cost depends on rarity and tier
+# Formula: FinalCost = BaseCost × CostMultiplier(level)
+
+BASE_COST = {
+    # Normal: base 10, then 1.2x per tier
+    ("normal", 4): 10,
+    ("normal", 3): 12,
+    ("normal", 2): 14.4,
+    ("normal", 1): 17.28,
+    # Rare: 4x of Normal T4, then 1.2x per tier
+    ("rare", 4): 40,
+    ("rare", 3): 48,
+    ("rare", 2): 57.6,
+    ("rare", 1): 69.12,
+    # Epic: 3.5x of Rare T4, then 1.2x per tier
+    ("epic", 4): 140,
+    ("epic", 3): 168,
+    ("epic", 2): 201.6,
+    ("epic", 1): 241.92,
+    # Unique: 3.5x of Epic T4, then 1.2x per tier
+    ("unique", 4): 490,
+    ("unique", 3): 588,
+    ("unique", 2): 705.6,
+    ("unique", 1): 846.72,
+    # Legendary: 3x of Unique T4, then 1.2x per tier
+    ("legendary", 4): 1470,
+    ("legendary", 3): 1764,
+    ("legendary", 2): 2116.8,
+    ("legendary", 1): 2540.16,
+    # Mystic: 4x of Legendary T4, then 1.2x per tier
+    ("mystic", 4): 5880,
+    ("mystic", 3): 7056,
+    ("mystic", 2): 8467.2,
+    ("mystic", 1): 10160.64,
+    # Ancient: 4x of Mystic T4
+    ("ancient", 4): 23520,
+    ("ancient", 3): 70000,    # Verified from user data Jan 2026
+    ("ancient", 2): 120000,   # Verified from user data Jan 2026
 }
 
-# Tier multiplier: higher tier = higher multiplier
-# T4 is baseline (1.0x), T3 = 1.3x, T2 = 1.69x, T1 = 2.197x
-# Verified from Legendary weapons: T1/T4 = 2.197, T2/T4 = 1.69, T3/T4 = 1.3
-TIER_MULTIPLIER = 1.3
+# Diamond to Weapon Enhancer conversion rate
+# 3000 diamonds = 60000 weapon enhancers
+DIAMONDS_TO_ENHANCERS = 20  # 1 diamond = 20 weapon enhancers
 
-# Mystic weapons have different tier multipliers (verified from screenshots)
-# T4: 1.0x, T3: 1.271x, T2: 1.409x, T1: 1.748x
-MYSTIC_TIER_MULTIPLIERS = {
-    4: 1.0,
-    3: 1.271,
-    2: 1.409,
-    1: 1.748,
-}
+# =============================================================================
+# INVENTORY EFFECT RATIOS
+# =============================================================================
+# Normal through Unique: 1/3.5 = 28.57%
+# Legendary and above: 1/4 = 25%
 
-# Unique weapons T1 has different multiplier (verified from screenshots)
-# T1: 1.881x instead of standard 2.197x
-UNIQUE_TIER_MULTIPLIERS = {
-    4: 1.0,
-    3: 1.3,
-    2: 1.69,
-    1: 1.881,  # Different from standard 2.197
-}
+INVENTORY_RATIO_LOW = 1 / 3.5   # ~0.2857 for Normal-Unique
+INVENTORY_RATIO_HIGH = 1 / 4   # 0.25 for Legendary+
 
-# Epic weapons have different tier multipliers (verified from screenshots)
-# T1: 2.373x, T2: 1.897x, T3: 1.250x
-EPIC_TIER_MULTIPLIERS = {
-    4: 1.0,
-    3: 1.250,
-    2: 1.897,
-    1: 2.373,
-}
+def get_inventory_ratio(rarity: str) -> float:
+    """Get inventory effect ratio based on rarity."""
+    rarity_lower = rarity.lower()
+    if rarity_lower in ("legendary", "mystic", "ancient"):
+        return INVENTORY_RATIO_HIGH
+    return INVENTORY_RATIO_LOW
 
-# Inventory effect is 1/4 of on-equip effect
+# Legacy constant for backward compatibility
 INVENTORY_RATIO = 0.25
+
+# =============================================================================
+# ATTACK SPEED % (On-Equip Only)
+# =============================================================================
+# Attack speed bonus from equipped weapon only (not inventory)
+# Starts at Epic rarity
+
+ATTACK_SPEED_BONUS = {
+    "normal": 0.0,
+    "rare": 0.0,
+    "epic": 2.0,
+    "unique": 3.0,
+    "legendary": 4.0,
+    "mystic": 6.0,
+    "ancient": 8.0,
+}
+
+def get_attack_speed_bonus(rarity: str) -> float:
+    """Get the attack speed % bonus for a weapon rarity (on-equip only)."""
+    return ATTACK_SPEED_BONUS.get(rarity.lower(), 0.0)
 
 # Max level by rarity (approximate)
 MAX_LEVELS = {
@@ -122,91 +193,138 @@ RARITY_COLORS = {
 # CALCULATIONS
 # =============================================================================
 
-def get_rate_per_level(rarity: WeaponRarity, tier: int) -> float:
+def get_level_multiplier(level: int) -> float:
     """
-    Get ATK% gained per level for a weapon.
+    Get the level multiplier for ATK% calculation.
 
-    Args:
-        rarity: Weapon rarity (normal to ancient)
-        tier: Weapon tier (1-4, where T1 is highest)
-
-    Returns:
-        ATK% per level
+    Formula from official docs:
+    - Level 1-100:   BaseATK × (0.997 + 0.003 × Level)
+    - Level 101-130: BaseATK × (0.596 + 0.007 × Level)
+    - Level 131-155: BaseATK × (0.466 + 0.008 × Level)
+    - Level 156-175: BaseATK × (0.311 + 0.009 × Level)
+    - Level 176-200: BaseATK × (0.136 + 0.010 × Level)
     """
-    base = BASE_RATES_T4.get(rarity, 0.16)
-
-    # Mystic weapons have different tier scaling
-    if rarity == WeaponRarity.MYSTIC:
-        return base * MYSTIC_TIER_MULTIPLIERS.get(tier, 1.0)
-
-    # Unique weapons have different T1 multiplier
-    if rarity == WeaponRarity.UNIQUE:
-        return base * UNIQUE_TIER_MULTIPLIERS.get(tier, 1.0)
-
-    # Epic weapons have different tier multipliers
-    if rarity == WeaponRarity.EPIC:
-        return base * EPIC_TIER_MULTIPLIERS.get(tier, 1.0)
-
-    # Standard tier scaling (T4 baseline, lower tier number = higher mult)
-    # T4: 1.3^0 = 1.0, T3: 1.3^1 = 1.3, T2: 1.3^2 = 1.69, T1: 1.3^3 = 2.197
-    return base * (TIER_MULTIPLIER ** (4 - tier))
+    if level <= 0:
+        return 0.0
+    elif level <= 100:
+        return 0.997 + 0.003 * level
+    elif level <= 130:
+        return 0.596 + 0.007 * level
+    elif level <= 155:
+        return 0.466 + 0.008 * level
+    elif level <= 175:
+        return 0.311 + 0.009 * level
+    else:  # 176-200
+        return 0.136 + 0.010 * level
 
 
-def get_rate_per_level_str(rarity: str, tier: int) -> float:
-    """String-based version of get_rate_per_level."""
-    base = BASE_RATES_T4_STR.get(rarity.lower(), 0.16)
-
-    # Mystic weapons have different tier scaling
-    if rarity.lower() == "mystic":
-        return base * MYSTIC_TIER_MULTIPLIERS.get(tier, 1.0)
-
-    # Unique weapons have different T1 multiplier
-    if rarity.lower() == "unique":
-        return base * UNIQUE_TIER_MULTIPLIERS.get(tier, 1.0)
-
-    # Epic weapons have different tier multipliers
-    if rarity.lower() == "epic":
-        return base * EPIC_TIER_MULTIPLIERS.get(tier, 1.0)
-
-    return base * (TIER_MULTIPLIER ** (4 - tier))
+def get_base_atk(rarity: str, tier: int) -> float:
+    """Get the base ATK% for a weapon (at level 1 multiplier = 1.0)."""
+    key = (rarity.lower(), tier)
+    return BASE_ATK.get(key, 15.0)  # Default to Normal T4
 
 
-def calculate_weapon_atk(rarity: WeaponRarity, tier: int, level: int) -> Dict[str, float]:
+def get_cost_multiplier(level: int) -> float:
     """
-    Calculate weapon ATK% values.
+    Get the cost multiplier for leveling from (level) to (level+1).
 
-    Args:
-        rarity: Weapon rarity
-        tier: Weapon tier (1-4)
-        level: Current weapon level
-
-    Returns:
-        Dict with on_equip_atk, inventory_atk, rate_per_level
+    Formula from official docs:
+    - Level 1-50:   BaseCost × 1.01^(level-1)
+    - Level 51-100: BaseCost × 1.01^49 × 1.015^(level-50)
+    - Level 101-150: BaseCost × 1.01^49 × 1.015^50 × 1.02^(level-100)
+    - Level 151-200: BaseCost × 1.01^49 × 1.015^50 × 1.02^50 × 1.025^(level-150)
     """
-    rate = get_rate_per_level(rarity, tier)
-    on_equip = level * rate
-    inventory = on_equip * INVENTORY_RATIO
+    if level <= 0:
+        return 0.0
+    elif level <= 50:
+        return 1.01 ** (level - 1)
+    elif level <= 100:
+        return (1.01 ** 49) * (1.015 ** (level - 50))
+    elif level <= 150:
+        return (1.01 ** 49) * (1.015 ** 50) * (1.02 ** (level - 100))
+    else:  # 151-200
+        return (1.01 ** 49) * (1.015 ** 50) * (1.02 ** 50) * (1.025 ** (level - 150))
 
-    return {
-        "on_equip_atk": round(on_equip, 1),
-        "inventory_atk": round(inventory, 1),
-        "rate_per_level": round(rate, 2),
-        "total_atk": round(on_equip + inventory, 1),
-    }
+
+def get_base_cost(rarity: str, tier: int) -> float:
+    """Get the base cost (Weapon Enhancers) for a weapon."""
+    key = (rarity.lower(), tier)
+    return BASE_COST.get(key, 10.0)  # Default to Normal T4
+
+
+def calculate_level_cost(rarity: str, tier: int, from_level: int) -> int:
+    """
+    Calculate cost to level up from from_level to from_level+1.
+
+    Returns cost in Weapon Enhancers (rounded up).
+    """
+    import math
+    base = get_base_cost(rarity, tier)
+    multiplier = get_cost_multiplier(from_level)
+    return math.ceil(base * multiplier)
+
+
+def calculate_total_cost(rarity: str, tier: int, from_level: int, to_level: int) -> int:
+    """
+    Calculate total cost to level up from from_level to to_level.
+
+    Returns total cost in Weapon Enhancers.
+    """
+    total = 0
+    for level in range(from_level, to_level):
+        total += calculate_level_cost(rarity, tier, level)
+    return total
 
 
 def calculate_weapon_atk_str(rarity: str, tier: int, level: int) -> Dict[str, float]:
-    """String-based version of calculate_weapon_atk."""
-    rate = get_rate_per_level_str(rarity, tier)
-    on_equip = level * rate
-    inventory = on_equip * INVENTORY_RATIO
+    """
+    Calculate weapon ATK% values using the official formula.
+
+    Formula: ATK% = BaseATK × LevelMultiplier
+    Inventory: On-Equip ATK% × InventoryRatio (1/3.5 for Normal-Unique, 1/4 for Legendary+)
+
+    Args:
+        rarity: Weapon rarity string (e.g., "mystic", "legendary")
+        tier: Weapon tier (1-4, where T1 is highest)
+        level: Current weapon level (1-200)
+
+    Returns:
+        Dict with on_equip_atk, inventory_atk, base_atk, level_multiplier
+    """
+    base = get_base_atk(rarity, tier)
+    multiplier = get_level_multiplier(level)
+    on_equip = base * multiplier
+
+    # Get correct inventory ratio based on rarity
+    inv_ratio = get_inventory_ratio(rarity)
+    inventory = on_equip * inv_ratio
+
+    # Calculate approximate rate per level (for display purposes)
+    # This is the derivative of the formula at the current level
+    if level <= 100:
+        rate_per_level = base * 0.003
+    elif level <= 130:
+        rate_per_level = base * 0.007
+    elif level <= 155:
+        rate_per_level = base * 0.008
+    elif level <= 175:
+        rate_per_level = base * 0.009
+    else:
+        rate_per_level = base * 0.010
 
     return {
         "on_equip_atk": round(on_equip, 1),
         "inventory_atk": round(inventory, 1),
-        "rate_per_level": round(rate, 2),
+        "rate_per_level": round(rate_per_level, 2),
+        "base_atk": round(base, 1),
+        "level_multiplier": round(multiplier, 4),
         "total_atk": round(on_equip + inventory, 1),
     }
+
+
+def calculate_weapon_atk(rarity: WeaponRarity, tier: int, level: int) -> Dict[str, float]:
+    """Enum-based version of calculate_weapon_atk_str."""
+    return calculate_weapon_atk_str(rarity.value, tier, level)
 
 
 # =============================================================================

@@ -41,7 +41,8 @@ from utils.data_manager import save_user_data
 from utils.cube_analyzer import (
     analyze_all_cube_priorities, CubeRecommendation,
     format_stat_display, REGULAR_DIAMOND_PER_CUBE, BONUS_DIAMOND_PER_CUBE,
-    get_distribution_data_for_slot
+    get_distribution_data_for_slot,
+    analyze_all_tier_upgrades, TierUpgradeRecommendation,
 )
 from utils.distribution_chart import create_dps_distribution_chart, get_percentile_label, get_percentile_color
 from optimal_stats import (
@@ -56,6 +57,8 @@ from starforce_optimizer import (
     SCROLL_DIAMOND_COST as SF_SCROLL_COST,
 )
 from equipment import STARFORCE_TABLE, get_amplify_multiplier
+from weapon_optimizer import get_weapon_upgrade_for_optimizer, calculate_total_weapon_atk_percent
+from weapon_summoning import get_summon_recommendations_for_optimizer
 from utils.dps_calculator import (
     aggregate_stats as shared_aggregate_stats,
     calculate_dps as shared_calculate_dps,
@@ -263,10 +266,11 @@ def calculate_best_possible_dps(slot: str, tier: str) -> float:
 
 def analyze_starforce_detailed(baseline_dps: float) -> List[Dict]:
     """
-    Analyze starforce with milestone targets instead of single-star upgrades.
+    Analyze starforce upgrades for each equipment slot.
 
-    For each equipment slot, evaluates reaching key milestones (15, 17, 20, 22, 25)
-    and returns only the ONE most efficient upgrade path per slot.
+    Evaluates EACH star level (not just milestones) to find the most efficient
+    next upgrade. This properly accounts for diminishing returns where going
+    17→18 is much cheaper than 19→20 for similar DPS gain.
 
     Uses:
     - Markov chain analysis from starforce_optimizer for accurate cost estimates
@@ -277,10 +281,6 @@ def analyze_starforce_detailed(baseline_dps: float) -> List[Dict]:
     """
     results = []
 
-    # Key milestones to consider - these are the meaningful breakpoints
-    # where sub-stat amplify increases significantly
-    MILESTONES = [15, 17, 20, 22, 25]
-
     for slot in EQUIPMENT_SLOTS:
         item = data.equipment_items.get(slot, {})
         current_stars = int(item.get('stars', 0))
@@ -288,13 +288,15 @@ def analyze_starforce_detailed(baseline_dps: float) -> List[Dict]:
         if current_stars >= 25 or current_stars < 10:
             continue
 
-        # Find best milestone target for this slot
+        # Evaluate EACH possible target star (not just milestones)
+        # This finds the most efficient next step
         best_upgrade = None
         best_efficiency = -1
 
-        for target_stars in MILESTONES:
+        # Consider each star from current+1 to 25
+        for target_stars in range(current_stars + 1, 26):
             if target_stars <= current_stars:
-                continue  # Skip milestones already achieved
+                continue
 
             # Use Markov chain analysis for accurate cost estimate
             # This calculates the full path cost (e.g., 19→22 includes 19→20→21→22)
@@ -315,9 +317,9 @@ def analyze_starforce_detailed(baseline_dps: float) -> List[Dict]:
             else:
                 dps_gain = 0
 
-            # Calculate efficiency: DPS% gain per 100k diamonds (same scale as cube efficiency)
-            # For starforce: dps_gain / total_cost * 100000
-            efficiency = (dps_gain / total_cost) * 100_000 if total_cost > 0 else 0
+            # Calculate efficiency: DPS% gain per 1000 diamonds (same formula as cube efficiency)
+            # efficiency = dps_gain / (total_cost / 1000) = dps_gain * 1000 / total_cost
+            efficiency = dps_gain / (total_cost / 1000) if total_cost > 0 else 0
 
             # Track best option based on efficiency
             if efficiency > best_efficiency:
@@ -508,13 +510,25 @@ st.markdown("Detailed upgrade recommendations with specific targets and DPS impa
 current_stats = aggregate_stats()
 current_dps = calculate_dps(current_stats, data.combat_mode)['total']
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("Current DPS", f"{current_dps:,.0f}")
 with col2:
     st.metric("Combat Mode", data.combat_mode.title())
 with col3:
     budget = st.number_input("Diamond Budget", min_value=0, max_value=10000000, value=100000, step=10000)
+with col4:
+    summoning_level = st.number_input(
+        "Summoning Level",
+        min_value=1,
+        max_value=17,
+        value=getattr(data, 'summoning_level', 15),
+        help="Your weapon summoning level (affects drop rates)"
+    )
+    # Save to user data if changed
+    if summoning_level != getattr(data, 'summoning_level', 15):
+        data.summoning_level = summoning_level
+        save_user_data(data.username, data)
 
 # Warning if DPS is too low for meaningful analysis
 if current_dps < 10000:
@@ -555,19 +569,53 @@ if refresh_clicked or 'optimizer_analysis_time' not in st.session_state:
     # Hero power analysis
     hp_analysis = analyze_hero_power_detailed()
 
+    # Tier upgrade analysis
+    tier_upgrade_analysis = analyze_all_tier_upgrades(
+        user_data=data,
+        aggregate_stats_func=aggregate_stats,
+        calculate_dps_func=calculate_dps,
+    )
+
+    # Weapon upgrade analysis
+    weapons_data = getattr(data, 'weapons_data', {}) or {}
+    equipped_weapon = getattr(data, 'equipped_weapon_key', '') or ''
+    if weapons_data:
+        weapon_analysis = get_weapon_upgrade_for_optimizer(weapons_data, equipped_weapon)
+    else:
+        weapon_analysis = []
+
+    # Weapon summon analysis
+    if weapons_data:
+        # Calculate current total weapon ATK% for diminishing returns
+        current_weapon_atk = calculate_total_weapon_atk_percent(weapons_data, equipped_weapon)
+        summon_analysis = get_summon_recommendations_for_optimizer(
+            weapons_data,
+            equipped_weapon,
+            summoning_level,
+            current_weapon_atk,
+        )
+    else:
+        summon_analysis = []
+
     # Cache results in session state
     st.session_state.optimizer_cube_analysis = cube_analysis
     st.session_state.optimizer_sf_analysis = sf_analysis
     st.session_state.optimizer_hp_analysis = hp_analysis
+    st.session_state.optimizer_tier_upgrade_analysis = tier_upgrade_analysis
+    st.session_state.optimizer_weapon_analysis = weapon_analysis
+    st.session_state.optimizer_summon_analysis = summon_analysis
     st.session_state.optimizer_analysis_time = datetime.now()
 
     if refresh_clicked:
-        st.success(f"Analysis refreshed! Found {len(cube_analysis or [])} cube recommendations.")
+        st.success(f"Analysis refreshed! Found {len(cube_analysis or [])} cube, {len(tier_upgrade_analysis or [])} tier-up, {len(weapon_analysis)} weapon, {len(summon_analysis)} summon recommendations.")
 else:
     # Use cached results
     cube_analysis = st.session_state.get('optimizer_cube_analysis', [])
     sf_analysis = st.session_state.get('optimizer_sf_analysis', [])
     hp_analysis = st.session_state.get('optimizer_hp_analysis', {})
+    tier_upgrade_analysis = st.session_state.get('optimizer_tier_upgrade_analysis', [])
+    weapon_analysis = st.session_state.get('optimizer_weapon_analysis', [])
+    summon_analysis = st.session_state.get('optimizer_summon_analysis', [])
 
 # Show when analysis was last run
 with refresh_col2:
@@ -640,37 +688,9 @@ st.caption(f"Budget: {budget:,} diamonds | Sorted by efficiency")
 # Collect all upgrades
 all_upgrades = []
 
-# Cube upgrades
-for rec in (cube_analysis or []):
-    pot_type = "Bonus" if rec.is_bonus else "Regular"
-    diamond_cost = BONUS_DIAMOND_PER_CUBE if rec.is_bonus else REGULAR_DIAMOND_PER_CUBE
-    expected_cost = rec.expected_cubes_to_improve * diamond_cost
-    improvement_room = rec.best_possible_dps_gain - rec.current_dps_gain
-
-    # Get indicator based on score
-    if rec.dps_efficiency < 30:
-        indicator = "🔴"
-    elif rec.dps_efficiency < 60:
-        indicator = "🟡"
-    else:
-        indicator = "🟢"
-
-    all_upgrades.append({
-        'type': 'Cube',
-        'subtype': pot_type,
-        'target': rec.slot,
-        'description': f"{rec.slot.title()} {pot_type} ({rec.tier}) {indicator}",
-        'cost': expected_cost,
-        'dps_gain': improvement_room * 0.4,  # Conservative estimate of expected gain
-        'efficiency': rec.efficiency_score,
-        'details': {
-            'current_dps': rec.current_dps_gain,
-            'best_dps': rec.best_possible_dps_gain,
-            'improvement_room': improvement_room,
-            'cubes': rec.expected_cubes_to_improve,
-            'difficulty': rec.improvement_difficulty,
-        },
-    })
+# NOTE: Cube upgrades now come from tier_upgrade_analysis below (line 694+)
+# The old cube_analysis uses a heuristic efficiency_score that's not comparable
+# with the DPS%/diamond efficiency used by starforce and tier upgrades.
 
 # Starforce upgrades
 for sf in sf_analysis:
@@ -709,6 +729,82 @@ if hp_analysis['lines_to_reroll'] and hp_analysis['diamond_equivalent'] > 0:
         },
     })
 
+# Weapon upgrades
+for wu in (weapon_analysis or []):
+    # Skip if efficiency is very low
+    if wu['efficiency'] <= 0:
+        continue
+
+    all_upgrades.append({
+        'type': 'Weapon',
+        'subtype': wu['subtype'],
+        'target': wu['subtype'],
+        'target_display': wu['description'],
+        'description': f"🗡️ {wu['description']}",
+        'cost': wu['cost'],
+        'dps_gain': wu['dps_gain'],
+        'efficiency': wu['efficiency'],
+        'details': {
+            'current_level': wu['current_level'],
+            'target_level': wu['target_level'],
+            'max_level': wu['max_level'],
+            'is_equipped': wu['is_equipped'],
+            'can_become_best': wu.get('can_become_best', False),
+            'crossover_level': wu.get('crossover_level'),
+        },
+    })
+
+# Weapon summon recommendations
+for summon_rec in (summon_analysis or []):
+    # Skip if efficiency is very low or cost is infinite
+    if summon_rec['efficiency'] <= 0 or summon_rec['cost'] == float('inf'):
+        continue
+
+    all_upgrades.append({
+        'type': 'Summon',
+        'subtype': summon_rec['subtype'],
+        'target': summon_rec['target'],
+        'target_display': summon_rec['target_display'],
+        'description': summon_rec['description'],
+        'cost': summon_rec['cost'],
+        'dps_gain': summon_rec['dps_gain'],
+        'efficiency': summon_rec['efficiency'],
+        'details': summon_rec['details'],
+    })
+
+# Optimal stopping cube recommendations
+for tier_rec in (tier_upgrade_analysis or []):
+    pot_type = "Bonus" if tier_rec.is_bonus else "Regular"
+    path_str = " → ".join(tier_rec.path_tiers)
+
+    # Skip if efficiency is very low or negative (great rolls)
+    # These will show at the bottom anyway due to sorting
+    if tier_rec.efficiency <= 0:
+        continue
+
+    all_upgrades.append({
+        'type': 'Cube',
+        'subtype': f'Optimal {pot_type}',
+        'target': tier_rec.slot,
+        'description': f"🎯 {tier_rec.slot.title()} {pot_type} ({tier_rec.current_tier})",
+        'cost': tier_rec.total_cost_diamonds,
+        'dps_gain': tier_rec.expected_dps_gain,
+        'efficiency': tier_rec.efficiency,
+        'details': {
+            'current_dps': tier_rec.current_dps_gain,
+            'current_percentile': tier_rec.current_percentile,
+            'keep_threshold': tier_rec.keep_threshold,
+            'expected_value_at_tier': tier_rec.expected_value_at_tier,
+            'value_vs_threshold': tier_rec.value_vs_threshold,
+            'path_tiers': tier_rec.path_tiers,
+            'expected_cubes': tier_rec.expected_cubes_to_threshold,
+            'current_pity': tier_rec.current_pity,
+            'pity_threshold': tier_rec.pity_threshold,
+            'current_tier': tier_rec.current_tier,
+            'path_str': path_str,
+        },
+    })
+
 # Sort by efficiency
 all_upgrades.sort(key=lambda x: x['efficiency'], reverse=True)
 
@@ -735,7 +831,7 @@ if selected:
 
     # Detailed path display
     for i, upg in enumerate(selected, 1):
-        type_icon = {"Cube": "🎲", "Starforce": "⭐", "Hero Power": "⚡"}.get(upg['type'], "❓")
+        type_icon = {"Cube": "🎲", "Starforce": "⭐", "Hero Power": "⚡", "Weapon": "🗡️", "Summon": "🎰"}.get(upg['type'], "❓")
 
         with st.container():
             st.markdown(f"### #{i}. {type_icon} {upg['description']}")
@@ -746,27 +842,87 @@ if selected:
                 st.markdown(f"- Expected Gain: **+{upg['dps_gain']:.2f}%** DPS")
                 if 'current_dps' in upg['details']:
                     st.markdown(f"- Current: +{upg['details']['current_dps']:.1f}%")
-                    st.markdown(f"- Best Possible: +{upg['details']['best_dps']:.1f}%")
+                    if 'best_dps' in upg['details']:
+                        st.markdown(f"- Best Possible: +{upg['details']['best_dps']:.1f}%")
+                    elif 'expected_value_at_tier' in upg['details']:
+                        # Optimal stopping - show expected value
+                        st.markdown(f"- E[Value]: +{upg['details']['expected_value_at_tier']:.2f}%")
+                        if 'value_vs_threshold' in upg['details']:
+                            vs_thresh = upg['details']['value_vs_threshold']
+                            if vs_thresh < 0:
+                                st.markdown(f"- Below threshold by {abs(vs_thresh):.2f}%")
+                            else:
+                                st.markdown(f"- Above threshold by {vs_thresh:.2f}%")
+                    elif 'target_dps' in upg['details']:
+                        # Legacy tier upgrade display
+                        st.markdown(f"- Target at Mystic: +{upg['details']['target_dps']:.1f}%")
+                        if 'current_percentile' in upg['details']:
+                            st.markdown(f"- Current roll: {upg['details']['current_percentile']:.0f}th percentile")
 
             with col2:
                 st.markdown("**Cost Analysis:**")
                 st.markdown(f"- Cost: **{upg['cost']:,.0f}** diamonds")
                 st.markdown(f"- Efficiency: {upg['efficiency']:.4f}")
                 if 'cubes' in upg['details']:
-                    st.markdown(f"- ~{upg['details']['cubes']} cubes needed")
+                    st.markdown(f"- ~{upg['details']['cubes']:.0f} cubes needed")
+                elif 'expected_cubes' in upg['details']:
+                    # Optimal stopping info
+                    st.markdown(f"- ~{upg['details']['expected_cubes']:.0f} cubes expected")
+                    if 'keep_threshold' in upg['details']:
+                        st.markdown(f"- Keep threshold: {upg['details']['keep_threshold']:.2f}%")
+                elif 'path_tiers' in upg['details'] and 'cubes_per_step' in upg['details']:
+                    # Multi-tier path breakdown (legacy)
+                    path_tiers = upg['details']['path_tiers']
+                    cubes_per_step = upg['details']['cubes_per_step']
+                    path_parts = []
+                    for i in range(len(cubes_per_step)):
+                        path_parts.append(f"{path_tiers[i][:3]}(~{cubes_per_step[i]:.0f})")
+                    path_parts.append("Mys")
+                    st.markdown(f"- Path: {' → '.join(path_parts)}")
+                    st.markdown(f"- Settle: ~{upg['details']['cubes_to_settle']:.0f} cubes")
 
             with col3:
                 st.markdown("**Additional Info:**")
+                # Show potential type prominently for cube upgrades
+                if upg['type'] == 'Cube':
+                    is_bonus = 'Bonus' in upg['subtype']
+                    pot_label = "🟩 Bonus Potential" if is_bonus else "🟪 Regular Potential"
+                    st.markdown(f"- **{pot_label}**")
+                if upg['type'] == 'Weapon':
+                    # Weapon upgrade specific info
+                    is_equipped = upg['details'].get('is_equipped', False)
+                    equipped_label = "✓ Equipped" if is_equipped else "📦 Inventory only"
+                    st.markdown(f"- **{equipped_label}**")
+                    max_level = upg['details'].get('max_level', 200)
+                    target_level = upg['details'].get('target_level', 0)
+                    st.markdown(f"- Level cap: {max_level}")
+                    if upg['details'].get('can_become_best') and upg['details'].get('crossover_level'):
+                        st.markdown(f"- ⚡ Can become best at Lv.{upg['details']['crossover_level']}")
+                if upg['type'] == 'Summon':
+                    # Summon recommendation specific info
+                    use_case = upg['details'].get('use_case', 'new')
+                    if use_case == 'new':
+                        st.markdown("- **🆕 New weapon**")
+                    else:
+                        curr_awk = upg['details'].get('current_awakening', 0)
+                        target_awk = upg['details'].get('target_awakening', 1)
+                        st.markdown(f"- **⬆️ Awakening A{curr_awk} → A{target_awk}**")
+                    drop_pct = upg['details'].get('drop_rate_pct', 0)
+                    tickets = upg['details'].get('expected_tickets', 0)
+                    st.markdown(f"- Drop rate: {drop_pct:.3f}%")
+                    st.markdown(f"- ~{tickets:.0f} tickets expected")
                 if 'difficulty' in upg['details']:
                     st.markdown(f"- Difficulty: {upg['details']['difficulty']}")
                 if 'risk' in upg['details']:
                     st.markdown(f"- Risk: {upg['details']['risk']}")
                 if 'rerolls' in upg['details']:
                     st.markdown(f"- ~{upg['details']['rerolls']:.0f} rerolls")
+                if 'current_pity' in upg['details'] and 'pity_threshold' in upg['details']:
+                    st.markdown(f"- Pity: {upg['details']['current_pity']}/{upg['details']['pity_threshold']}")
 
             # Add DPS Distribution Chart for Cube upgrades
             if upg['type'] == 'Cube':
-                is_bonus = upg['subtype'] == 'Bonus'
+                is_bonus = 'Bonus' in upg['subtype']  # Works for both "Bonus" and "Tier-Up Bonus"
                 slot = upg['target']
                 if st.checkbox(f"Show DPS Distribution", key=f"opt_dist_{slot}_{is_bonus}_{i}"):
                     with st.spinner("Generating distribution..."):
@@ -826,8 +982,8 @@ st.divider()
 # ==============================================================================
 with st.expander("📊 All Upgrade Options Ranked"):
     all_table = []
-    for i, upg in enumerate(all_upgrades[:30], 1):
-        type_icon = {"Cube": "🎲", "Starforce": "⭐", "Hero Power": "⚡"}.get(upg['type'], "❓")
+    for i, upg in enumerate(all_upgrades, 1):  # Show all upgrades, not just top 30
+        type_icon = {"Cube": "🎲", "Starforce": "⭐", "Hero Power": "⚡", "Weapon": "🗡️", "Summon": "🎰"}.get(upg['type'], "❓")
 
         # Rank color
         if i <= 3:
@@ -839,6 +995,12 @@ with st.expander("📊 All Upgrade Options Ranked"):
 
         # Use target_display if available (for starforce), otherwise slot name
         target_text = upg.get('target_display', upg['target'].title())
+
+        # For cube upgrades, add potential type indicator
+        if upg['type'] == 'Cube':
+            is_bonus = 'Bonus' in upg['subtype']
+            pot_indicator = "🟩" if is_bonus else "🟪"
+            target_text = f"{pot_indicator} {target_text}"
 
         all_table.append({
             "Rank": rank_display,
@@ -865,6 +1027,10 @@ with st.expander("📚 Optimization Legend & Tips"):
 `Efficiency = DPS Gain % / (Cost / 1000 diamonds)`
 
 Higher efficiency = better value for your diamonds.
+
+### Potential Types
+- 🟪 = **Regular Potential** (cubed with normal cubes)
+- 🟩 = **Bonus Potential** (cubed with bonus cubes)
 
 ### Line Tags
 - **[Y]** = Yellow line (current tier, best value)

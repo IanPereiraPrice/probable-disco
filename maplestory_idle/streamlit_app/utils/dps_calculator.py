@@ -36,6 +36,7 @@ from artifacts import (
 )
 from companions import COMPANIONS
 from weapons import calculate_weapon_atk_str
+from weapon_mastery import calculate_mastery_stages_from_weapons, calculate_mastery_stats
 from skills import (
     calculate_all_skills_value, create_character_at_level, DPSCalculator,
     BOWMASTER_SKILLS, JobSkillBonus, create_character_with_job_bonuses,
@@ -662,32 +663,26 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
     stats['flat_dex'] += user_data.equipment_sets.get('medal', 0)
     stats['flat_dex'] += user_data.equipment_sets.get('costume', 0)
 
-    # Weapons (old format - for backward compatibility)
-    for weapon in user_data.weapons.values():
-        stats['base_attack'] *= (1 + weapon.get('atk_pct', 0) / 100)
-
-    # Weapons (new format - weapon_inventory + equipped_weapon)
-    weapon_inventory = getattr(user_data, 'weapon_inventory', []) or []
-    equipped_weapon_idx = getattr(user_data, 'equipped_weapon', None)
+    # Weapons (weapons_data dict with "rarity_tier" keys)
+    weapons_data = getattr(user_data, 'weapons_data', {}) or {}
+    equipped_weapon_key = getattr(user_data, 'equipped_weapon_key', '') or ''
 
     total_weapon_atk_pct = 0.0
-    for idx, weapon in enumerate(weapon_inventory):
-        if not weapon:
-            continue
-        rarity = weapon.get('rarity', 'normal')
-        tier = weapon.get('tier', 4)
-        level = weapon.get('level', 1)
+    for key, weapon_data in weapons_data.items():
+        level = weapon_data.get('level', 0)
+        if level > 0:
+            parts = key.rsplit('_', 1)
+            if len(parts) == 2:
+                rarity, tier = parts[0], int(parts[1])
+                weapon_stats = calculate_weapon_atk_str(rarity, tier, level)
 
-        weapon_stats = calculate_weapon_atk_str(rarity, tier, level)
+                # Inventory ATK% always applies (from all owned weapons)
+                total_weapon_atk_pct += weapon_stats['inventory_atk']
 
-        # Inventory ATK% always applies (from all owned weapons)
-        total_weapon_atk_pct += weapon_stats['inventory_atk']
+                # On-equip ATK% only from equipped weapon
+                if key == equipped_weapon_key:
+                    total_weapon_atk_pct += weapon_stats['on_equip_atk']
 
-        # On-equip ATK% only from equipped weapon
-        if equipped_weapon_idx == idx:
-            total_weapon_atk_pct += weapon_stats['on_equip_atk']
-
-    # Apply weapon ATK% as multiplier to base attack
     if total_weapon_atk_pct > 0:
         stats['attack_percent'] += total_weapon_atk_pct
 
@@ -757,6 +752,16 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
         stats['crit_damage'] += guild_skills.get('crit_damage', 0)
         stats['dex_percent'] += guild_skills.get('main_stat', 0)
         stats['base_attack'] += guild_skills.get('attack', 0)
+
+    # Weapon Mastery stats (calculated from weapon awakening levels)
+    if weapons_data:
+        mastery_stages = calculate_mastery_stages_from_weapons(weapons_data)
+        mastery_stats = calculate_mastery_stats(mastery_stages)
+        stats['base_attack'] += mastery_stats['attack']
+        stats['flat_dex'] += mastery_stats['main_stat']
+        stats['accuracy'] += mastery_stats['accuracy']
+        stats['min_dmg_mult'] += mastery_stats['min_dmg_mult']
+        stats['max_dmg_mult'] += mastery_stats['max_dmg_mult']
 
     # Artifacts - equipped active effects and inventory effects
     # Build name->key mapping for fallback

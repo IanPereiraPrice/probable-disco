@@ -1768,9 +1768,26 @@ class ExactRollDistribution:
         """Get total number of line arrangements enumerated."""
         return sum(o.arrangement_count for o in self._outcomes)
 
+    def get_exact_dps_distribution(self) -> Tuple[List[float], List[float]]:
+        """
+        Get the exact DPS values and their probabilities.
+
+        Returns:
+            Tuple of (dps_values, probabilities) where each dps_value has its
+            corresponding probability. These are the TRUE probabilities from
+            the combinatorial enumeration, properly accounting for duplicates.
+        """
+        if not self._scored:
+            raise RuntimeError("Must call score_for_slot first")
+
+        dps_values = [o.dps_gain_pct for o in self._outcomes]
+        probabilities = [o.probability for o in self._outcomes]
+        return dps_values, probabilities
+
 
 # Global cache for exact distributions
 _EXACT_DISTRIBUTION_CACHE: Dict[Tuple[PotentialTier, str], ExactRollDistribution] = {}
+_CACHE_SESSION_ID: int = 0  # Incremented each analysis session
 
 
 def get_exact_roll_distribution(
@@ -1779,16 +1796,28 @@ def get_exact_roll_distribution(
     dps_calc_func,
     current_dps: float,
     main_stat_type: StatType = StatType.DEX_PCT,
+    use_cache: bool = True,
 ) -> ExactRollDistribution:
     """
     Get or create an exact roll distribution for a tier/slot combination.
 
     Unlike the Monte Carlo version, this computes exact probabilities.
+
+    Args:
+        tier: Potential tier to calculate distribution for
+        slot: Equipment slot
+        dps_calc_func: Function to calculate DPS with test lines
+        current_dps: Baseline DPS for percentage calculations
+        main_stat_type: Player's main stat
+        use_cache: If True, use cached distribution if available (default True)
     """
     cache_key = (tier, slot)
 
-    # Always recompute since DPS function may have changed
-    # In production, could add more sophisticated caching
+    # Use cache if enabled and entry exists
+    if use_cache and cache_key in _EXACT_DISTRIBUTION_CACHE:
+        return _EXACT_DISTRIBUTION_CACHE[cache_key]
+
+    # Calculate new distribution
     dist = ExactRollDistribution(tier)
     dist.score_for_slot(slot, dps_calc_func, current_dps, main_stat_type)
     _EXACT_DISTRIBUTION_CACHE[cache_key] = dist
@@ -1797,9 +1826,10 @@ def get_exact_roll_distribution(
 
 
 def clear_exact_distribution_cache():
-    """Clear the exact distribution cache."""
-    global _EXACT_DISTRIBUTION_CACHE
+    """Clear the exact distribution cache. Call at start of each analysis session."""
+    global _EXACT_DISTRIBUTION_CACHE, _CACHE_SESSION_ID
     _EXACT_DISTRIBUTION_CACHE = {}
+    _CACHE_SESSION_ID += 1
 
 
 # =============================================================================

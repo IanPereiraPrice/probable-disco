@@ -52,12 +52,12 @@ class UserData:
     artifacts_inventory: Dict[str, Dict] = field(default_factory=dict)
     artifacts_resonance: Dict[str, Any] = field(default_factory=dict)
 
-    # Weapons (old format - weapon_id -> {name, atk_pct})
-    weapons: Dict[str, Dict] = field(default_factory=dict)
-
-    # Weapons (new format)
-    weapon_inventory: list = field(default_factory=list)  # List of {rarity, tier, level}
-    equipped_weapon: int = None  # Index into weapon_inventory
+    # Weapons - predefined list with level and awakening
+    # Key format: "rarity_tier" e.g., "mystic_1", "legendary_2"
+    # Value: {level: int, awakening: int}
+    weapons_data: Dict[str, Dict] = field(default_factory=dict)
+    equipped_weapon_key: str = ""  # Key of equipped weapon, e.g., "mystic_1"
+    summoning_level: int = 15  # Weapon summoning level (1-17), affects drop rates
 
     # Companions (old format - slot -> {name, level})
     companions_equipped: Dict[str, Dict] = field(default_factory=dict)
@@ -155,19 +155,19 @@ def save_user_data(username: str, data: UserData) -> bool:
             for key, value in data.artifacts_resonance.items():
                 writer.writerow(['artifact_resonance', key, '', str(value)])
 
-            # Weapons (old format)
-            for weapon_id, weapon in data.weapons.items():
-                for key, value in weapon.items():
-                    writer.writerow(['weapon', weapon_id, key, str(value)])
+            # Weapons data (predefined weapons with level/awakening)
+            weapons_data = getattr(data, 'weapons_data', {}) or {}
+            for weapon_key, weapon_data in weapons_data.items():
+                for key, value in weapon_data.items():
+                    writer.writerow(['weapons_data', weapon_key, key, str(value)])
 
-            # Weapon inventory (new format)
-            for idx, weapon in enumerate(data.weapon_inventory or []):
-                for key, value in weapon.items():
-                    writer.writerow(['weapon_inv', str(idx), key, str(value)])
+            # Equipped weapon key
+            equipped_weapon_key = getattr(data, 'equipped_weapon_key', '') or ''
+            if equipped_weapon_key:
+                writer.writerow(['equipped_weapon_key', '', '', equipped_weapon_key])
 
-            # Equipped weapon (new format)
-            if data.equipped_weapon is not None:
-                writer.writerow(['equipped_weapon', 'index', '', str(data.equipped_weapon)])
+            # Summoning level
+            writer.writerow(['summoning_level', '', '', str(getattr(data, 'summoning_level', 15))])
 
             # Companions equipped
             for slot, companion in data.companions_equipped.items():
@@ -296,19 +296,17 @@ def load_user_data(username: str) -> UserData:
                 elif section == 'artifact_resonance':
                     data.artifacts_resonance[key] = _parse_value(value)
 
-                elif section == 'weapon':
-                    if key not in data.weapons:
-                        data.weapons[key] = {}
-                    data.weapons[key][subkey] = _parse_value(value)
+                elif section == 'weapons_data':
+                    # New predefined weapon format: key="rarity_tier", subkey=field, value=int
+                    if key not in data.weapons_data:
+                        data.weapons_data[key] = {}
+                    data.weapons_data[key][subkey] = int(value)
 
-                elif section == 'weapon_inv':
-                    idx = int(key)
-                    while len(data.weapon_inventory) <= idx:
-                        data.weapon_inventory.append({})
-                    data.weapon_inventory[idx][subkey] = _parse_value(value)
+                elif section == 'equipped_weapon_key':
+                    data.equipped_weapon_key = value
 
-                elif section == 'equipped_weapon':
-                    data.equipped_weapon = int(value)
+                elif section == 'summoning_level':
+                    data.summoning_level = int(value)
 
                 elif section == 'companion_equipped':
                     if key not in data.companions_equipped:
@@ -523,19 +521,19 @@ def export_user_data_csv(data: UserData) -> str:
     for key, value in data.artifacts_resonance.items():
         writer.writerow(['artifact_resonance', key, '', str(value)])
 
-    # Weapons (old format)
-    for weapon_id, weapon in data.weapons.items():
-        for key, value in weapon.items():
-            writer.writerow(['weapon', weapon_id, key, str(value)])
+    # Weapons data (predefined weapons with level/awakening)
+    weapons_data = getattr(data, 'weapons_data', {}) or {}
+    for weapon_key, weapon_data in weapons_data.items():
+        for key, value in weapon_data.items():
+            writer.writerow(['weapons_data', weapon_key, key, str(value)])
 
-    # Weapon inventory (new format)
-    for idx, weapon in enumerate(data.weapon_inventory or []):
-        for key, value in weapon.items():
-            writer.writerow(['weapon_inv', str(idx), key, str(value)])
+    # Equipped weapon key
+    equipped_weapon_key = getattr(data, 'equipped_weapon_key', '') or ''
+    if equipped_weapon_key:
+        writer.writerow(['equipped_weapon_key', '', '', equipped_weapon_key])
 
-    # Equipped weapon (new format)
-    if data.equipped_weapon is not None:
-        writer.writerow(['equipped_weapon', 'index', '', str(data.equipped_weapon)])
+    # Summoning level
+    writer.writerow(['summoning_level', '', '', str(getattr(data, 'summoning_level', 15))])
 
     # Companions equipped
     for slot, companion in data.companions_equipped.items():
@@ -657,19 +655,17 @@ def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
             elif section == 'artifact_resonance':
                 data.artifacts_resonance[key] = _parse_value(value)
 
-            elif section == 'weapon':
-                if key not in data.weapons:
-                    data.weapons[key] = {}
-                data.weapons[key][subkey] = _parse_value(value)
+            elif section == 'weapons_data':
+                # New predefined weapon format: key="rarity_tier", subkey=field, value=int
+                if key not in data.weapons_data:
+                    data.weapons_data[key] = {}
+                data.weapons_data[key][subkey] = int(value)
 
-            elif section == 'weapon_inv':
-                idx = int(key)
-                while len(data.weapon_inventory) <= idx:
-                    data.weapon_inventory.append({})
-                data.weapon_inventory[idx][subkey] = _parse_value(value)
+            elif section == 'equipped_weapon_key':
+                data.equipped_weapon_key = value
 
-            elif section == 'equipped_weapon':
-                data.equipped_weapon = int(value)
+            elif section == 'summoning_level':
+                data.summoning_level = int(value)
 
             elif section == 'companion_equipped':
                 if key not in data.companions_equipped:

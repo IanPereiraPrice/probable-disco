@@ -336,19 +336,52 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
         if costume_val > 0:
             sources.append(("Costume Set", costume_val))
 
+    # Weapon Mastery stats (from weapon awakening levels)
+    from weapon_mastery import calculate_mastery_stages_from_weapons, calculate_mastery_stats
+    weapons_data = getattr(data, 'weapons_data', {}) or {}
+    if weapons_data:
+        mastery_stages = calculate_mastery_stages_from_weapons(weapons_data)
+        mastery_stats = calculate_mastery_stats(mastery_stages)
+
+        mastery_mapping = {
+            'base_attack': 'attack',
+            'flat_dex': 'main_stat',
+            'accuracy': 'accuracy',
+            'min_dmg_mult': 'min_dmg_mult',
+            'max_dmg_mult': 'max_dmg_mult',
+        }
+        mastery_key = mastery_mapping.get(stat_key)
+        if mastery_key and mastery_stats.get(mastery_key, 0) > 0:
+            sources.append(("Weapon Mastery", mastery_stats[mastery_key]))
+
     # Weapons (attack %)
     if stat_key == 'attack_percent':
-        from weapons import calculate_weapon_atk_str
-        total_inv_atk = 0
-        equipped_atk = 0
-        for idx, weapon in enumerate(data.weapon_inventory or []):
-            rarity = weapon.get('rarity', 'normal')
-            tier = weapon.get('tier', 4)
-            level = weapon.get('level', 1)
+        from weapons import calculate_weapon_atk_str, get_inventory_ratio
+        weapons_data = getattr(data, 'weapons_data', {}) or {}
+        equipped_weapon_key = getattr(data, 'equipped_weapon_key', '') or ''
+
+        total_inv_atk = 0.0
+        equipped_atk = 0.0
+
+        for key, weapon_data in weapons_data.items():
+            level = weapon_data.get('level', 0)
+            if level <= 0:
+                continue
+
+            parts = key.rsplit('_', 1)
+            if len(parts) != 2:
+                continue
+
+            rarity, tier = parts[0], int(parts[1])
             calc_stats = calculate_weapon_atk_str(rarity, tier, level)
+
+            # Inventory ATK always applies
             total_inv_atk += calc_stats['inventory_atk']
-            if data.equipped_weapon == idx:
+
+            # Equipped weapon also gets on_equip ATK
+            if key == equipped_weapon_key:
                 equipped_atk = calc_stats['on_equip_atk']
+
         if equipped_atk > 0:
             sources.append(("Weapon (Equipped)", equipped_atk))
         if total_inv_atk > 0:
