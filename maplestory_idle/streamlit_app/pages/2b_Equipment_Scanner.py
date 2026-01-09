@@ -142,6 +142,15 @@ if not ocr_available:
     """)
     st.stop()
 
+# Determine current slot selection - use detected slot if available, else default to first
+def get_current_slot_index():
+    """Get the index for the slot selectbox based on parsed data or default."""
+    if st.session_state.parsed_equip:
+        detected = st.session_state.parsed_equip.equipment_slot
+        if detected and detected in EQUIPMENT_SLOTS:
+            return EQUIPMENT_SLOTS.index(detected)
+    return 0
+
 # Two-column layout for upload and slot selection
 col_upload, col_settings = st.columns([1.2, 0.8])
 
@@ -173,6 +182,7 @@ with col_settings:
     selected_slot = st.selectbox(
         "Which slot is this equipment?",
         options=EQUIPMENT_SLOTS,
+        index=get_current_slot_index(),
         format_func=lambda x: x.title(),
         key="scanner_slot",
         label_visibility="collapsed",
@@ -191,12 +201,7 @@ with col_settings:
                         parsed = extract_and_parse(image_bytes)
                         st.session_state.parsed_equip = parsed
                         st.session_state.ocr_error = None
-
-                        # Auto-select the detected equipment slot
-                        if parsed.equipment_slot and parsed.equipment_slot in EQUIPMENT_SLOTS:
-                            st.session_state.scanner_slot = parsed.equipment_slot
-
-                        st.rerun()
+                        st.rerun()  # Rerun to update slot selection with detected slot
                     except Exception as e:
                         st.session_state.ocr_error = str(e)
                         st.session_state.parsed_equip = None
