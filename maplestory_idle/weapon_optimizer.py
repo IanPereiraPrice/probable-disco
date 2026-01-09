@@ -319,7 +319,8 @@ def analyze_single_weapon_upgrade(
     cost_diamonds = total_enhancers / DIAMONDS_TO_ENHANCERS
 
     # Calculate efficiency (DPS% per 1000 diamonds)
-    efficiency = (dps_gain * 100 / cost_diamonds) * 1000 if cost_diamonds > 0 else 0
+    # dps_gain is already a percentage (ATK% adjusted for diminishing returns)
+    efficiency = (dps_gain / cost_diamonds) * 1000 if cost_diamonds > 0 else 0
 
     # Check crossover potential for non-equipped weapons
     crossover_level = None
@@ -338,7 +339,7 @@ def analyze_single_weapon_upgrade(
         max_level=max_level,
         awakening=awakening,
         atk_gain=effective_atk_gain,
-        dps_gain_percent=dps_gain * 100,
+        dps_gain_percent=dps_gain,  # Already a percentage (ATK% / diminishing factor)
         cost_enhancers=total_enhancers,
         cost_diamonds=cost_diamonds,
         efficiency=efficiency,

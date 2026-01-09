@@ -899,18 +899,25 @@ if selected:
                     if upg['details'].get('can_become_best') and upg['details'].get('crossover_level'):
                         st.markdown(f"- ⚡ Can become best at Lv.{upg['details']['crossover_level']}")
                 if upg['type'] == 'Summon':
-                    # Summon recommendation specific info
-                    use_case = upg['details'].get('use_case', 'new')
-                    if use_case == 'new':
-                        st.markdown("- **🆕 New weapon**")
-                    else:
-                        curr_awk = upg['details'].get('current_awakening', 0)
-                        target_awk = upg['details'].get('target_awakening', 1)
-                        st.markdown(f"- **⬆️ Awakening A{curr_awk} → A{target_awk}**")
-                    drop_pct = upg['details'].get('drop_rate_pct', 0)
-                    tickets = upg['details'].get('expected_tickets', 0)
-                    st.markdown(f"- Drop rate: {drop_pct:.3f}%")
-                    st.markdown(f"- ~{tickets:.0f} tickets expected")
+                    # NEW: Holistic summon value display
+                    summoning_level = upg['details'].get('summoning_level', 15)
+                    ev_per_ticket = upg['details'].get('expected_value_per_ticket', 0)
+                    st.markdown(f"- **Summoning Level: {summoning_level}**")
+                    st.markdown(f"- Expected value: **{ev_per_ticket:.4f}%** DPS/ticket")
+                    st.markdown(f"- Cost: ~{upg['cost']:.1f}💎 per ticket")
+
+                    # Show top value contributors
+                    top_contribs = upg['details'].get('top_contributors', [])
+                    if top_contribs:
+                        st.markdown("- **Top value sources:**")
+                        for contrib in top_contribs[:5]:
+                            rarity = contrib.get('rarity', '?')
+                            tier = contrib.get('tier', '?')
+                            drop_pct = contrib.get('drop_rate_pct', 0)
+                            value = contrib.get('value', 0)
+                            reason = contrib.get('reason', '')
+                            # Show condensed info
+                            st.markdown(f"  - {rarity.capitalize()} T{tier}: {drop_pct:.2f}% × {value:.3f}% ({reason[:30]})")
                 if 'difficulty' in upg['details']:
                     st.markdown(f"- Difficulty: {upg['details']['difficulty']}")
                 if 'risk' in upg['details']:

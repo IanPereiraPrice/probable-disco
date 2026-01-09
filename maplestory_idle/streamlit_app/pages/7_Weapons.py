@@ -45,6 +45,7 @@ st.title("🏹 Weapons")
 st.info("""
 **How Weapons Work:**
 - Each weapon has a **Level** (affects ATK%) and **Awakening** (0-5 stars, affects Mastery bonuses)
+- **Duplicates** track progress toward next awakening (A1=1, A2=2, A3=3, A4=4, A5=5 dupes each)
 - Set Level to 0 if you don't own the weapon
 - Only ONE weapon can be equipped at a time
 - **Inventory ATK% = 25%** of On-Equip ATK% (always active for all owned weapons)
@@ -68,9 +69,19 @@ with tab1:
         cols = st.columns(len(tiers))
         for i, tier in enumerate(tiers):
             key = f"{rarity}_{tier}"
-            weapon_data = data.weapons_data.get(key, {'level': 0, 'awakening': 0})
+            weapon_data = data.weapons_data.get(key, {'level': 0, 'awakening': 0, 'duplicates': 0})
             current_level = weapon_data.get('level', 0)
             current_awakening = weapon_data.get('awakening', 0)
+            current_duplicates = weapon_data.get('duplicates', 0)
+
+            # Calculate dupes needed for next milestone
+            # A0→A1: 1, A1→A2: 2, ..., A4→A5: 5, A5→Promo: 5
+            if current_awakening < 5:
+                dupes_for_next = current_awakening + 1
+                next_milestone = f"A{current_awakening + 1}"
+            else:
+                dupes_for_next = 5
+                next_milestone = "Promo"
 
             with cols[i]:
                 st.markdown(f"**T{tier}**")
@@ -94,6 +105,19 @@ with tab1:
                     key=f"wawaken_{key}",
                 )
 
+                # Duplicates input (progress toward next awakening/promotion)
+                if level > 0:
+                    duplicates = st.number_input(
+                        f"Dupes →{next_milestone}",
+                        min_value=0,
+                        max_value=dupes_for_next - 1,  # Can't reach next level yet
+                        value=min(current_duplicates, dupes_for_next - 1),
+                        key=f"wdupes_{key}",
+                        help=f"{current_duplicates}/{dupes_for_next} toward {next_milestone}"
+                    )
+                else:
+                    duplicates = 0
+
                 # Calculate and show ATK%
                 if level > 0:
                     stats = calculate_weapon_atk_str(rarity, tier, level)
@@ -102,8 +126,8 @@ with tab1:
                     st.caption("Not owned")
 
                 # Save if changed
-                new_data = {'level': level, 'awakening': awakening}
-                if level != current_level or awakening != current_awakening:
+                new_data = {'level': level, 'awakening': awakening, 'duplicates': duplicates}
+                if level != current_level or awakening != current_awakening or duplicates != current_duplicates:
                     data.weapons_data[key] = new_data
                     # If this weapon was equipped and level is now 0, unequip it
                     if level == 0 and data.equipped_weapon_key == key:

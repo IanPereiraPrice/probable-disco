@@ -1138,9 +1138,378 @@ def validate_against_wiki():
 
 
 # =============================================================================
-# SUMMON OPTIMIZER INTEGRATION
+# SUMMON OPTIMIZER INTEGRATION - EXPECTED VALUE PER TICKET MODEL
+# =============================================================================
+#
+# The correct model: Each summon ticket gives you ONE weapon from the drop table.
+# EVERY drop has value based on your current state. The expected value per ticket
+# is the probability-weighted sum of ALL possible drop values.
+#
+# Key insight: If you have Mystic T2 at A5 with 4/5 dupes, then getting ONE more
+# T2 gives you a FREE T1 via promotion. So that T2 drop is worth T1 value!
+#
+# Value sources for each drop:
+# 1. New weapon (don't own) → inventory ATK% at level 1
+# 2. Duplicate (A0-A4) → progress toward awakening (+1/N toward cap unlock)
+# 3. Duplicate (A5, <5 dupes) → progress toward promotion
+# 4. Duplicate (A5, 4/5 dupes) → INSTANT promotion to next tier!
 # =============================================================================
 
+
+def calculate_weapon_drop_value(
+    rarity: str,
+    tier: int,
+    weapons_data: Dict[str, Dict],
+    equipped_weapon_key: str,
+    current_total_atk_percent: float,
+    _cache: Dict = None,
+) -> Dict:
+    """
+    Calculate the value of getting ONE copy of a specific weapon.
+
+    This considers:
+    - New weapon: inventory ATK% value
+    - Awakening progress: fractional value toward next awakening
+    - Promotion: if at A5 with enough dupes, instant promotion to higher tier
+
+    Returns dict with:
+    - value: DPS% gain from this drop
+    - reason: why this drop has value
+    - cascade_value: value from any promotions triggered
+    """
+    from weapon_optimizer import calculate_atk_at_level, get_max_level
+    from weapons import get_inventory_ratio, get_base_atk
+
+    # Use memoization to avoid recalculating the same weapon values
+    if _cache is None:
+        _cache = {}
+
+    cache_key = f"{rarity}_{tier}"
+    if cache_key in _cache:
+        return _cache[cache_key]
+
+    weapon_key = f"{rarity}_{tier}"
+    existing = weapons_data.get(weapon_key, {})
+    existing_level = existing.get('level', 0)
+    existing_awakening = existing.get('awakening', 0)
+    existing_duplicates = existing.get('duplicates', 0)
+
+    is_new = existing_level <= 0
+    is_equipped = weapon_key == equipped_weapon_key
+    inv_ratio = get_inventory_ratio(rarity)
+
+    result = {
+        'value': 0.0,
+        'reason': '',
+        'cascade_value': 0.0,
+        'triggers_promotion': False,
+        'promotion_target': None,
+    }
+
+    # ==========================================================================
+    # Case 1: New weapon - check if it would become best equipped or just inventory
+    # ==========================================================================
+    if is_new:
+        level_1_atk = calculate_atk_at_level(rarity, tier, 1)
+
+        # Check if this new weapon would be better than currently equipped
+        eq_parts = equipped_weapon_key.rsplit('_', 1) if equipped_weapon_key else []
+        current_eq_atk = 0.0
+        current_eq_inv_ratio = 0.0
+        if len(eq_parts) == 2:
+            eq_rarity, eq_tier = eq_parts[0], int(eq_parts[1])
+            eq_data = weapons_data.get(equipped_weapon_key, {})
+            eq_level = eq_data.get('level', 0)
+            if eq_level > 0:
+                current_eq_atk = calculate_atk_at_level(eq_rarity, eq_tier, eq_level)
+                current_eq_inv_ratio = get_inventory_ratio(eq_rarity)
+
+        # Would this new weapon (at level 1) be better than current equipped?
+        if level_1_atk > current_eq_atk:
+            # Yes! This becomes new equipped weapon
+            # Gain: new weapon's on_equip + inventory
+            # Lose: old weapon's on_equip (but keep its inventory)
+            new_total = level_1_atk * (1 + inv_ratio)
+            old_on_equip_only = current_eq_atk  # This is what we lose (on-equip portion)
+
+            effective_gain = new_total - old_on_equip_only
+
+            if current_total_atk_percent > 0:
+                dps_value = effective_gain / (1 + current_total_atk_percent / 100)
+            else:
+                dps_value = effective_gain
+
+            result['value'] = dps_value
+            result['reason'] = f"new_best (+{level_1_atk:.1f}% equip + {level_1_atk * inv_ratio:.1f}% inv)"
+        else:
+            # No, just adds to inventory
+            inventory_atk = level_1_atk * inv_ratio
+
+            if current_total_atk_percent > 0:
+                dps_value = inventory_atk / (1 + current_total_atk_percent / 100)
+            else:
+                dps_value = inventory_atk
+
+            result['value'] = dps_value
+            result['reason'] = f"new_weapon (+{inventory_atk:.1f}% inv ATK)"
+
+        _cache[cache_key] = result
+        return result
+
+    # ==========================================================================
+    # Case 2: Already own - check awakening/promotion status
+    # ==========================================================================
+
+    if existing_awakening < 5:
+        # Working toward next awakening
+        # A0→A1: 1, A1→A2: 2, ..., A4→A5: 5
+        dupes_for_next = existing_awakening + 1
+        new_dupes = existing_duplicates + 1
+
+        if new_dupes >= dupes_for_next:
+            # This drop completes the awakening!
+            # Value = full awakening value (level cap unlock)
+            current_max = get_max_level(existing_awakening)
+            new_max = get_max_level(existing_awakening + 1)
+
+            # ATK% gain from new cap
+            atk_at_current = calculate_atk_at_level(rarity, tier, current_max)
+            atk_at_new = calculate_atk_at_level(rarity, tier, new_max)
+            atk_gain = atk_at_new - atk_at_current
+
+            # Apply inventory/equipped ratio
+            if is_equipped:
+                effective_gain = atk_gain * (1 + inv_ratio)
+            else:
+                effective_gain = atk_gain * inv_ratio
+
+            # Scale by investment ratio (if near cap, you'll level it)
+            current_max_level = get_max_level(existing_awakening)
+            investment = min(1.0, existing_level / current_max_level) if current_max_level > 0 else 0.5
+
+            # Convert to DPS%
+            if current_total_atk_percent > 0:
+                dps_value = (effective_gain * investment) / (1 + current_total_atk_percent / 100)
+            else:
+                dps_value = effective_gain * investment
+
+            result['value'] = dps_value
+            result['reason'] = f"awakening_complete (A{existing_awakening}→A{existing_awakening+1})"
+        else:
+            # Partial progress toward awakening
+            # Value = 1/N of awakening value
+            fraction = 1.0 / dupes_for_next
+
+            current_max = get_max_level(existing_awakening)
+            new_max = get_max_level(existing_awakening + 1)
+            atk_gain = calculate_atk_at_level(rarity, tier, new_max) - calculate_atk_at_level(rarity, tier, current_max)
+
+            if is_equipped:
+                effective_gain = atk_gain * (1 + inv_ratio)
+            else:
+                effective_gain = atk_gain * inv_ratio
+
+            investment = min(1.0, existing_level / current_max) if current_max > 0 else 0.5
+
+            if current_total_atk_percent > 0:
+                dps_value = (effective_gain * investment * fraction) / (1 + current_total_atk_percent / 100)
+            else:
+                dps_value = effective_gain * investment * fraction
+
+            result['value'] = dps_value
+            result['reason'] = f"awakening_progress ({existing_duplicates+1}/{dupes_for_next} → A{existing_awakening+1})"
+
+    else:
+        # At A5 - working toward promotion
+        new_dupes = existing_duplicates + 1
+
+        if new_dupes >= 5:
+            # This drop completes the promotion!
+            result['triggers_promotion'] = True
+
+            # Get promotion target
+            promo_result = get_promotion_result(rarity, tier)
+            if promo_result[0] is not None:
+                promo_rarity, promo_tier = promo_result
+                result['promotion_target'] = (promo_rarity, promo_tier)
+
+                # Value = getting the promoted weapon
+                # Recursively calculate value of getting that weapon
+                promo_value = calculate_weapon_drop_value(
+                    promo_rarity, promo_tier,
+                    weapons_data, equipped_weapon_key,
+                    current_total_atk_percent,
+                    _cache
+                )
+
+                result['value'] = promo_value['value']
+                result['cascade_value'] = promo_value.get('cascade_value', 0)
+                result['reason'] = f"promotion ({rarity} T{tier} → {promo_rarity} T{promo_tier})"
+            else:
+                # Can't promote (e.g., Ancient)
+                result['value'] = 0
+                result['reason'] = "max_tier (no promotion available)"
+        else:
+            # Partial progress toward promotion
+            fraction = 1.0 / 5.0  # 5 dupes needed for promotion
+
+            # Get what we'd promote to
+            promo_result = get_promotion_result(rarity, tier)
+            if promo_result[0] is not None:
+                promo_rarity, promo_tier = promo_result
+
+                # Value = fraction of promoted weapon value
+                promo_value = calculate_weapon_drop_value(
+                    promo_rarity, promo_tier,
+                    weapons_data, equipped_weapon_key,
+                    current_total_atk_percent,
+                    _cache
+                )
+
+                result['value'] = promo_value['value'] * fraction
+                result['reason'] = f"promotion_progress ({existing_duplicates+1}/5 → {promo_rarity} T{promo_tier})"
+            else:
+                result['value'] = 0
+                result['reason'] = "max_tier (no promotion available)"
+
+    _cache[cache_key] = result
+    return result
+
+
+def calculate_expected_value_per_ticket(
+    summoning_level: int,
+    weapons_data: Dict[str, Dict],
+    equipped_weapon_key: str,
+    current_total_atk_percent: float,
+) -> Dict:
+    """
+    Calculate the expected DPS% value of ONE summon ticket.
+
+    This is the probability-weighted sum of ALL possible weapon drop values.
+
+    E[value] = Σ P(weapon_i) × Value(weapon_i)
+
+    Returns:
+        Dict with:
+        - expected_value: DPS% per ticket
+        - cost_per_ticket: diamonds
+        - efficiency: DPS% per 1000 diamonds
+        - breakdown: list of (weapon, rate, value, contribution)
+    """
+    all_rates = get_all_weapon_rates(summoning_level)
+
+    total_expected_value = 0.0
+    breakdown = []
+
+    # Shared cache for all weapon value calculations (avoids recalculating promotions)
+    value_cache = {}
+
+    for (rarity, tier), drop_rate in all_rates.items():
+        if drop_rate <= 0:
+            continue
+
+        # Calculate value if we get this weapon
+        drop_value = calculate_weapon_drop_value(
+            rarity, tier,
+            weapons_data, equipped_weapon_key,
+            current_total_atk_percent,
+            value_cache
+        )
+
+        # Expected contribution = P(drop) × Value(drop)
+        contribution = drop_rate * drop_value['value']
+        total_expected_value += contribution
+
+        if drop_value['value'] > 0:
+            breakdown.append({
+                'weapon': f"{rarity}_{tier}",
+                'rarity': rarity,
+                'tier': tier,
+                'drop_rate': drop_rate,
+                'drop_rate_pct': drop_rate * 100,
+                'value': drop_value['value'],
+                'contribution': contribution,
+                'reason': drop_value['reason'],
+                'triggers_promotion': drop_value.get('triggers_promotion', False),
+            })
+
+    # Sort breakdown by contribution (highest first)
+    breakdown.sort(key=lambda x: -x['contribution'])
+
+    # Calculate efficiency
+    cost_per_ticket = DIAMONDS_PER_TICKET
+    efficiency = (total_expected_value / (cost_per_ticket / 1000)) if cost_per_ticket > 0 else 0
+
+    return {
+        'summoning_level': summoning_level,
+        'expected_value': total_expected_value,
+        'cost_per_ticket': cost_per_ticket,
+        'efficiency': efficiency,
+        'breakdown': breakdown,
+        'top_contributors': breakdown[:5],  # Top 5 value sources
+    }
+
+
+def get_summon_recommendation_for_optimizer(
+    weapons_data: Dict[str, Dict],
+    equipped_weapon_key: str,
+    summoning_level: int,
+    current_total_atk_percent: float,
+    batch_size: int = 100,
+) -> Dict:
+    """
+    Get a SINGLE summon recommendation showing expected value per batch of tickets.
+
+    This replaces the old per-weapon targeting model with a holistic
+    "expected value per summon" approach.
+
+    Args:
+        batch_size: Number of tickets per "unit" for display (default 100)
+                   This makes the DPS% numbers readable instead of tiny decimals.
+
+    Returns a single recommendation dict for the optimizer.
+    """
+    ev = calculate_expected_value_per_ticket(
+        summoning_level,
+        weapons_data,
+        equipped_weapon_key,
+        current_total_atk_percent
+    )
+
+    # Scale to batch size for readable numbers
+    batch_dps = ev['expected_value'] * batch_size
+    batch_cost = ev['cost_per_ticket'] * batch_size
+
+    # Build description showing top value sources
+    if ev['top_contributors']:
+        top_weapons = [f"{c['rarity'].capitalize()} T{c['tier']}" for c in ev['top_contributors'][:3]]
+        top_str = ", ".join(top_weapons)
+    else:
+        top_str = "various weapons"
+
+    return {
+        'type': 'Summon',
+        'subtype': 'summon_ticket',
+        'target': 'summon_ticket',
+        'target_display': f'🎰 Summons (x{batch_size})',
+        'description': f"🎰 {batch_size} Summon Tickets (top: {top_str})",
+        'cost': batch_cost,
+        'dps_gain': batch_dps,
+        'efficiency': ev['efficiency'],  # Efficiency stays the same (DPS per diamond)
+        'details': {
+            'summoning_level': summoning_level,
+            'batch_size': batch_size,
+            'expected_value_per_ticket': ev['expected_value'],
+            'expected_value_per_batch': batch_dps,
+            'top_contributors': ev['top_contributors'],
+            'breakdown': ev['breakdown'],
+        },
+    }
+
+
+# =============================================================================
+# LEGACY FUNCTION (kept for backward compatibility, but uses new model internally)
+# =============================================================================
 
 def get_summon_recommendations_for_optimizer(
     weapons_data: Dict[str, Dict],
@@ -1151,184 +1520,35 @@ def get_summon_recommendations_for_optimizer(
     """
     Get weapon summon recommendations formatted for the Upgrade Optimizer.
 
-    This analyzes the value of summoning for each weapon type, considering:
-    1. New weapons: Inventory ATK% value (level 1 weapon)
-    2. Duplicates: Awakening value (level cap unlock + mastery potential)
-    3. Level progression: Value of moving closer to better drop rates
+    NEW MODEL (Jan 2026): Returns a SINGLE recommendation showing the expected
+    value per summon ticket. This replaces the old per-weapon targeting model
+    with a holistic "expected value per summon" approach.
 
-    Uses a simplified model where each summon's value includes:
-    - Expected weapon drop value (weighted by probabilities)
-    - Fractional progress toward next level
+    The key insight is that each summon gives you ONE weapon from the entire
+    drop table, and EVERY drop has value:
+    - New weapon → inventory ATK%
+    - Duplicate → awakening progress
+    - Duplicate at A5 → promotion progress (or instant promotion if 4/5 dupes)
 
     Args:
-        weapons_data: Dict mapping "rarity_tier" -> {level, awakening}
+        weapons_data: Dict mapping "rarity_tier" -> {level, awakening, duplicates}
         equipped_weapon_key: Currently equipped weapon key
         summoning_level: Current summoning level (1-17)
         current_total_atk_percent: Current total ATK% (for diminishing returns)
 
     Returns:
-        List of recommendation dicts compatible with optimizer format
+        List containing a single recommendation dict for the optimizer
     """
-    from weapon_optimizer import calculate_atk_at_level, get_max_level
-    from weapons import get_inventory_ratio
-    from weapon_mastery import (
-        WEAPON_MASTERY_REWARDS,
-        calculate_mastery_stages_from_weapons,
+    # Use the new holistic model
+    recommendation = get_summon_recommendation_for_optimizer(
+        weapons_data,
+        equipped_weapon_key,
+        summoning_level,
+        current_total_atk_percent
     )
 
-    summoning_level = max(1, min(summoning_level, 17))
-    recommendations = []
-
-    # Get all possible weapon drops at current level
-    all_rates = get_all_weapon_rates(summoning_level)
-
-    # Calculate mastery stages for determining mastery threshold crossing
-    current_mastery_stages = calculate_mastery_stages_from_weapons(weapons_data)
-
-    for (rarity, tier), drop_rate in all_rates.items():
-        if drop_rate <= 0:
-            continue
-
-        weapon_key = f"{rarity}_{tier}"
-        existing = weapons_data.get(weapon_key, {})
-        existing_level = existing.get('level', 0)
-        existing_awakening = existing.get('awakening', 0)
-
-        # Skip weapons already at max awakening
-        if existing_awakening >= 5:
-            continue
-
-        is_new_weapon = existing_level <= 0
-        is_equipped = weapon_key == equipped_weapon_key
-        inv_ratio = get_inventory_ratio(rarity)
-
-        # =====================================================================
-        # Calculate value of getting this weapon
-        # =====================================================================
-
-        total_value = 0.0  # Accumulated ATK% value
-        mastery_value = 0.0  # Mastery bonus value (flat stats converted to ATK%)
-
-        if is_new_weapon:
-            # Value = inventory ATK% at level 1 (only inventory since not equipped)
-            level_1_atk = calculate_atk_at_level(rarity, tier, 1)
-            total_value = level_1_atk * inv_ratio
-
-            # Check if getting this weapon unlocks a mastery stage
-            new_stages = current_mastery_stages.get(rarity, 0) + 1
-            mastery_value = _calculate_mastery_dps_value(
-                rarity, current_mastery_stages.get(rarity, 0), new_stages,
-                current_total_atk_percent
-            )
-
-        else:
-            # Value = awakening from A(current) to A(current+1)
-            # This unlocks +20 level cap
-
-            # Current and new max levels
-            current_max = get_max_level(existing_awakening)
-            new_max = get_max_level(existing_awakening + 1)
-
-            # Investment ratio: how much of current cap is already invested
-            if existing_level > 0:
-                investment_ratio = min(1.0, existing_level / current_max)
-            else:
-                investment_ratio = 0.0
-
-            # ATK% gain from the new cap if we level to it
-            # Scale by investment ratio (higher if closer to cap)
-            atk_at_current_max = calculate_atk_at_level(rarity, tier, current_max)
-            atk_at_new_max = calculate_atk_at_level(rarity, tier, new_max)
-            potential_atk_gain = atk_at_new_max - atk_at_current_max
-
-            # Apply inventory/equipped ratio
-            if is_equipped:
-                effective_gain = potential_atk_gain * (1 + inv_ratio)
-            else:
-                effective_gain = potential_atk_gain * inv_ratio
-
-            # Scale by investment ratio
-            total_value = effective_gain * investment_ratio
-
-            # Check mastery threshold
-            new_stages = current_mastery_stages.get(rarity, 0) + 1
-            mastery_value = _calculate_mastery_dps_value(
-                rarity, current_mastery_stages.get(rarity, 0), new_stages,
-                current_total_atk_percent
-            )
-
-        # Add mastery value to total (converted to effective ATK%)
-        total_value += mastery_value
-
-        # Convert ATK% to DPS% (diminishing returns formula)
-        if current_total_atk_percent > 0:
-            dps_gain_percent = total_value / (1 + current_total_atk_percent / 100)
-        else:
-            dps_gain_percent = total_value
-
-        # =====================================================================
-        # Calculate expected cost
-        # =====================================================================
-
-        expected_tickets = calculate_expected_tickets(summoning_level, rarity, tier)
-        if expected_tickets == float('inf'):
-            continue
-
-        expected_diamonds = expected_tickets * DIAMONDS_PER_TICKET
-
-        # =====================================================================
-        # Calculate efficiency
-        # =====================================================================
-
-        # DPS% gain per 1000 diamonds
-        efficiency = (dps_gain_percent / (expected_diamonds / 1000)) if expected_diamonds > 0 else 0
-
-        # =====================================================================
-        # Build recommendation
-        # =====================================================================
-
-        if is_new_weapon:
-            description = f"Summon {rarity.capitalize()} T{tier} (New weapon)"
-            use_case = "new"
-        else:
-            description = f"Summon {rarity.capitalize()} T{tier} (A{existing_awakening}→A{existing_awakening+1})"
-            use_case = "awakening"
-
-        # Get duplicates needed info
-        if not is_new_weapon:
-            copies_needed = get_duplicates_for_awakening(existing_awakening + 1) - get_duplicates_for_awakening(existing_awakening)
-        else:
-            copies_needed = 1
-
-        recommendations.append({
-            'type': 'Summon',
-            'subtype': f'summon_{weapon_key}',
-            'target': weapon_key,
-            'target_display': f"🎲 {rarity.capitalize()} T{tier}",
-            'description': f"🎲 {description}",
-            'cost': expected_diamonds,
-            'dps_gain': dps_gain_percent,
-            'efficiency': efficiency,
-            'details': {
-                'is_new_weapon': is_new_weapon,
-                'use_case': use_case,
-                'current_awakening': existing_awakening,
-                'target_awakening': existing_awakening + 1 if not is_new_weapon else 0,
-                'expected_tickets': expected_tickets,
-                'drop_rate': drop_rate,
-                'drop_rate_pct': drop_rate * 100,
-                'copies_needed': copies_needed,
-                'value_breakdown': {
-                    'atk_value': total_value - mastery_value,
-                    'mastery_value': mastery_value,
-                },
-            },
-        })
-
-    # Sort by efficiency
-    recommendations.sort(key=lambda x: x['efficiency'], reverse=True)
-
-    return recommendations
+    # Return as list for backward compatibility with optimizer integration
+    return [recommendation] if recommendation['dps_gain'] > 0 else []
 
 
 def _calculate_mastery_dps_value(
