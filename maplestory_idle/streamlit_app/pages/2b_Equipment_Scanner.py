@@ -114,6 +114,8 @@ if 'parsed_equip' not in st.session_state:
     st.session_state.parsed_equip = None
 if 'ocr_error' not in st.session_state:
     st.session_state.ocr_error = None
+if 'last_uploaded_file' not in st.session_state:
+    st.session_state.last_uploaded_file = None
 
 # Clear stale parsed data if it's missing the debug_info attribute (from old version)
 if st.session_state.parsed_equip and not hasattr(st.session_state.parsed_equip, 'debug_info'):
@@ -153,7 +155,16 @@ with col_upload:
         label_visibility="collapsed",
     )
 
+    # Detect when a NEW file is uploaded and clear old parsed data
     if uploaded_file:
+        # Use file name + size as a unique identifier
+        file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+        if st.session_state.last_uploaded_file != file_id:
+            # New file uploaded - clear old results
+            st.session_state.parsed_equip = None
+            st.session_state.ocr_error = None
+            st.session_state.last_uploaded_file = file_id
+
         st.image(uploaded_file, caption="Uploaded Screenshot", use_container_width=True)
 
 with col_settings:
@@ -171,24 +182,37 @@ with col_settings:
 
     # Scan button
     if uploaded_file:
-        if st.button("🔍 Scan Screenshot", type="primary", use_container_width=True):
-            with st.spinner("Running OCR... (first run downloads ~100MB model)"):
-                try:
-                    image_bytes = uploaded_file.getvalue()
-                    parsed = extract_and_parse(image_bytes)
-                    st.session_state.parsed_equip = parsed
-                    st.session_state.ocr_error = None
-                    st.rerun()
-                except Exception as e:
-                    st.session_state.ocr_error = str(e)
-                    st.session_state.parsed_equip = None
-                    st.rerun()
+        col_scan, col_clear = st.columns(2)
+        with col_scan:
+            if st.button("🔍 Scan Screenshot", type="primary", use_container_width=True):
+                with st.spinner("Running OCR... (first run downloads ~100MB model)"):
+                    try:
+                        image_bytes = uploaded_file.getvalue()
+                        parsed = extract_and_parse(image_bytes)
+                        st.session_state.parsed_equip = parsed
+                        st.session_state.ocr_error = None
+
+                        # Auto-select the detected equipment slot
+                        if parsed.equipment_slot and parsed.equipment_slot in EQUIPMENT_SLOTS:
+                            st.session_state.scanner_slot = parsed.equipment_slot
+
+                        st.rerun()
+                    except Exception as e:
+                        st.session_state.ocr_error = str(e)
+                        st.session_state.parsed_equip = None
+                        st.rerun()
+        with col_clear:
+            if st.button("🔄 Clear Results", use_container_width=True):
+                st.session_state.parsed_equip = None
+                st.session_state.ocr_error = None
+                st.session_state.last_uploaded_file = None
+                st.rerun()
 
     # Show error if any
     if st.session_state.ocr_error:
         st.error(f"OCR Error: {st.session_state.ocr_error}")
 
-    # Show confidence if parsed
+    # Show confidence and detected slot if parsed
     if st.session_state.parsed_equip:
         parsed = st.session_state.parsed_equip
         conf_class, conf_label = get_confidence_display(parsed.parse_confidence)
@@ -196,6 +220,12 @@ with col_settings:
             f"**Parse Confidence:** <span class='{conf_class}'>{conf_label} ({parsed.parse_confidence*100:.0f}%)</span>",
             unsafe_allow_html=True
         )
+
+        # Show detected slot
+        if parsed.equipment_slot:
+            st.success(f"Detected: **{parsed.equipment_slot.title()}**")
+        else:
+            st.warning("Could not detect equipment slot")
 
         # Debug info expander
         with st.expander("🔧 Debug Info (parsing details)"):
