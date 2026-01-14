@@ -845,7 +845,9 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
 
     # Track Book of Ancient stars for CR->CD conversion
     # IMPORTANT: Only apply if Book is actually EQUIPPED (in one of the 3 slots)
-    # This ensures the Book's value is properly reflected when evaluating whether to equip it
+    # AND we're not skipping artifact actives (used for artifact ranking baseline)
+    # The Book's CR→CD conversion is an active effect, so it should be excluded
+    # from baseline when calculating individual artifact DPS contributions.
     book_of_ancient_stars = 0
     artifacts_inventory = getattr(user_data, 'artifacts_inventory', {})
 
@@ -855,7 +857,8 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
     artifacts_equipped = getattr(user_data, 'artifacts_equipped', {})
 
     # First pass: check if Book of Ancient is equipped
-    if artifacts_equipped:
+    # Skip this if skip_artifact_actives is True - Book's CR→CD is an active effect
+    if artifacts_equipped and not skip_artifact_actives:
         for slot_key in ['slot0', 'slot1', 'slot2']:
             slot_data = artifacts_equipped.get(slot_key, {})
             if not isinstance(slot_data, dict):
