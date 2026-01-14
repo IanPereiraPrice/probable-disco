@@ -5,38 +5,29 @@ Provides cube priority recommendations using the original DPS calculation method
 """
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass
+from copy import deepcopy
 
-# Import from the cubes module in streamlit_app using importlib for explicit path
-import sys
-import os
-import importlib.util
-
-# Get the path to streamlit_app/cubes.py explicitly
-_cubes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cubes.py")
-_spec = importlib.util.spec_from_file_location("streamlit_cubes", _cubes_path)
-_cubes_module = importlib.util.module_from_spec(_spec)
-sys.modules["streamlit_cubes"] = _cubes_module
-_spec.loader.exec_module(_cubes_module)
-
-# Import from the loaded module
-PotentialLine = _cubes_module.PotentialLine
-PotentialTier = _cubes_module.PotentialTier
-StatType = _cubes_module.StatType
-CubeType = _cubes_module.CubeType
-create_item_score_result = _cubes_module.create_item_score_result
-calculate_expected_cubes_fast = _cubes_module.calculate_expected_cubes_fast
-calculate_efficiency_score = _cubes_module.calculate_efficiency_score
-calculate_stat_rankings = _cubes_module.calculate_stat_rankings
-ItemScoreResult = _cubes_module.ItemScoreResult
-ExpectedCubesMetrics = _cubes_module.ExpectedCubesMetrics
-EnhancedCubeRecommendation = _cubes_module.EnhancedCubeRecommendation
-POTENTIAL_STATS = _cubes_module.POTENTIAL_STATS
-get_stat_display_name = _cubes_module.get_stat_display_name
-get_cached_roll_distribution = _cubes_module.get_cached_roll_distribution
-format_lines_for_hover = _cubes_module.format_lines_for_hover
-ExactRollDistribution = _cubes_module.ExactRollDistribution
-get_exact_roll_distribution = _cubes_module.get_exact_roll_distribution
-clear_exact_distribution_cache = _cubes_module.clear_exact_distribution_cache
+# Import from the cubes module in maplestory_idle root
+from cubes import (
+    PotentialLine,
+    PotentialTier,
+    StatType,
+    CubeType,
+    create_item_score_result,
+    calculate_expected_cubes_fast,
+    calculate_efficiency_score,
+    calculate_stat_rankings,
+    ItemScoreResult,
+    ExpectedCubesMetrics,
+    EnhancedCubeRecommendation,
+    POTENTIAL_STATS,
+    get_stat_display_name,
+    get_cached_roll_distribution,
+    format_lines_for_hover,
+    ExactRollDistribution,
+    get_exact_roll_distribution,
+    clear_exact_distribution_cache,
+)
 
 # Equipment slots
 EQUIPMENT_SLOTS = [
@@ -49,6 +40,7 @@ REGULAR_DIAMOND_PER_CUBE = 1000
 BONUS_DIAMOND_PER_CUBE = 2000
 
 # Mapping from Streamlit stat names to StatType enum
+# Note: Some stats have multiple keys to support both legacy names and StatType.value names
 STAT_NAME_TO_TYPE = {
     "dex_pct": StatType.DEX_PCT,
     "str_pct": StatType.STR_PCT,
@@ -59,10 +51,11 @@ STAT_NAME_TO_TYPE = {
     "int_flat": StatType.INT_FLAT,
     "luk_flat": StatType.LUK_FLAT,
     "damage": StatType.DAMAGE_PCT,
+    "damage_pct": StatType.DAMAGE_PCT,  # StatType.DAMAGE_PCT.value
     "crit_rate": StatType.CRIT_RATE,
     "crit_damage": StatType.CRIT_DAMAGE,
     "def_pen": StatType.DEF_PEN,
-    "final_damage": StatType.FINAL_ATK_DMG,
+    "final_damage": StatType.FINAL_DAMAGE,
     "all_skills": StatType.ALL_SKILLS,
     "min_dmg_mult": StatType.MIN_DMG_MULT,
     "max_dmg_mult": StatType.MAX_DMG_MULT,
@@ -268,14 +261,14 @@ def analyze_slot_potentials(
         tier_up_efficiency_bonus=expected_cubes.tier_up_efficiency_bonus,
     )
 
-    # Get top stats by DPS gain
+    # Get all stats ranked by DPS gain
     top_stats = calculate_stat_rankings(
         slot=slot,
         tier=tier,
         dps_calc_func=dps_calc_func,
         current_dps=baseline_dps,
         main_stat_type=main_stat_type,
-        top_n=5
+        top_n=100  # Show all stats, not just top 5
     )
 
     # Extract line info for display
@@ -358,18 +351,19 @@ def analyze_all_cube_priorities(
     for slot in EQUIPMENT_SLOTS:
         slot_pots = user_data.equipment_potentials.get(slot, {})
 
+        # Capture original potentials ONCE before any testing
+        # This prevents corruption if multiple calls are made
+        slot_original_pots = deepcopy(user_data.equipment_potentials.get(slot, {}))
+
         # Create DPS calculation functions for this slot
         # Regular potential
-        def make_dps_func(slot_to_test: str, is_bonus_to_test: bool):
+        def make_dps_func(slot_to_test: str, is_bonus_to_test: bool, captured_original: dict):
             """Factory to create a DPS calculation function for a specific slot/type."""
             def calc_dps_with_lines(test_lines: List[PotentialLine]) -> float:
                 """Calculate DPS with the given potential lines on this slot."""
-                # Save current lines
-                original_pots = user_data.equipment_potentials.get(slot_to_test, {}).copy()
-
                 # Clear the lines we're testing
                 prefix = "bonus_" if is_bonus_to_test else ""
-                test_pots = original_pots.copy()
+                test_pots = deepcopy(captured_original)
                 for i in range(1, 4):
                     test_pots[f"{prefix}line{i}_stat"] = ""
                     test_pots[f"{prefix}line{i}_value"] = 0
@@ -392,19 +386,17 @@ def analyze_all_cube_priorities(
 
                 finally:
                     # Restore original
-                    user_data.equipment_potentials[slot_to_test] = original_pots
+                    user_data.equipment_potentials[slot_to_test] = deepcopy(captured_original)
 
                 return new_dps
 
             return calc_dps_with_lines
 
         # Calculate baseline DPS (with empty potential lines on this slot)
-        def get_baseline_dps(slot_to_test: str, is_bonus_to_test: bool) -> float:
+        def get_baseline_dps(slot_to_test: str, is_bonus_to_test: bool, captured_original: dict) -> float:
             """Calculate DPS with empty potential lines on the specified slot/type."""
-            original_pots = user_data.equipment_potentials.get(slot_to_test, {}).copy()
-
             prefix = "bonus_" if is_bonus_to_test else ""
-            test_pots = original_pots.copy()
+            test_pots = deepcopy(captured_original)
             for i in range(1, 4):
                 test_pots[f"{prefix}line{i}_stat"] = ""
                 test_pots[f"{prefix}line{i}_value"] = 0
@@ -427,13 +419,13 @@ def analyze_all_cube_priorities(
                     'cleared_pots': {k: v for k, v in test_pots.items() if 'line' in k and 'stat' in k},
                 }
             finally:
-                user_data.equipment_potentials[slot_to_test] = original_pots
+                user_data.equipment_potentials[slot_to_test] = deepcopy(captured_original)
 
             return max(baseline, 1)  # Avoid division by zero
 
         # Analyze REGULAR potential
-        reg_dps_func = make_dps_func(slot, False)
-        reg_baseline = get_baseline_dps(slot, False)
+        reg_dps_func = make_dps_func(slot, False, slot_original_pots)
+        reg_baseline = get_baseline_dps(slot, False, slot_original_pots)
 
         reg_result = analyze_slot_potentials(
             slot=slot,
@@ -447,8 +439,8 @@ def analyze_all_cube_priorities(
             results.append(reg_result)
 
         # Analyze BONUS potential
-        bon_dps_func = make_dps_func(slot, True)
-        bon_baseline = get_baseline_dps(slot, True)
+        bon_dps_func = make_dps_func(slot, True, slot_original_pots)
+        bon_baseline = get_baseline_dps(slot, True, slot_original_pots)
 
         bon_result = analyze_slot_potentials(
             slot=slot,
@@ -1048,13 +1040,15 @@ def analyze_all_tier_upgrades(
     for slot in EQUIPMENT_SLOTS:
         slot_pots = user_data.equipment_potentials.get(slot, {})
 
-        # Create DPS calc function for this slot
-        def make_dps_func(slot_to_test: str, is_bonus_to_test: bool):
-            def calc_dps_with_lines(test_lines: List[PotentialLine]) -> float:
-                original_pots = user_data.equipment_potentials.get(slot_to_test, {}).copy()
+        # Capture original potentials ONCE before any testing
+        # This prevents corruption if multiple calls are made
+        slot_original_pots = deepcopy(user_data.equipment_potentials.get(slot, {}))
 
+        # Create DPS calc function for this slot
+        def make_dps_func(slot_to_test: str, is_bonus_to_test: bool, captured_original: dict):
+            def calc_dps_with_lines(test_lines: List[PotentialLine]) -> float:
                 prefix = "bonus_" if is_bonus_to_test else ""
-                test_pots = original_pots.copy()
+                test_pots = deepcopy(captured_original)
                 for i in range(1, 4):
                     test_pots[f"{prefix}line{i}_stat"] = ""
                     test_pots[f"{prefix}line{i}_value"] = 0
@@ -1072,17 +1066,15 @@ def analyze_all_tier_upgrades(
                     result = calculate_dps_func(stats, user_data.combat_mode)
                     new_dps = result['total']
                 finally:
-                    user_data.equipment_potentials[slot_to_test] = original_pots
+                    user_data.equipment_potentials[slot_to_test] = deepcopy(captured_original)
 
                 return new_dps
 
             return calc_dps_with_lines
 
-        def get_baseline_dps(slot_to_test: str, is_bonus_to_test: bool) -> float:
-            original_pots = user_data.equipment_potentials.get(slot_to_test, {}).copy()
-
+        def get_baseline_dps(slot_to_test: str, is_bonus_to_test: bool, captured_original: dict) -> float:
             prefix = "bonus_" if is_bonus_to_test else ""
-            test_pots = original_pots.copy()
+            test_pots = deepcopy(captured_original)
             for i in range(1, 4):
                 test_pots[f"{prefix}line{i}_stat"] = ""
                 test_pots[f"{prefix}line{i}_value"] = 0
@@ -1094,13 +1086,13 @@ def analyze_all_tier_upgrades(
                 result = calculate_dps_func(stats, user_data.combat_mode)
                 baseline = result['total']
             finally:
-                user_data.equipment_potentials[slot_to_test] = original_pots
+                user_data.equipment_potentials[slot_to_test] = deepcopy(captured_original)
 
             return max(baseline, 1)
 
         # Analyze REGULAR potential tier upgrade
-        reg_dps_func = make_dps_func(slot, False)
-        reg_baseline = get_baseline_dps(slot, False)
+        reg_dps_func = make_dps_func(slot, False, slot_original_pots)
+        reg_baseline = get_baseline_dps(slot, False, slot_original_pots)
 
         reg_result = calculate_tier_upgrade_value(
             slot=slot,
@@ -1114,8 +1106,8 @@ def analyze_all_tier_upgrades(
             results.append(reg_result)
 
         # Analyze BONUS potential tier upgrade
-        bon_dps_func = make_dps_func(slot, True)
-        bon_baseline = get_baseline_dps(slot, True)
+        bon_dps_func = make_dps_func(slot, True, slot_original_pots)
+        bon_baseline = get_baseline_dps(slot, True, slot_original_pots)
 
         bon_result = calculate_tier_upgrade_value(
             slot=slot,
@@ -1182,13 +1174,15 @@ def get_distribution_data_for_slot(
     if not tier_stats:
         return None
 
+    # Capture original potentials ONCE before any testing
+    # This prevents corruption if multiple calls are made
+    slot_original_pots = deepcopy(user_data.equipment_potentials.get(slot, {}))
+
     # Create DPS calculation function for this slot/type
     def calc_dps_with_lines(test_lines: List[PotentialLine]) -> float:
         """Calculate DPS with the given potential lines on this slot."""
-        original_pots = user_data.equipment_potentials.get(slot, {}).copy()
-
         prefix = "bonus_" if is_bonus else ""
-        test_pots = original_pots.copy()
+        test_pots = deepcopy(slot_original_pots)
 
         # Clear the lines
         for i in range(1, 4):
@@ -1210,16 +1204,14 @@ def get_distribution_data_for_slot(
             result = calculate_dps_func(stats, user_data.combat_mode)
             new_dps = result['total']
         finally:
-            user_data.equipment_potentials[slot] = original_pots
+            user_data.equipment_potentials[slot] = deepcopy(slot_original_pots)
 
         return new_dps
 
     # Get baseline DPS (with empty potential lines)
     def get_baseline_dps() -> float:
-        original_pots = user_data.equipment_potentials.get(slot, {}).copy()
-
         prefix = "bonus_" if is_bonus else ""
-        test_pots = original_pots.copy()
+        test_pots = deepcopy(slot_original_pots)
         for i in range(1, 4):
             test_pots[f"{prefix}line{i}_stat"] = ""
             test_pots[f"{prefix}line{i}_value"] = 0
@@ -1231,7 +1223,7 @@ def get_distribution_data_for_slot(
             result = calculate_dps_func(stats, user_data.combat_mode)
             baseline = result['total']
         finally:
-            user_data.equipment_potentials[slot] = original_pots
+            user_data.equipment_potentials[slot] = deepcopy(slot_original_pots)
 
         return max(baseline, 1)
 

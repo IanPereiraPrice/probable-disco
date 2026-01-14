@@ -159,15 +159,18 @@ def solve_markov_chain_per_stage(
 
             use_decrease_prot, use_destroy_prot = stage_strategies.get(stage, (False, False))
 
+            # Destruction protection not available for last 3 stages (22, 23, 24 -> stars 23, 24, 25)
+            can_use_destroy_prot = use_destroy_prot and stage not in {22, 23, 24}
+
             p = data.success_rate
             d = 0 if use_decrease_prot else data.decrease_rate
-            x = data.destroy_rate * (0.5 if use_destroy_prot else 1.0)
+            x = data.destroy_rate * (0.5 if can_use_destroy_prot else 1.0)
 
             # Cost multiplier for protections
             cost_mult = 1.0
             if use_decrease_prot and data.decrease_rate > 0:
                 cost_mult += 1.0
-            if use_destroy_prot and data.destroy_rate > 0:
+            if can_use_destroy_prot and data.destroy_rate > 0:
                 cost_mult += 1.0
 
             cost_per_attempt = calculate_diamond_cost(data.meso * cost_mult, data.stones * cost_mult)
@@ -200,7 +203,8 @@ def calculate_total_cost_markov(
     start_stage: int,
     target_stage: int,
     use_decrease_prot: bool = False,
-    use_destroy_prot: bool = False
+    use_destroy_prot: bool = False,
+    rebuild_cost: float = 0.0
 ) -> MarkovResult:
     """
     Calculate the total expected diamond cost using Markov chain analysis.
@@ -208,12 +212,22 @@ def calculate_total_cost_markov(
     This properly accounts for:
     - Decrease chains (the compounding effect of going back)
     - Cumulative destruction probability
-    - Restart costs after destruction
+    - Restart costs after destruction (including rebuilding from star 12)
 
     Formula:
-        E[total] = (enhance_cost + P_destroy * destruction_fee) / P_success
+        E[total] = (enhance_cost + P_destroy * (destruction_fee + rebuild_cost)) / P_success
 
-    Where enhance_cost is computed directly via Markov chain (C[start_stage]).
+    Where:
+        - enhance_cost is computed via Markov chain (C[start_stage])
+        - rebuild_cost is the cost to rebuild from star 12 back to start_stage
+          (only relevant when start_stage > 12)
+
+    Args:
+        start_stage: Starting star level
+        target_stage: Target star level
+        use_decrease_prot: Whether to use decrease protection
+        use_destroy_prot: Whether to use destroy protection
+        rebuild_cost: Cost to rebuild from star 12 to start_stage (0 if start_stage=12)
     """
     C, P_s = solve_markov_chain(start_stage, target_stage, use_decrease_prot, use_destroy_prot)
 
@@ -223,10 +237,12 @@ def calculate_total_cost_markov(
     P_success = P_s.get(start_stage, 0)
     P_destroy = 1 - P_success
 
-    # E[total] = (enhance_cost + P_destroy * fee) / P_success
+    # E[total] = (enhance_cost + P_destroy * (fee + rebuild_cost)) / P_success
     # This accounts for the geometric series of restarts
+    # When destroyed, you pay the fee AND must rebuild from star 12 to start_stage
     if P_success > 0:
-        total_cost = (enhance_cost + P_destroy * DESTRUCTION_FEE_DIAMONDS) / P_success
+        destruction_penalty = DESTRUCTION_FEE_DIAMONDS + rebuild_cost
+        total_cost = (enhance_cost + P_destroy * destruction_penalty) / P_success
     else:
         total_cost = float('inf')
 
@@ -242,7 +258,8 @@ def calculate_total_cost_markov(
 def calculate_total_cost_per_stage(
     start_stage: int,
     target_stage: int,
-    stage_strategies: Dict[int, Tuple[bool, bool]]
+    stage_strategies: Dict[int, Tuple[bool, bool]],
+    rebuild_cost: float = 0.0
 ) -> MarkovResult:
     """
     Calculate total cost with PER-STAGE protection strategies.
@@ -251,6 +268,7 @@ def calculate_total_cost_per_stage(
         start_stage: Starting star level
         target_stage: Target star level
         stage_strategies: Dict mapping stage -> (use_decrease_prot, use_destroy_prot)
+        rebuild_cost: Cost to rebuild from star 12 to start_stage (0 if start_stage=12)
 
     Returns:
         MarkovResult with total expected cost
@@ -263,9 +281,11 @@ def calculate_total_cost_per_stage(
     P_success = P_s.get(start_stage, 0)
     P_destroy = 1 - P_success
 
-    # E[total] = (enhance_cost + P_destroy * fee) / P_success
+    # E[total] = (enhance_cost + P_destroy * (fee + rebuild_cost)) / P_success
+    # When destroyed, you pay the fee AND must rebuild from star 12 to start_stage
     if P_success > 0:
-        total_cost = (enhance_cost + P_destroy * DESTRUCTION_FEE_DIAMONDS) / P_success
+        destruction_penalty = DESTRUCTION_FEE_DIAMONDS + rebuild_cost
+        total_cost = (enhance_cost + P_destroy * destruction_penalty) / P_success
     else:
         total_cost = float('inf')
 
@@ -364,7 +384,9 @@ def build_optimal_strategy_table() -> Tuple[Dict[int, str], Dict[int, float], Di
             }[strat]
 
         final_result = calculate_total_cost_per_stage(BASE_STAGE, target, stage_strategies)
-        C_to[target] = final_result.enhance_cost
+        # Store total_cost (includes restarts) for use as rebuild_cost
+        # When rebuilding from 12→target, you might get destroyed and restart at 12
+        C_to[target] = final_result.total_cost
         P_to[target] = 1 - final_result.destroy_probability
 
     return optimal_strategies, C_to, P_to
@@ -395,11 +417,14 @@ def find_optimal_per_stage_strategy(
     The actual cost is computed using the full Markov chain solver which
     properly handles the recursive nature of decrease chains.
 
+    IMPORTANT: When start_stage > 12, the total_cost includes the expected cost
+    of rebuilding from star 12 back to start_stage if destruction occurs.
+
     Returns:
         (stage_strategy_names, result)
         stage_strategy_names: Dict mapping stage -> 'none'/'decrease'/'destroy'/'both'
     """
-    optimal_strategies, _, _ = get_optimal_strategy_table()
+    optimal_strategies, C_to, _ = get_optimal_strategy_table()
 
     # Extract strategies for the requested range
     best_names = {}
@@ -414,8 +439,15 @@ def find_optimal_per_stage_strategy(
             'both': (True, True),
         }[strat_name]
 
+    # Calculate rebuild cost (cost to go from star 12 to start_stage)
+    # This is needed because destruction resets to star 12
+    rebuild_cost = 0.0
+    if start_stage > DESTRUCTION_RESET_STAR:
+        # Get the cost from 12 to start_stage using optimal strategies
+        rebuild_cost = C_to.get(start_stage, 0)
+
     # Compute actual costs using full Markov chain
-    result = calculate_total_cost_per_stage(start_stage, target_stage, stage_strategies)
+    result = calculate_total_cost_per_stage(start_stage, target_stage, stage_strategies, rebuild_cost)
 
     return best_names, result
 
@@ -427,6 +459,9 @@ def find_optimal_strategy(
     """
     Find the optimal UNIFORM protection strategy for going from start_stage to target_stage.
 
+    IMPORTANT: When start_stage > 12, the total_cost includes the expected cost
+    of rebuilding from star 12 back to start_stage if destruction occurs.
+
     Returns:
         (best_strategy_name, best_result, all_results)
     """
@@ -437,12 +472,19 @@ def find_optimal_strategy(
         "both": (True, True),
     }
 
+    # Calculate rebuild cost (cost to go from star 12 to start_stage)
+    # This is needed because destruction resets to star 12
+    rebuild_cost = 0.0
+    if start_stage > DESTRUCTION_RESET_STAR:
+        _, C_to, _ = get_optimal_strategy_table()
+        rebuild_cost = C_to.get(start_stage, 0)
+
     all_results = {}
     best_strat = "none"
     best_cost = float('inf')
 
     for name, (use_dec, use_dest) in strategies.items():
-        result = calculate_total_cost_markov(start_stage, target_stage, use_dec, use_dest)
+        result = calculate_total_cost_markov(start_stage, target_stage, use_dec, use_dest, rebuild_cost)
         all_results[name] = result
 
         if result.total_cost < best_cost:
@@ -501,7 +543,9 @@ def print_stage_breakdown(start_stage: int, target_stage: int, strategy_name: st
             continue
 
         d = 0 if use_dec else data.decrease_rate
-        x = data.destroy_rate * (0.5 if use_dest else 1.0)
+        # Destruction protection not available for last 3 stages (22, 23, 24)
+        can_use_destroy_prot = use_dest and stage not in {22, 23, 24}
+        x = data.destroy_rate * (0.5 if can_use_destroy_prot else 1.0)
 
         print(f"{stage}->{stage+1:<5} {data.success_rate*100:<9.1f} {d*100:<9.0f} {x*100:<9.1f} "
               f"{C.get(stage, 0):<13,.0f} {P_s.get(stage, 0)*100:<11.2f}%")
@@ -645,15 +689,18 @@ def simulate_to_target(
             if not data:
                 break
 
+            # Destruction protection not available for last 3 stages (22, 23, 24)
+            can_use_destroy_prot = use_destroy_prot and current not in {22, 23, 24}
+
             p = data.success_rate
             d = 0 if use_decrease_prot else data.decrease_rate
-            x = data.destroy_rate * (0.5 if use_destroy_prot else 1.0)
+            x = data.destroy_rate * (0.5 if can_use_destroy_prot else 1.0)
             m = 1 - p - d - x
 
             cost_mult = 1.0
             if use_decrease_prot and data.decrease_rate > 0:
                 cost_mult += 1.0
-            if use_destroy_prot and data.destroy_rate > 0:
+            if can_use_destroy_prot and data.destroy_rate > 0:
                 cost_mult += 1.0
 
             attempts += 1

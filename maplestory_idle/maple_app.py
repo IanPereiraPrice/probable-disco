@@ -674,7 +674,7 @@ class MapleApp:
                     totals["min_dmg_mult"] += value
                 elif stat_type == StatType.MAX_DMG_MULT:
                     totals["max_dmg_mult"] += value
-                elif stat_type == StatType.FINAL_ATK_DMG:
+                elif stat_type == StatType.FINAL_DAMAGE:
                     # Each FD line is a separate multiplicative source
                     totals["final_damage_lines"].append(value)
                 elif stat_type == StatType.ATTACK_SPEED:
@@ -3762,7 +3762,7 @@ class MapleApp:
                 mod_stats["crit_damage"] += value
             elif stat_type == StatType.DEF_PEN:
                 mod_stats["defense_pen"] += value
-            elif stat_type == StatType.FINAL_ATK_DMG:
+            elif stat_type == StatType.FINAL_DAMAGE:
                 # Each FD line is a separate multiplicative source
                 mod_stats["fd_sources"] = list(mod_stats["fd_sources"]) + [value]
             elif stat_type == StatType.CRIT_RATE:
@@ -4177,8 +4177,8 @@ Regular Cubes:                          Bonus Cubes:
             # Other stats
             "Crit Damage %": StatType.CRIT_DAMAGE,
             "Defense Pen %": StatType.DEF_PEN,
-            "Final Damage %": StatType.FINAL_ATK_DMG,
-            "Final Attack Damage %": StatType.FINAL_ATK_DMG,
+            "Final Damage %": StatType.FINAL_DAMAGE,
+            "Final Attack Damage %": StatType.FINAL_DAMAGE,
             "Crit Rate %": StatType.CRIT_RATE,
             "Attack Speed %": StatType.ATTACK_SPEED,
             "Max Damage %": StatType.MAX_DMG_MULT,

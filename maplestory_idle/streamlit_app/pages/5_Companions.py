@@ -190,14 +190,15 @@ with tab3:
                 tier_summaries[adv_name] = {"count": 0, "attack": 0, "main_stat": 0, "damage": 0, "max_hp": 0}
 
             tier_summaries[adv_name]["count"] += 1
-            tier_summaries[adv_name]["attack"] += inv_stats.get("attack", 0)
-            tier_summaries[adv_name]["main_stat"] += inv_stats.get("main_stat", 0)
-            tier_summaries[adv_name]["damage"] += inv_stats.get("damage", 0)
+            # Use correct keys from get_inventory_stats(): attack_flat, main_stat_flat, damage_pct, max_hp
+            tier_summaries[adv_name]["attack"] += inv_stats.get("attack_flat", 0)
+            tier_summaries[adv_name]["main_stat"] += inv_stats.get("main_stat_flat", 0)
+            tier_summaries[adv_name]["damage"] += inv_stats.get("damage_pct", 0)
             tier_summaries[adv_name]["max_hp"] += inv_stats.get("max_hp", 0)
 
-            total_attack += inv_stats.get("attack", 0)
-            total_main_stat += inv_stats.get("main_stat", 0)
-            total_damage += inv_stats.get("damage", 0)
+            total_attack += inv_stats.get("attack_flat", 0)
+            total_main_stat += inv_stats.get("main_stat_flat", 0)
+            total_damage += inv_stats.get("damage_pct", 0)
             total_max_hp += inv_stats.get("max_hp", 0)
 
     # Display inventory summary

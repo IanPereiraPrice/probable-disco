@@ -18,6 +18,12 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 from enum import Enum
 
+# Import standardized stat names
+from stat_names import (
+    FINAL_DAMAGE, DAMAGE_PCT, MAIN_STAT_PCT, CRIT_DAMAGE,
+    BOSS_DAMAGE, DEF_PEN, ATTACK_FLAT, MAX_HP
+)
+
 
 # =============================================================================
 # ENUMS
@@ -142,18 +148,51 @@ class GuildConfig:
     def get_all_stats(self) -> Dict[str, float]:
         """
         Get all guild stats for damage calculation.
-        Returns dict with stat keys matching damage calc expectations.
+        Returns dict with stat keys from stat_names.py.
         """
         return {
-            "final_damage": self.get_skill_value(GuildSkillType.FINAL_DAMAGE),
-            "damage": self.get_skill_value(GuildSkillType.DAMAGE),
-            "main_stat_pct": self.get_skill_value(GuildSkillType.MAIN_STAT),
-            "crit_damage": self.get_skill_value(GuildSkillType.CRIT_DAMAGE),
-            "boss_damage": self.get_skill_value(GuildSkillType.BOSS_DAMAGE),
-            "def_pen": self.get_skill_value(GuildSkillType.DEF_PEN),
-            "attack_flat": self.get_skill_value(GuildSkillType.ATTACK),
-            "max_hp": self.get_skill_value(GuildSkillType.MAX_HP),
+            FINAL_DAMAGE: self.get_skill_value(GuildSkillType.FINAL_DAMAGE),
+            DAMAGE_PCT: self.get_skill_value(GuildSkillType.DAMAGE),
+            MAIN_STAT_PCT: self.get_skill_value(GuildSkillType.MAIN_STAT),
+            CRIT_DAMAGE: self.get_skill_value(GuildSkillType.CRIT_DAMAGE),
+            BOSS_DAMAGE: self.get_skill_value(GuildSkillType.BOSS_DAMAGE),
+            DEF_PEN: self.get_skill_value(GuildSkillType.DEF_PEN),
+            ATTACK_FLAT: self.get_skill_value(GuildSkillType.ATTACK),
+            MAX_HP: self.get_skill_value(GuildSkillType.MAX_HP),
         }
+
+    def get_stats(self, job_class=None):
+        """
+        Get all guild stats as a StatBlock.
+
+        Note: Defense Pen is NOT included here because it stacks multiplicatively
+        and needs special handling. Use get_skill_value(GuildSkillType.DEF_PEN).
+
+        Args:
+            job_class: Job class for main_stat mapping (defaults to Bowmaster)
+
+        Returns:
+            StatBlock with all guild stats (except def_pen)
+        """
+        from stats import create_stat_block_for_job
+        from job_classes import JobClass
+
+        if job_class is None:
+            job_class = JobClass.BOWMASTER
+
+        all_stats = self.get_all_stats()
+
+        return create_stat_block_for_job(
+            job_class=job_class,
+            main_stat_pct=all_stats.get(MAIN_STAT_PCT, 0),
+            attack_flat=all_stats.get(ATTACK_FLAT, 0),
+            damage_pct=all_stats.get(DAMAGE_PCT, 0),
+            boss_damage=all_stats.get(BOSS_DAMAGE, 0),
+            crit_damage=all_stats.get(CRIT_DAMAGE, 0),
+            final_damage=all_stats.get(FINAL_DAMAGE, 0),
+            max_hp=all_stats.get(MAX_HP, 0),
+            # Note: def_pen excluded - needs multiplicative handling
+        )
 
     def to_dict(self) -> Dict:
         """Serialize to dict for saving."""

@@ -16,6 +16,14 @@ from enum import Enum
 import random
 import copy
 
+# Import standardized stat names and utilities
+from stat_names import (
+    get_display_name,
+    DAMAGE_PCT, BOSS_DAMAGE, NORMAL_DAMAGE, DEF_PEN,
+    MAX_DMG_MULT, MIN_DMG_MULT, CRIT_RATE, CRIT_DAMAGE,
+    MAIN_STAT_FLAT, ATTACK_FLAT, ATTACK_PCT, DEFENSE, MAX_HP, ACCURACY
+)
+
 
 # =============================================================================
 # ENUMS
@@ -51,26 +59,26 @@ class HeroPowerStatType(Enum):
     MIN_DMG_MULT = "min_dmg_mult"
     CRIT_RATE = "crit_rate"
     CRIT_DAMAGE = "crit_damage"
-    MAIN_STAT_PCT = "main_stat_pct"
+    MAIN_STAT_FLAT = "main_stat_flat"  # Flat main stat (e.g., +2000 DEX) - NOT percentage
     ATTACK_PCT = "attack_pct"
     DEFENSE = "defense"
     MAX_HP = "max_hp"
 
 
-# Display names for UI
+# Display names for UI - use stat_names.py definitions
 STAT_DISPLAY_NAMES: Dict[HeroPowerStatType, str] = {
-    HeroPowerStatType.DAMAGE: "Damage %",
-    HeroPowerStatType.BOSS_DAMAGE: "Boss Damage %",
-    HeroPowerStatType.NORMAL_DAMAGE: "Normal Damage %",
-    HeroPowerStatType.DEF_PEN: "Defense Penetration %",
-    HeroPowerStatType.MAX_DMG_MULT: "Max Damage Multiplier %",
-    HeroPowerStatType.MIN_DMG_MULT: "Min Damage Multiplier %",
-    HeroPowerStatType.CRIT_RATE: "Critical Rate %",
-    HeroPowerStatType.CRIT_DAMAGE: "Critical Damage %",
-    HeroPowerStatType.MAIN_STAT_PCT: "Main Stat (flat)",  # Applied before DEX%
-    HeroPowerStatType.ATTACK_PCT: "Attack %",
-    HeroPowerStatType.DEFENSE: "Defense",
-    HeroPowerStatType.MAX_HP: "Max HP",
+    HeroPowerStatType.DAMAGE: get_display_name("damage_pct"),
+    HeroPowerStatType.BOSS_DAMAGE: get_display_name("boss_damage"),
+    HeroPowerStatType.NORMAL_DAMAGE: get_display_name("normal_damage"),
+    HeroPowerStatType.DEF_PEN: get_display_name("def_pen"),
+    HeroPowerStatType.MAX_DMG_MULT: get_display_name("max_dmg_mult"),
+    HeroPowerStatType.MIN_DMG_MULT: get_display_name("min_dmg_mult"),
+    HeroPowerStatType.CRIT_RATE: get_display_name("crit_rate"),
+    HeroPowerStatType.CRIT_DAMAGE: get_display_name("crit_damage"),
+    HeroPowerStatType.MAIN_STAT_FLAT: get_display_name("main_stat_flat"),
+    HeroPowerStatType.ATTACK_PCT: get_display_name("attack_pct"),
+    HeroPowerStatType.DEFENSE: get_display_name("defense"),
+    HeroPowerStatType.MAX_HP: get_display_name("max_hp"),
 }
 
 # Tier display colors (matching existing app style)
@@ -175,7 +183,7 @@ STAT_DPS_WEIGHTS: Dict[HeroPowerStatType, float] = {
     HeroPowerStatType.DAMAGE: 1.8,          # Damage % is great
     HeroPowerStatType.MAX_DMG_MULT: 1.5,    # Max Damage Mult is good
     HeroPowerStatType.CRIT_DAMAGE: 1.5,     # Crit Damage is good
-    HeroPowerStatType.MAIN_STAT_PCT: 1.4,   # Flat main stat applied before DEX% - valuable!
+    HeroPowerStatType.MAIN_STAT_FLAT: 1.4,   # Flat main stat applied before DEX% - valuable!
     HeroPowerStatType.CRIT_RATE: 1.2,       # Crit Rate is decent
     HeroPowerStatType.ATTACK_PCT: 1.0,      # Attack % is okay
     HeroPowerStatType.MIN_DMG_MULT: 0.6,    # Min Damage is less valuable
@@ -186,16 +194,16 @@ STAT_DPS_WEIGHTS: Dict[HeroPowerStatType, float] = {
 
 # Mapping from HeroPowerStatType to the stats dict key used in DPS calculation
 STAT_TO_STATS_KEY: Dict[HeroPowerStatType, str] = {
-    HeroPowerStatType.DAMAGE: "damage_percent",
-    HeroPowerStatType.BOSS_DAMAGE: "boss_damage",
-    HeroPowerStatType.NORMAL_DAMAGE: "normal_damage",
-    HeroPowerStatType.DEF_PEN: "defense_pen",  # Fixed: matches _get_damage_stats key
-    HeroPowerStatType.MAX_DMG_MULT: "max_dmg_mult",  # Fixed: matches _get_damage_stats key
-    HeroPowerStatType.MIN_DMG_MULT: "min_dmg_mult",  # Fixed: matches _get_damage_stats key
-    HeroPowerStatType.CRIT_RATE: "crit_rate",
-    HeroPowerStatType.CRIT_DAMAGE: "crit_damage",
-    HeroPowerStatType.MAIN_STAT_PCT: "dex_flat",  # This is flat main stat (e.g., +2000 DEX)
-    HeroPowerStatType.ATTACK_PCT: "attack_percent",
+    HeroPowerStatType.DAMAGE: DAMAGE_PCT,
+    HeroPowerStatType.BOSS_DAMAGE: BOSS_DAMAGE,
+    HeroPowerStatType.NORMAL_DAMAGE: NORMAL_DAMAGE,
+    HeroPowerStatType.DEF_PEN: DEF_PEN,
+    HeroPowerStatType.MAX_DMG_MULT: MAX_DMG_MULT,
+    HeroPowerStatType.MIN_DMG_MULT: MIN_DMG_MULT,
+    HeroPowerStatType.CRIT_RATE: CRIT_RATE,
+    HeroPowerStatType.CRIT_DAMAGE: CRIT_DAMAGE,
+    HeroPowerStatType.MAIN_STAT_FLAT: MAIN_STAT_FLAT,  # Generic - resolved by job class in DPS calc
+    HeroPowerStatType.ATTACK_PCT: ATTACK_PCT,
     HeroPowerStatType.DEFENSE: None,  # Defensive, no DPS impact
     HeroPowerStatType.MAX_HP: None,   # Defensive, no DPS impact
 }
@@ -316,7 +324,7 @@ STAT_PROBABILITIES: Dict[HeroPowerTier, Dict[HeroPowerStatType, float]] = {
         HeroPowerStatType.MAX_DMG_MULT: 0.15,
         HeroPowerStatType.CRIT_DAMAGE: 0.10,
         HeroPowerStatType.MIN_DMG_MULT: 0.05,
-        HeroPowerStatType.MAIN_STAT_PCT: 0.05,
+        HeroPowerStatType.MAIN_STAT_FLAT: 0.05,
         HeroPowerStatType.CRIT_RATE: 0.05,
         HeroPowerStatType.ATTACK_PCT: 0.03,
         HeroPowerStatType.NORMAL_DAMAGE: 0.02,
@@ -328,7 +336,7 @@ STAT_PROBABILITIES: Dict[HeroPowerTier, Dict[HeroPowerStatType, float]] = {
         HeroPowerStatType.MAX_DMG_MULT: 0.12,
         HeroPowerStatType.CRIT_DAMAGE: 0.08,
         HeroPowerStatType.MIN_DMG_MULT: 0.08,
-        HeroPowerStatType.MAIN_STAT_PCT: 0.08,
+        HeroPowerStatType.MAIN_STAT_FLAT: 0.08,
         HeroPowerStatType.CRIT_RATE: 0.06,
         HeroPowerStatType.ATTACK_PCT: 0.05,
         HeroPowerStatType.NORMAL_DAMAGE: 0.05,
@@ -343,7 +351,7 @@ DEFAULT_STAT_PROBS: Dict[HeroPowerStatType, float] = {
     HeroPowerStatType.MAX_DMG_MULT: 0.08,
     HeroPowerStatType.CRIT_DAMAGE: 0.05,
     HeroPowerStatType.MIN_DMG_MULT: 0.10,
-    HeroPowerStatType.MAIN_STAT_PCT: 0.12,
+    HeroPowerStatType.MAIN_STAT_FLAT: 0.12,
     HeroPowerStatType.CRIT_RATE: 0.08,
     HeroPowerStatType.ATTACK_PCT: 0.08,
     HeroPowerStatType.NORMAL_DAMAGE: 0.10,
@@ -357,78 +365,78 @@ HERO_POWER_STAT_RANGES: Dict[HeroPowerTier, Dict[HeroPowerStatType, Tuple[float,
     HeroPowerTier.MYSTIC: {
         HeroPowerStatType.DAMAGE: (28.0, 40.0),
         HeroPowerStatType.BOSS_DAMAGE: (28.0, 40.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (28.0, 40.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (14.0, 20.0),
         HeroPowerStatType.MAX_DMG_MULT: (28.0, 40.0),
+        HeroPowerStatType.MIN_DMG_MULT: (28.0, 40.0),
         HeroPowerStatType.CRIT_DAMAGE: (20.0, 30.0),
-        HeroPowerStatType.MIN_DMG_MULT: (20.0, 30.0),
-        HeroPowerStatType.MAIN_STAT_PCT: (1500, 2500),  # Flat main stat (e.g., +2000 DEX)
+        HeroPowerStatType.MAIN_STAT_FLAT: (1500, 2500),  # Flat main stat (e.g., +2000 DEX)
         HeroPowerStatType.CRIT_RATE: (8.0, 12.0),
         HeroPowerStatType.ATTACK_PCT: (12.0, 18.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (20.0, 30.0),
     },
     HeroPowerTier.LEGENDARY: {
-        HeroPowerStatType.DAMAGE: (18.0, 28.0),
-        HeroPowerStatType.BOSS_DAMAGE: (18.0, 28.0),
+        HeroPowerStatType.DAMAGE: (18.0, 25.0),
+        HeroPowerStatType.BOSS_DAMAGE: (18.0, 25.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (18.0, 25.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (10.0, 14.0),
-        HeroPowerStatType.MAX_DMG_MULT: (18.0, 28.0),
+        HeroPowerStatType.MAX_DMG_MULT: (18.0, 25.0),
+        HeroPowerStatType.MIN_DMG_MULT: (18.0, 25.0),
         HeroPowerStatType.CRIT_DAMAGE: (14.0, 20.0),
-        HeroPowerStatType.MIN_DMG_MULT: (14.0, 20.0),
-        HeroPowerStatType.MAIN_STAT_PCT: (800, 1200),  # Flat main stat
+        HeroPowerStatType.MAIN_STAT_FLAT: (800, 1200),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (5.0, 8.0),
         HeroPowerStatType.ATTACK_PCT: (8.0, 12.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (14.0, 20.0),
     },
     HeroPowerTier.UNIQUE: {
         HeroPowerStatType.DAMAGE: (12.0, 18.0),
         HeroPowerStatType.BOSS_DAMAGE: (12.0, 18.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (12.0, 18.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (6.0, 10.0),
         HeroPowerStatType.MAX_DMG_MULT: (12.0, 18.0),
+        HeroPowerStatType.MIN_DMG_MULT: (12.0, 18.0),
         HeroPowerStatType.CRIT_DAMAGE: (10.0, 14.0),
-        HeroPowerStatType.MIN_DMG_MULT: (10.0, 14.0),
-        HeroPowerStatType.MAIN_STAT_PCT: (400, 700),  # Flat main stat
+        HeroPowerStatType.MAIN_STAT_FLAT: (400, 700),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (3.0, 5.0),
         HeroPowerStatType.ATTACK_PCT: (5.0, 8.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (10.0, 14.0),
     },
     HeroPowerTier.EPIC: {
         HeroPowerStatType.DAMAGE: (8.0, 12.0),
         HeroPowerStatType.BOSS_DAMAGE: (8.0, 12.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (8.0, 12.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (4.0, 6.0),
         HeroPowerStatType.MAX_DMG_MULT: (8.0, 12.0),
+        HeroPowerStatType.MIN_DMG_MULT: (8.0, 12.0),
         HeroPowerStatType.CRIT_DAMAGE: (6.0, 10.0),
-        HeroPowerStatType.MIN_DMG_MULT: (6.0, 10.0),
-        HeroPowerStatType.MAIN_STAT_PCT: (200, 300),  # Flat main stat
+        HeroPowerStatType.MAIN_STAT_FLAT: (200, 300),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (2.0, 3.0),
         HeroPowerStatType.ATTACK_PCT: (3.0, 5.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (6.0, 10.0),
         HeroPowerStatType.DEFENSE: (100, 200),
         HeroPowerStatType.MAX_HP: (500, 1000),
     },
     HeroPowerTier.RARE: {
         HeroPowerStatType.DAMAGE: (4.0, 8.0),
         HeroPowerStatType.BOSS_DAMAGE: (4.0, 8.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (4.0, 8.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (2.0, 4.0),
         HeroPowerStatType.MAX_DMG_MULT: (4.0, 8.0),
+        HeroPowerStatType.MIN_DMG_MULT: (4.0, 8.0),
         HeroPowerStatType.CRIT_DAMAGE: (3.0, 6.0),
-        HeroPowerStatType.MIN_DMG_MULT: (3.0, 6.0),
-        HeroPowerStatType.MAIN_STAT_PCT: (100, 150),  # Flat main stat
+        HeroPowerStatType.MAIN_STAT_FLAT: (100, 150),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (1.0, 2.0),
         HeroPowerStatType.ATTACK_PCT: (2.0, 3.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (3.0, 6.0),
         HeroPowerStatType.DEFENSE: (50, 100),
         HeroPowerStatType.MAX_HP: (200, 500),
     },
     HeroPowerTier.COMMON: {
         HeroPowerStatType.DAMAGE: (1.0, 4.0),
         HeroPowerStatType.BOSS_DAMAGE: (1.0, 4.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (1.0, 4.0),  # Same as Boss Damage
         HeroPowerStatType.DEF_PEN: (1.0, 2.0),
         HeroPowerStatType.MAX_DMG_MULT: (1.0, 4.0),
+        HeroPowerStatType.MIN_DMG_MULT: (1.0, 4.0),
         HeroPowerStatType.CRIT_DAMAGE: (1.0, 3.0),
-        HeroPowerStatType.MIN_DMG_MULT: (1.0, 3.0),
-        HeroPowerStatType.MAIN_STAT_PCT: (40, 60),  # Flat main stat
+        HeroPowerStatType.MAIN_STAT_FLAT: (40, 60),  # Flat main stat
         HeroPowerStatType.CRIT_RATE: (0.5, 1.0),
         HeroPowerStatType.ATTACK_PCT: (1.0, 2.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (1.0, 3.0),
         HeroPowerStatType.DEFENSE: (20, 50),
         HeroPowerStatType.MAX_HP: (100, 200),
     },
@@ -477,15 +485,15 @@ class HeroPowerPassiveConfig:
     def get_all_stats(self) -> Dict[str, float]:
         """
         Get all Hero Power passive stats for damage calculation.
-        Returns dict with stat keys matching damage calc expectations.
+        Returns dict with stat keys from stat_names.py.
         """
         return {
-            "main_stat_flat": self.get_stat_value(HeroPowerPassiveStatType.MAIN_STAT),
-            "damage_percent": self.get_stat_value(HeroPowerPassiveStatType.DAMAGE_PERCENT),
-            "attack_flat": self.get_stat_value(HeroPowerPassiveStatType.ATTACK),
-            "max_hp": self.get_stat_value(HeroPowerPassiveStatType.MAX_HP),
-            "accuracy": self.get_stat_value(HeroPowerPassiveStatType.ACCURACY),
-            "defense": self.get_stat_value(HeroPowerPassiveStatType.DEFENSE),
+            MAIN_STAT_FLAT: self.get_stat_value(HeroPowerPassiveStatType.MAIN_STAT),
+            DAMAGE_PCT: self.get_stat_value(HeroPowerPassiveStatType.DAMAGE_PERCENT),
+            ATTACK_FLAT: self.get_stat_value(HeroPowerPassiveStatType.ATTACK),
+            MAX_HP: self.get_stat_value(HeroPowerPassiveStatType.MAX_HP),
+            ACCURACY: self.get_stat_value(HeroPowerPassiveStatType.ACCURACY),
+            DEFENSE: self.get_stat_value(HeroPowerPassiveStatType.DEFENSE),
         }
 
     def to_dict(self) -> Dict:
@@ -545,7 +553,7 @@ class HeroPowerLine:
         stat_name = STAT_DISPLAY_NAMES.get(self.stat_type, self.stat_type.value)
         # Flat stats (no % sign): Defense, Max HP, Main Stat
         if self.stat_type in (HeroPowerStatType.DEFENSE, HeroPowerStatType.MAX_HP,
-                              HeroPowerStatType.MAIN_STAT_PCT):
+                              HeroPowerStatType.MAIN_STAT_FLAT):
             return f"{stat_name}: {self.value:.0f} ({self.tier.value.capitalize()})"
         return f"{stat_name}: {self.value:.1f}% ({self.tier.value.capitalize()})"
 
@@ -578,7 +586,7 @@ def calculate_line_dps_value(
         # Fallback to arbitrary weight * value
         weight = STAT_DPS_WEIGHTS.get(line.stat_type, 0.5)
         # For flat stats (Main Stat, Defense, Max HP), use different scaling
-        if line.stat_type == HeroPowerStatType.MAIN_STAT_PCT:
+        if line.stat_type == HeroPowerStatType.MAIN_STAT_FLAT:
             # Flat main stat: ~1000 DEX ≈ 1% DPS gain (rough estimate)
             return line.value / 1000.0 * weight
         elif line.stat_type in (HeroPowerStatType.DEFENSE, HeroPowerStatType.MAX_HP):
@@ -837,7 +845,7 @@ def rank_all_possible_lines_by_dps(
         HeroPowerStatType.CRIT_DAMAGE,
         HeroPowerStatType.MAX_DMG_MULT,
         HeroPowerStatType.NORMAL_DAMAGE,
-        HeroPowerStatType.MAIN_STAT_PCT,
+        HeroPowerStatType.MAIN_STAT_FLAT,
         HeroPowerStatType.CRIT_RATE,
         HeroPowerStatType.ATTACK_PCT,
         HeroPowerStatType.MIN_DMG_MULT,
@@ -876,7 +884,7 @@ def rank_all_possible_lines_by_dps(
                     mode_mult = mode_adjustments.get(stat_type, 1.0)
 
                     # For flat stats, use different scaling
-                    if stat_type == HeroPowerStatType.MAIN_STAT_PCT:
+                    if stat_type == HeroPowerStatType.MAIN_STAT_FLAT:
                         dps_contribution = max_val / 1000.0 * base_weight * mode_mult
                     else:
                         dps_contribution = max_val * base_weight * mode_mult * 0.05
@@ -886,7 +894,7 @@ def rank_all_possible_lines_by_dps(
                 tier_name = tier.value.capitalize()
 
                 # Format value range
-                if stat_type == HeroPowerStatType.MAIN_STAT_PCT:
+                if stat_type == HeroPowerStatType.MAIN_STAT_FLAT:
                     value_range = f"{min_val:.0f}-{max_val:.0f}"
                 else:
                     value_range = f"{min_val:.0f}-{max_val:.0f}%"
@@ -1082,6 +1090,43 @@ class HeroPowerConfig:
             if line.stat_type in stat_types and line_tier_idx >= min_tier_idx:
                 count += 1
         return count
+
+    def get_stats(self, job_class=None):
+        """
+        Get all hero power stats as a StatBlock.
+
+        Note: Defense Pen is NOT included here because it stacks multiplicatively
+        and needs special handling. Use get_stat_total(HeroPowerStatType.DEF_PEN).
+
+        Args:
+            job_class: Job class for main_stat mapping (defaults to Bowmaster)
+
+        Returns:
+            StatBlock with all hero power stats (except def_pen)
+        """
+        from stats import create_stat_block_for_job
+        from job_classes import JobClass
+
+        if job_class is None:
+            job_class = JobClass.BOWMASTER
+
+        all_stats = self.get_all_stats()
+
+        return create_stat_block_for_job(
+            job_class=job_class,
+            main_stat_flat=all_stats.get(HeroPowerStatType.MAIN_STAT_FLAT, 0),
+            attack_pct=all_stats.get(HeroPowerStatType.ATTACK_PCT, 0),
+            damage_pct=all_stats.get(HeroPowerStatType.DAMAGE, 0),
+            boss_damage=all_stats.get(HeroPowerStatType.BOSS_DAMAGE, 0),
+            normal_damage=all_stats.get(HeroPowerStatType.NORMAL_DAMAGE, 0),
+            crit_rate=all_stats.get(HeroPowerStatType.CRIT_RATE, 0),
+            crit_damage=all_stats.get(HeroPowerStatType.CRIT_DAMAGE, 0),
+            min_dmg_mult=all_stats.get(HeroPowerStatType.MIN_DMG_MULT, 0),
+            max_dmg_mult=all_stats.get(HeroPowerStatType.MAX_DMG_MULT, 0),
+            max_hp=all_stats.get(HeroPowerStatType.MAX_HP, 0),
+            defense=all_stats.get(HeroPowerStatType.DEFENSE, 0),
+            # Note: def_pen excluded - needs multiplicative handling
+        )
 
 
 @dataclass

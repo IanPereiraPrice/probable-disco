@@ -59,6 +59,8 @@ from starforce_optimizer import (
 from equipment import STARFORCE_TABLE, get_amplify_multiplier
 from weapon_optimizer import get_weapon_upgrade_for_optimizer, calculate_total_weapon_atk_percent
 from weapon_summoning import get_summon_recommendations_for_optimizer
+from artifact_optimizer import get_artifact_recommendations_for_optimizer
+from artifacts import calculate_resonance_max_level
 from utils.dps_calculator import (
     aggregate_stats as shared_aggregate_stats,
     calculate_dps as shared_calculate_dps,
@@ -95,8 +97,13 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
             except (ValueError, AttributeError):
                 chapter_num = 27  # Default fallback
             enemy_def = get_enemy_defense(chapter_num)
+
+    # Check if user has enabled realistic DPS calculation
+    use_realistic_dps = getattr(data, 'use_realistic_dps', False)
+    boss_importance = getattr(data, 'boss_importance', 70) / 100.0
+
     # book_of_ancient_stars=None means use value from stats (from user's artifact inventory)
-    return shared_calculate_dps(stats, combat_mode, enemy_def, book_of_ancient_stars)
+    return shared_calculate_dps(stats, combat_mode, enemy_def, use_realistic_dps=use_realistic_dps, boss_importance=boss_importance)
 
 
 st.set_page_config(page_title="Upgrade Optimizer", page_icon="📈", layout="wide")
@@ -552,10 +559,10 @@ st.divider()
 # Add refresh button for manual re-analysis
 refresh_col1, refresh_col2 = st.columns([1, 4])
 with refresh_col1:
-    refresh_clicked = st.button("🔄 Refresh Analysis", help="Re-run all upgrade analyses with latest data")
+    refresh_clicked = st.button("🔄 Run Analysis", help="Run all upgrade analyses with latest data")
 
-# Run analysis on first load or when refresh is clicked
-if refresh_clicked or 'optimizer_analysis_time' not in st.session_state:
+# Only run analysis when button is clicked (not on page load)
+if refresh_clicked:
     # Cube analysis using original Tkinter app system
     cube_analysis = analyze_all_cube_priorities(
         user_data=data,
@@ -597,6 +604,58 @@ if refresh_clicked or 'optimizer_analysis_time' not in st.session_state:
     else:
         summon_analysis = []
 
+    # Artifact analysis - use the actual data attributes
+    artifacts_inventory = getattr(data, 'artifacts_inventory', {}) or {}
+    artifacts_equipped = getattr(data, 'artifacts_equipped', {}) or {}
+    artifacts_resonance = getattr(data, 'artifacts_resonance', {}) or {}
+
+    # Build owned artifacts dict from inventory
+    owned_artifacts = {}
+    for art_key, art_data in artifacts_inventory.items():
+        if isinstance(art_data, dict):
+            owned_artifacts[art_key] = {
+                'stars': art_data.get('stars', 0),
+                'dupes': art_data.get('dupes', 0),
+                'potentials': art_data.get('potentials', []),
+            }
+
+    # Get equipped artifact keys by looking up names
+    # Import ARTIFACTS to map names to keys
+    from artifacts import ARTIFACTS
+    ARTIFACT_KEY_BY_NAME = {defn.name: key for key, defn in ARTIFACTS.items()}
+
+    equipped_artifact_keys = []
+    for i in range(3):
+        slot_data = artifacts_equipped.get(f'slot{i}', {})
+        if isinstance(slot_data, dict):
+            name = slot_data.get('name', '')
+            if name and name != '(Empty)':
+                key = ARTIFACT_KEY_BY_NAME.get(name)
+                if key:
+                    equipped_artifact_keys.append(key)
+
+    current_resonance = artifacts_resonance.get('resonance_level', 1)
+    # Calculate max resonance from total artifact stars
+    total_stars = sum(a.get('stars', 0) for a in owned_artifacts.values())
+    max_resonance = calculate_resonance_max_level(total_stars)
+
+    if owned_artifacts:
+        # Create a DPS function wrapper for artifact optimizer
+        def artifact_dps_func(stats, mode):
+            return calculate_dps(stats, mode)
+
+        artifact_analysis = get_artifact_recommendations_for_optimizer(
+            owned_artifacts=owned_artifacts,
+            equipped_artifact_keys=equipped_artifact_keys,
+            current_resonance_level=current_resonance,
+            resonance_max_level=max_resonance,
+            current_stats=current_stats,
+            calculate_dps_func=artifact_dps_func,
+            scenario=data.combat_mode,
+        )
+    else:
+        artifact_analysis = []
+
     # Cache results in session state
     st.session_state.optimizer_cube_analysis = cube_analysis
     st.session_state.optimizer_sf_analysis = sf_analysis
@@ -604,10 +663,10 @@ if refresh_clicked or 'optimizer_analysis_time' not in st.session_state:
     st.session_state.optimizer_tier_upgrade_analysis = tier_upgrade_analysis
     st.session_state.optimizer_weapon_analysis = weapon_analysis
     st.session_state.optimizer_summon_analysis = summon_analysis
+    st.session_state.optimizer_artifact_analysis = artifact_analysis
     st.session_state.optimizer_analysis_time = datetime.now()
 
-    if refresh_clicked:
-        st.success(f"Analysis refreshed! Found {len(cube_analysis or [])} cube, {len(tier_upgrade_analysis or [])} tier-up, {len(weapon_analysis)} weapon, {len(summon_analysis)} summon recommendations.")
+    st.success(f"Analysis complete! Found {len(cube_analysis or [])} cube, {len(tier_upgrade_analysis or [])} tier-up, {len(weapon_analysis)} weapon, {len(summon_analysis)} summon, {len(artifact_analysis)} artifact recommendations.")
 else:
     # Use cached results
     cube_analysis = st.session_state.get('optimizer_cube_analysis', [])
@@ -616,12 +675,15 @@ else:
     tier_upgrade_analysis = st.session_state.get('optimizer_tier_upgrade_analysis', [])
     weapon_analysis = st.session_state.get('optimizer_weapon_analysis', [])
     summon_analysis = st.session_state.get('optimizer_summon_analysis', [])
+    artifact_analysis = st.session_state.get('optimizer_artifact_analysis', [])
 
 # Show when analysis was last run
 with refresh_col2:
     if 'optimizer_analysis_time' in st.session_state:
         analysis_time = st.session_state.optimizer_analysis_time
         st.caption(f"Last analyzed: {analysis_time.strftime('%H:%M:%S')}")
+    else:
+        st.caption("Click 'Run Analysis' to generate recommendations")
 
 # ==============================================================================
 # DEBUG: Cube Analysis Raw Values
@@ -714,7 +776,7 @@ for sf in sf_analysis:
     })
 
 # Hero power (if there are lines to reroll)
-if hp_analysis['lines_to_reroll'] and hp_analysis['diamond_equivalent'] > 0:
+if hp_analysis and hp_analysis.get('lines_to_reroll') and hp_analysis.get('diamond_equivalent', 0) > 0:
     all_upgrades.append({
         'type': 'Hero Power',
         'subtype': 'Reroll',
@@ -805,6 +867,24 @@ for tier_rec in (tier_upgrade_analysis or []):
         },
     })
 
+# Artifact recommendations (awakening, resonance, chests, potential rerolls)
+for artifact_rec in (artifact_analysis or []):
+    # Skip if efficiency is very low
+    if artifact_rec['efficiency'] <= 0:
+        continue
+
+    all_upgrades.append({
+        'type': artifact_rec['type'],
+        'subtype': artifact_rec['subtype'],
+        'target': artifact_rec['target'],
+        'target_display': artifact_rec.get('target_display', artifact_rec['target']),
+        'description': artifact_rec['description'],
+        'cost': artifact_rec['cost'],
+        'dps_gain': artifact_rec['dps_gain'],
+        'efficiency': artifact_rec['efficiency'],
+        'details': artifact_rec.get('details', {}),
+    })
+
 # Sort by efficiency
 all_upgrades.sort(key=lambda x: x['efficiency'], reverse=True)
 
@@ -831,7 +911,7 @@ if selected:
 
     # Detailed path display
     for i, upg in enumerate(selected, 1):
-        type_icon = {"Cube": "🎲", "Starforce": "⭐", "Hero Power": "⚡", "Weapon": "🗡️", "Summon": "🎰"}.get(upg['type'], "❓")
+        type_icon = {"Cube": "🎲", "Starforce": "⭐", "Hero Power": "⚡", "Weapon": "🗡️", "Summon": "🎰", "Artifact": "🏺", "Resonance": "✨"}.get(upg['type'], "❓")
 
         with st.container():
             st.markdown(f"### #{i}. {type_icon} {upg['description']}")
@@ -990,7 +1070,7 @@ st.divider()
 with st.expander("📊 All Upgrade Options Ranked"):
     all_table = []
     for i, upg in enumerate(all_upgrades, 1):  # Show all upgrades, not just top 30
-        type_icon = {"Cube": "🎲", "Starforce": "⭐", "Hero Power": "⚡", "Weapon": "🗡️", "Summon": "🎰"}.get(upg['type'], "❓")
+        type_icon = {"Cube": "🎲", "Starforce": "⭐", "Hero Power": "⚡", "Weapon": "🗡️", "Summon": "🎰", "Artifact": "🏺", "Resonance": "✨"}.get(upg['type'], "❓")
 
         # Rank color
         if i <= 3:

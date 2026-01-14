@@ -101,7 +101,7 @@ EXPECTED_VALUES = {
         "base_stats_min": 0,
     },
     "Screenshot 2026-01-09 124159.png": {
-        "slot": "hat",
+        "slot": "cape",  # Fixed: image shows "Cape Slot Enhancement Effect"
         "level_min": 100,
         "level_max": 110,
         "tier": 4,

@@ -22,6 +22,13 @@ class ArtifactTier(Enum):
     LEGENDARY = "legendary"
 
 
+class CombatScenario(Enum):
+    """Combat scenarios for conditional artifact effects."""
+    NORMAL = "normal"       # Regular stage farming
+    BOSS = "boss"           # Boss stages (single target)
+    WORLD_BOSS = "world_boss"  # World Boss content
+
+
 class PotentialTier(Enum):
     """Artifact potential tiers."""
     RARE = "rare"
@@ -44,9 +51,78 @@ POTENTIAL_TIER_RATES = {
     PotentialTier.RARE: 0.435358,
 }
 
+# Stat roll probabilities (independent of tier)
+# Standard stats: 10.5075% each, Premium stats: 5.2895% each (half rate)
+STANDARD_STAT_RATE = 0.105075
+PREMIUM_STAT_RATE = 0.052895  # Half of standard
+
+POTENTIAL_STAT_RATES = {
+    # Standard stats (10.5075% each)
+    "main_stat_pct": STANDARD_STAT_RATE,
+    "damage_taken_decrease": STANDARD_STAT_RATE,
+    "defense": STANDARD_STAT_RATE,
+    "accuracy": STANDARD_STAT_RATE,
+    "crit_rate": STANDARD_STAT_RATE,
+    "min_damage_mult": STANDARD_STAT_RATE,
+    "max_damage_mult": STANDARD_STAT_RATE,
+    # Premium stats (5.2895% each - half rate)
+    "boss_damage": PREMIUM_STAT_RATE,
+    "normal_damage": PREMIUM_STAT_RATE,
+    "status_effect_damage": PREMIUM_STAT_RATE,
+    "damage": PREMIUM_STAT_RATE,
+    "def_pen": PREMIUM_STAT_RATE,
+}
+
+# Mystic tier value distribution (for stats with two values)
+MYSTIC_LOW_VALUE_CHANCE = 0.75   # 75% chance for lower value
+MYSTIC_HIGH_VALUE_CHANCE = 0.25  # 25% chance for higher value
+
 # Potential values by tier (stat: {tier: (low, high)})
+# For Mystic tier with two values: low has 75% chance, high has 25% chance
 POTENTIAL_VALUES = {
-    "main_stat": {
+    "main_stat_pct": {
+        PotentialTier.RARE: (2.0, 2.0),
+        PotentialTier.EPIC: (3.0, 3.0),
+        PotentialTier.UNIQUE: (4.5, 4.5),
+        PotentialTier.LEGENDARY: (7.0, 7.0),
+        PotentialTier.MYSTIC: (10.0, 12.0),
+    },
+    "damage_taken_decrease": {
+        PotentialTier.RARE: (2.0, 2.0),
+        PotentialTier.EPIC: (3.0, 3.0),
+        PotentialTier.UNIQUE: (4.5, 4.5),
+        PotentialTier.LEGENDARY: (7.0, 7.0),
+        PotentialTier.MYSTIC: (10.0, 12.0),
+    },
+    "defense": {
+        PotentialTier.RARE: (2.0, 2.0),
+        PotentialTier.EPIC: (3.0, 3.0),
+        PotentialTier.UNIQUE: (4.5, 4.5),
+        PotentialTier.LEGENDARY: (7.0, 7.0),
+        PotentialTier.MYSTIC: (10.0, 12.0),
+    },
+    "accuracy": {
+        PotentialTier.RARE: (2.0, 2.0),
+        PotentialTier.EPIC: (3.0, 3.0),
+        PotentialTier.UNIQUE: (4.5, 4.5),
+        PotentialTier.LEGENDARY: (7.0, 7.0),
+        PotentialTier.MYSTIC: (10.0, 12.0),
+    },
+    "crit_rate": {
+        PotentialTier.RARE: (2.0, 2.0),
+        PotentialTier.EPIC: (3.0, 3.0),
+        PotentialTier.UNIQUE: (4.5, 4.5),
+        PotentialTier.LEGENDARY: (7.0, 7.0),
+        PotentialTier.MYSTIC: (10.0, 12.0),
+    },
+    "min_damage_mult": {
+        PotentialTier.RARE: (2.0, 2.0),
+        PotentialTier.EPIC: (3.0, 3.0),
+        PotentialTier.UNIQUE: (4.5, 4.5),
+        PotentialTier.LEGENDARY: (7.0, 7.0),
+        PotentialTier.MYSTIC: (10.0, 12.0),
+    },
+    "max_damage_mult": {
         PotentialTier.RARE: (2.0, 2.0),
         PotentialTier.EPIC: (3.0, 3.0),
         PotentialTier.UNIQUE: (4.5, 4.5),
@@ -74,21 +150,14 @@ POTENTIAL_VALUES = {
         PotentialTier.LEGENDARY: (14.0, 14.0),
         PotentialTier.MYSTIC: (20.0, 24.0),
     },
+    "status_effect_damage": {
+        PotentialTier.RARE: (4.0, 4.0),
+        PotentialTier.EPIC: (6.0, 6.0),
+        PotentialTier.UNIQUE: (9.0, 9.0),
+        PotentialTier.LEGENDARY: (14.0, 14.0),
+        PotentialTier.MYSTIC: (20.0, 24.0),
+    },
     "def_pen": {
-        PotentialTier.RARE: (2.0, 2.0),
-        PotentialTier.EPIC: (3.0, 3.0),
-        PotentialTier.UNIQUE: (4.5, 4.5),
-        PotentialTier.LEGENDARY: (7.0, 7.0),
-        PotentialTier.MYSTIC: (10.0, 12.0),
-    },
-    "crit_rate": {
-        PotentialTier.RARE: (2.0, 2.0),
-        PotentialTier.EPIC: (3.0, 3.0),
-        PotentialTier.UNIQUE: (4.5, 4.5),
-        PotentialTier.LEGENDARY: (7.0, 7.0),
-        PotentialTier.MYSTIC: (10.0, 12.0),
-    },
-    "min_max_damage": {
         PotentialTier.RARE: (2.0, 2.0),
         PotentialTier.EPIC: (3.0, 3.0),
         PotentialTier.UNIQUE: (4.5, 4.5),
@@ -98,12 +167,21 @@ POTENTIAL_VALUES = {
 }
 
 # Premium stats appear at half rate
-PREMIUM_STATS = ["boss_damage", "normal_damage", "damage", "def_pen"]
+PREMIUM_STATS = ["boss_damage", "normal_damage", "status_effect_damage", "damage", "def_pen"]
 
-# Reconfigure costs
+# Reconfigure costs (meso + artifact enhancers)
 RECONFIGURE_COSTS = {
-    ArtifactTier.LEGENDARY: {"meso": 20000, "stones": 2000},
-    ArtifactTier.UNIQUE: {"meso": 15000, "stones": 1500},
+    ArtifactTier.LEGENDARY: {"meso": 20000, "artifact_enhancers": 2000},
+    ArtifactTier.UNIQUE: {"meso": 15000, "artifact_enhancers": 1500},
+    ArtifactTier.EPIC: {"meso": 10000, "artifact_enhancers": 1000},
+}
+
+# Maximum potential slots by artifact tier
+# Epic: 1 slot max, Unique: 2 slots max, Legendary: 3 slots max
+MAX_POTENTIAL_SLOTS_BY_TIER = {
+    ArtifactTier.EPIC: 1,
+    ArtifactTier.UNIQUE: 2,
+    ArtifactTier.LEGENDARY: 3,
 }
 
 # Potential slots unlock at these awakening levels
@@ -121,39 +199,39 @@ POTENTIAL_SLOT_UNLOCKS = {
 # =============================================================================
 
 # Drop rates from artifact chests (per artifact)
+# Tier rates: Epic 89.5%, Unique 9.5%, Legendary 1%
+# Individual rates = tier rate / number of artifacts in tier
 ARTIFACT_DROP_RATES = {
-    # Epic tier (common) - 22.375% each, 4 artifacts = 89.5% total
+    # Epic tier: 89.5% / 4 artifacts = 22.375% each
     "shamaness_marble": 0.22375,
     "contract_of_darkness": 0.22375,
-    "epic_artifact_3": 0.22375,  # placeholder
-    "epic_artifact_4": 0.22375,  # placeholder
+    "charm_of_undead": 0.22375,
+    "pigs_ribbon": 0.22375,
 
-    # Unique tier (uncommon) - 1.3571% each
+    # Unique tier: 9.5% / 7 artifacts = 1.357% each
     "rainbow_snail_shell": 0.013571,
     "arwens_glass_shoes": 0.013571,
     "mushmom_cap": 0.013571,
     "clear_spring_water": 0.013571,
-    "athena_pierces_old_gloves": 0.013571,
-    "zakums_stone_piece": 0.013571,
+    "athena_pierces_gloves": 0.013571,
+    "hexagon_necklace": 0.013571,
+    "zakum_raid_artifact": 0.013571,
 
-    # Unique tier (rare) - 0.07143% each
-    "chalice": 0.0007143,
-    "old_music_box": 0.0007143,
-    "silver_pendant": 0.0007143,
-
-    # Legendary tier - 0.07143% each
-    "hexagon_necklace": 0.0007143,
-    "book_of_ancient": 0.0007143,
-    "star_rock": 0.0007143,
-    "fire_flower": 0.0007143,
-    "soul_contract": 0.0007143,
-    "lit_lamp": 0.0007143,
-    "ancient_text_piece": 0.0007143,
-    "sayrams_necklace": 0.0007143,
-    "icy_soul_rock": 0.0007143,
-    "soul_pouch": 0.0007143,
-    "lunar_dew": 0.0007143,
-    "flaming_lava": 0.0007143,
+    # Legendary tier: 1% / 14 artifacts = 0.0714% each
+    "chalice": 0.000714,
+    "old_music_box": 0.000714,
+    "silver_pendant": 0.000714,
+    "book_of_ancient": 0.000714,
+    "star_rock": 0.000714,
+    "fire_flower": 0.000714,
+    "soul_contract": 0.000714,
+    "lit_lamp": 0.000714,
+    "ancient_text_piece": 0.000714,
+    "sayrams_necklace": 0.000714,
+    "icy_soul_rock": 0.000714,
+    "soul_pouch": 0.000714,
+    "lunar_dew": 0.000714,
+    "flaming_lava": 0.000714,
 }
 
 # Tier totals
@@ -169,36 +247,74 @@ ARTIFACT_TIER_DROP_RATES = {
 
 # Synthesis costs (number of max-star artifacts needed)
 SYNTHESIS_COSTS = {
-    # 20 Epic (★5) → 1 Random Unique
+    # 20 max-star Epic → 1 Random Unique
     (ArtifactTier.EPIC, ArtifactTier.UNIQUE): 20,
-    # 15 Unique (★5) → 1 Random Legendary
+    # 15 max-star Unique → 1 Random Legendary
     (ArtifactTier.UNIQUE, ArtifactTier.LEGENDARY): 15,
 }
 
 # =============================================================================
-# AWAKENING COSTS
+# AWAKENING COSTS (Per Tier)
 # =============================================================================
 
 # Cost to awaken artifact (duplicate artifacts needed per star)
-# Going from ★0 to ★1 needs 1 duplicate, ★1 to ★2 needs 1, etc.
-AWAKENING_COSTS = {
-    # star_level: duplicates_needed
-    1: 1,  # ★0 → ★1
-    2: 1,  # ★1 → ★2
-    3: 2,  # ★2 → ★3
-    4: 2,  # ★3 → ★4
-    5: 3,  # ★4 → ★5
+# Costs vary by tier
+AWAKENING_COSTS_BY_TIER = {
+    ArtifactTier.EPIC: {
+        # star_level: duplicates_needed
+        1: 5,   # ★0 → ★1
+        2: 7,   # ★1 → ★2
+        3: 12,  # ★2 → ★3
+        4: 16,  # ★3 → ★4
+        5: 20,  # ★4 → ★5
+    },
+    ArtifactTier.UNIQUE: {
+        1: 2,   # ★0 → ★1
+        2: 4,   # ★1 → ★2
+        3: 6,   # ★2 → ★3
+        4: 10,  # ★3 → ★4
+        5: 15,  # ★4 → ★5
+    },
+    ArtifactTier.LEGENDARY: {
+        1: 1,   # ★0 → ★1
+        2: 2,   # ★1 → ★2
+        3: 3,   # ★2 → ★3
+        4: 4,   # ★3 → ★4
+        5: 5,   # ★4 → ★5
+    },
 }
 
-# Total duplicates needed to reach each star level from ★0
-TOTAL_DUPLICATES_TO_STAR = {
-    0: 0,
-    1: 1,   # 1 duplicate
-    2: 2,   # 1 + 1
-    3: 4,   # 1 + 1 + 2
-    4: 6,   # 1 + 1 + 2 + 2
-    5: 9,   # 1 + 1 + 2 + 2 + 3
+# Total duplicates needed to reach each star level from ★0 (by tier)
+TOTAL_DUPLICATES_BY_TIER = {
+    ArtifactTier.EPIC: {
+        0: 0,
+        1: 5,    # 5
+        2: 12,   # 5 + 7
+        3: 24,   # 5 + 7 + 12
+        4: 40,   # 5 + 7 + 12 + 16
+        5: 60,   # 5 + 7 + 12 + 16 + 20
+    },
+    ArtifactTier.UNIQUE: {
+        0: 0,
+        1: 2,    # 2
+        2: 6,    # 2 + 4
+        3: 12,   # 2 + 4 + 6
+        4: 22,   # 2 + 4 + 6 + 10
+        5: 37,   # 2 + 4 + 6 + 10 + 15
+    },
+    ArtifactTier.LEGENDARY: {
+        0: 0,
+        1: 1,    # 1
+        2: 3,    # 1 + 2
+        3: 6,    # 1 + 2 + 3
+        4: 10,   # 1 + 2 + 3 + 4
+        5: 15,   # 1 + 2 + 3 + 4 + 5
+    },
 }
+
+# Legacy: Default awakening costs (Legendary tier for backwards compatibility)
+AWAKENING_COSTS = AWAKENING_COSTS_BY_TIER[ArtifactTier.LEGENDARY]
+TOTAL_DUPLICATES_TO_STAR = TOTAL_DUPLICATES_BY_TIER[ArtifactTier.LEGENDARY]
 
 # =============================================================================
 # ARTIFACT CHEST COSTS
@@ -209,6 +325,127 @@ ARTIFACT_CHEST_COSTS = {
     "red_diamond": 1500,     # 5/week limit
     "arena_coin": 500,       # 10/week limit
 }
+
+
+# =============================================================================
+# RESONANCE SYSTEM
+# =============================================================================
+
+# Resonance level cap formula:
+# max_level = RESONANCE_BASE_LEVEL_CAP + (total_artifact_stars * RESONANCE_LEVELS_PER_STAR)
+RESONANCE_BASE_LEVEL_CAP = 80
+RESONANCE_LEVELS_PER_STAR = 5
+
+# Maximum possible resonance level (25 artifacts × 5 stars × 5 levels/star + 80 base)
+# = 125 × 5 + 80 = 705
+RESONANCE_MAX_LEVEL = 705
+
+
+def calculate_resonance_max_level(total_artifact_stars: int) -> int:
+    """
+    Calculate maximum resonance level based on total artifact stars.
+
+    Args:
+        total_artifact_stars: Sum of all artifact star levels (0-125 for 25 artifacts at 5 stars each)
+
+    Returns:
+        Maximum resonance level achievable
+    """
+    return RESONANCE_BASE_LEVEL_CAP + (total_artifact_stars * RESONANCE_LEVELS_PER_STAR)
+
+
+def calculate_resonance_hp(level: int) -> int:
+    """
+    Calculate HP bonus at a given resonance level using geometric series.
+
+    Formula: HP(L) = round(1000 + 33.392 × (1.0035^L - 1.0035) / 0.0035)
+
+    The HP bonus grows at 0.35% per level, starting from 1000 at level 1.
+    Max error: ±1 across all tested levels (1-361).
+
+    Args:
+        level: Resonance level (1 to 705)
+
+    Returns:
+        Max HP bonus
+    """
+    if level < 1:
+        return 0
+    if level == 1:
+        return 1000
+    # Geometric series: HP = base + A * (B^L - B) / (B - 1)
+    A = 33.392
+    B = 1.0035
+    return round(1000 + A * (B ** level - B) / (B - 1))
+
+
+def calculate_resonance_main_stat(level: int) -> int:
+    """
+    Calculate main stat bonus (FLAT) at a given resonance level.
+
+    Formula: Main(L) = floor(HP(L) / 10)
+
+    Main stat is derived from HP, maintaining perfect 10:1 ratio.
+    Max error: ±1 across all tested levels (1-361).
+
+    Args:
+        level: Resonance level (1 to 705)
+
+    Returns:
+        Main stat bonus (DEX/STR/INT/LUK depending on class) - FLAT, not percentage
+    """
+    if level < 1:
+        return 0
+    return calculate_resonance_hp(level) // 10
+
+
+def calculate_resonance_upgrade_cost(level: int) -> int:
+    """
+    Calculate artifact enhancer cost to upgrade FROM a given level to level+1.
+
+    Formula: round(1490 + 18.28*L + 0.01537*L² + 0.0000195*L³)
+
+    Args:
+        level: Current resonance level
+
+    Returns:
+        Artifact enhancers needed to upgrade to next level
+    """
+    if level < 1:
+        return 0
+    return round(1490.0031 + 18.280250 * level + 0.01536632 * level**2 + 0.0000194991 * level**3)
+
+
+def calculate_resonance_total_cost(from_level: int, to_level: int) -> int:
+    """
+    Calculate total artifact enhancer cost to upgrade from one level to another.
+
+    Args:
+        from_level: Starting resonance level
+        to_level: Target resonance level
+
+    Returns:
+        Total artifact enhancers needed
+    """
+    if to_level <= from_level:
+        return 0
+    return sum(calculate_resonance_upgrade_cost(lvl) for lvl in range(from_level, to_level))
+
+
+def calculate_resonance_stats_at_level(level: int) -> Dict[str, int]:
+    """
+    Get all resonance stats at a given level.
+
+    Args:
+        level: Resonance level
+
+    Returns:
+        Dict with 'main_stat_flat' (FLAT bonus) and 'max_hp' values
+    """
+    return {
+        'main_stat_flat': calculate_resonance_main_stat(level),
+        'max_hp': calculate_resonance_hp(level),
+    }
 
 
 # =============================================================================
@@ -224,29 +461,92 @@ class ArtifactPotentialLine:
     slot: int  # 1, 2, or 3
 
 
+class EffectType(Enum):
+    """Types of artifact effects."""
+    FLAT = "flat"  # Direct additive bonus: stat += value
+    DERIVED = "derived"  # Value derived from another stat: stat += source_stat * multiplier
+    MULTIPLICATIVE = "multiplicative"  # Multiplicative bonus: applied as multiplier (e.g., Hex)
+
+
+@dataclass
+class ArtifactEffect:
+    """
+    A single stat effect from an artifact.
+
+    Effect types:
+    1. FLAT: Direct stat bonus (stat += base + stars * per_star)
+    2. DERIVED: Bonus derived from another stat (stat += source_stat * multiplier)
+    3. MULTIPLICATIVE: Applied as a multiplier (e.g., Hex's damage × multiplier)
+    """
+    stat: str  # Target stat to modify (e.g., "crit_rate", "max_damage_mult")
+    base: float  # Value at ★0 (or base multiplier for derived)
+    per_star: float  # Increase per star level
+    effect_type: EffectType = EffectType.FLAT
+
+    # For DERIVED effects: source stat to read from aggregated stats
+    derived_from: Optional[str] = None
+
+    # For MULTIPLICATIVE effects with stacking (e.g., Hex)
+    max_stacks: int = 1
+
+    def get_value(self, stars: int, stacks: Optional[int] = None) -> float:
+        """Get the value at given star level and stacks."""
+        base_value = self.base + (stars * self.per_star)
+
+        if self.effect_type == EffectType.MULTIPLICATIVE and self.max_stacks > 1:
+            # For stacking multiplicative effects like Hex
+            effective_stacks = min(stacks if stacks is not None else self.max_stacks, self.max_stacks)
+            return base_value * effective_stacks
+
+        return base_value
+
+    def is_derived(self) -> bool:
+        """Check if this is a derived effect."""
+        return self.effect_type == EffectType.DERIVED
+
+
 @dataclass
 class ArtifactDefinition:
     """Definition of an artifact type with scaling."""
     name: str
     tier: ArtifactTier
 
-    # Active effect (when equipped in slot)
-    active_description: str
-    active_stat: str  # What stat it affects
-    active_base: float  # Value at ★0
-    active_per_star: float  # Additional value per star
+    # Active effects (when equipped in slot) - list of ArtifactEffect
+    # Examples:
+    #   - Simple: [ArtifactEffect("crit_rate", 0.10, 0.02)]
+    #   - Two stats (Rainbow): [ArtifactEffect("crit_rate", 0.15, 0.03),
+    #                           ArtifactEffect("crit_damage", 0.20, 0.04)]
+    #   - Derived (Athena): [ArtifactEffect("attack_speed", 0.08, 0.016),
+    #                        ArtifactEffect("max_damage_mult", 0.25, 0.05, DERIVED, "attack_speed")]
+    #   - Multiplicative (Hex): [ArtifactEffect("damage_multiplier", 0.15, 0.03, MULTIPLICATIVE, max_stacks=3)]
+    active_effects: List[ArtifactEffect] = field(default_factory=list)
 
-    # Inventory effect (always active)
-    inventory_description: str
-    inventory_stat: str
-    inventory_base: float
-    inventory_per_star: float
+    # Active description for UI display
+    active_description: str = ""
 
-    # Special mechanics
+    # Inventory effect (always active) - could also be a list but keeping simple for now
+    inventory_description: str = ""
+    inventory_stat: str = ""
+    inventory_base: float = 0.0
+    inventory_per_star: float = 0.0
+
+    # LEGACY fields - will be removed once all artifacts are migrated
+    active_stat: str = ""  # What stat it affects
+    active_base: float = 0.0  # Value at ★0
+    active_per_star: float = 0.0  # Additional value per star
     max_stacks: int = 1  # For stackable effects like Hex
-    scales_with: Optional[str] = None  # For Book of Ancient (scales with crit_rate)
-    conversion_rate_base: float = 0.0  # Base conversion rate
-    conversion_rate_per_star: float = 0.0  # Per star increase
+    scales_with: Optional[str] = None  # For Book of Ancient
+    conversion_rate_base: float = 0.0
+    conversion_rate_per_star: float = 0.0
+
+    # Uptime mechanics (for DPS calculation)
+    scenario: Optional[str] = None  # Restrict to specific scenario (e.g., "world_boss")
+    buff_duration: float = 0.0  # Duration in seconds (0 = permanent)
+    buff_cooldown: float = 0.0  # Cooldown between procs (for timed buffs)
+    trigger_delay: float = 0.0  # Delay before first trigger (for boss-kill buffs like Chalice)
+    proc_chance: float = 1.0  # 1.0 = always, 0.15 = 15% proc rate
+    ramp_time: float = 0.0  # Time to reach max stacks (seconds)
+    max_targets: int = 0  # For per-target effects (Fire Flower)
 
     def get_active_value(self, stars: int) -> float:
         """Get active effect value at given awakening level."""
@@ -259,6 +559,79 @@ class ArtifactDefinition:
     def get_conversion_rate(self, stars: int) -> float:
         """Get conversion rate at given awakening level (for Book of Ancient)."""
         return self.conversion_rate_base + (stars * self.conversion_rate_per_star)
+
+    def get_effective_uptime(self, fight_duration: float = 60.0) -> float:
+        """Calculate effective uptime for DPS calculations.
+
+        Uses the unified cooldown_calc module for consistent calculations
+        across artifacts and skills.
+
+        Returns a value between 0.0 and 1.0 representing the fraction of time
+        the effect is active.
+        """
+        from cooldown_calc import calculate_buff_uptime
+        import math
+
+        # Handle trigger delay (e.g., Chalice waits for boss kill at ~10s)
+        # The delay shifts when the buff can first trigger, reducing effective buff time
+        trigger_delay = self.trigger_delay
+
+        # Timed buffs with cooldown - use unified module
+        if self.buff_duration > 0 and self.buff_cooldown > 0:
+            # Calculate uptime on the remaining fight duration after delay
+            remaining_duration = fight_duration - trigger_delay if not math.isinf(fight_duration) else fight_duration
+            if remaining_duration <= 0:
+                return 0.0
+            # Get uptime for the remaining duration
+            remaining_uptime = calculate_buff_uptime(
+                cooldown=self.buff_cooldown,
+                buff_duration=self.buff_duration,
+                fight_duration=remaining_duration,
+            )
+            # Scale back to full fight duration
+            return remaining_uptime * remaining_duration / fight_duration if not math.isinf(fight_duration) else remaining_uptime
+
+        # Stacking buffs: reduced effectiveness during ramp-up
+        if self.ramp_time > 0:
+            # At infinite fight duration, always at max stacks
+            if math.isinf(fight_duration):
+                return 1.0
+            if fight_duration <= 0:
+                return 0.0
+            # Average effectiveness = (full_duration + ramp_duration/2) / total_duration
+            full_duration = max(0, fight_duration - self.ramp_time)
+            if fight_duration > self.ramp_time:
+                return (full_duration + self.ramp_time * 0.5) / fight_duration
+            else:
+                # Fight ends during ramp
+                return 0.5 * fight_duration / self.ramp_time * 0.5
+
+        # Proc-based effects
+        if self.proc_chance < 1.0:
+            return self.proc_chance
+
+        # Always-on effects
+        return 1.0
+
+    def get_effective_value(self, stars: int, scenario: str = "normal",
+                            fight_duration: float = 60.0) -> float:
+        """Get effective active value accounting for uptime and scenario.
+
+        Returns 0 if the artifact doesn't apply to the given scenario.
+        """
+        # Check scenario restriction
+        if self.scenario and self.scenario != scenario:
+            return 0.0
+
+        base_value = self.get_active_value(stars)
+        uptime = self.get_effective_uptime(fight_duration)
+        return base_value * uptime
+
+    def applies_to_scenario(self, scenario: str) -> bool:
+        """Check if this artifact's active effect applies to a scenario."""
+        if self.scenario is None:
+            return True  # Universal effect
+        return self.scenario == scenario
 
 
 @dataclass
@@ -294,7 +667,7 @@ class ArtifactInstance:
         """
         # Stats that are percentages and need to be converted to decimals
         PERCENTAGE_STATS = {
-            "main_stat", "damage", "boss_damage", "normal_damage",
+            "main_stat_pct", "damage", "boss_damage", "normal_damage",
             "def_pen", "crit_rate", "min_max_damage"
         }
 
@@ -329,16 +702,14 @@ class ArtifactConfig:
         return total
 
     def get_resonance_bonus(self) -> Dict[str, float]:
-        """Get bonus stats from resonance."""
+        """Get bonus stats from resonance (FLAT main stat, not percentage)."""
         resonance = self.get_resonance()
-        # Approximate scaling based on known values
-        # ★55 = +500 main stat, +5003 HP
-        # ★65 = +650 main stat, +6504 HP
+        # See TODO_REFACTOR.md - this linear approximation should use calculate_resonance_stats_at_level()
         main_stat_per_star = 10.0
         hp_per_star = 100.0
         return {
             "main_stat_flat": resonance * main_stat_per_star,
-            "max_hp_flat": resonance * hp_per_star,
+            "max_hp": resonance * hp_per_star,
         }
 
     def get_equipped_active_stats(self) -> Dict[str, float]:
@@ -347,12 +718,17 @@ class ArtifactConfig:
         for artifact in self.equipped:
             if artifact is None:
                 continue
-            stat = artifact.definition.active_stat
-            value = artifact.get_active_value()
-            if stat in stats:
-                stats[stat] += value
-            else:
-                stats[stat] = value
+            # Use active_effects (all artifacts now use this format)
+            for effect in artifact.definition.active_effects:
+                # Skip derived effects - they're calculated from other stats
+                if effect.effect_type == EffectType.DERIVED:
+                    continue
+                stat = effect.stat
+                value = effect.get_value(artifact.stars)
+                if stat in stats:
+                    stats[stat] += value
+                else:
+                    stats[stat] = value
         return stats
 
     def get_inventory_stats(self) -> Dict[str, float]:
@@ -391,6 +767,47 @@ class ArtifactConfig:
 
         return stats
 
+    def get_stats(self, job_class=None):
+        """
+        Get all artifact stats as a StatBlock.
+
+        Note: This returns ADDITIVE stats only. Multiplicative effects like
+        Hex damage multiplier and derived effects (Book of Ancient CD from CR)
+        need special handling in DPS calculation.
+
+        Args:
+            job_class: Job class for main_stat mapping (defaults to Bowmaster)
+
+        Returns:
+            StatBlock with all artifact stats
+        """
+        from stats import StatBlock, create_stat_block_for_job
+        from job_classes import JobClass
+
+        if job_class is None:
+            job_class = JobClass.BOWMASTER
+
+        all_stats = self.get_all_stats()
+
+        # Map artifact stats to StatBlock fields
+        # Note: main_stat_flat from resonance, main_stat_pct from potentials
+        return create_stat_block_for_job(
+            job_class=job_class,
+            main_stat_flat=all_stats.get('main_stat_flat', 0),
+            main_stat_pct=all_stats.get('main_stat', 0),  # Artifact potentials use 'main_stat' for %
+            attack_flat=all_stats.get('attack_flat', 0),
+            damage_pct=all_stats.get('damage', 0) * 100 if all_stats.get('damage', 0) < 1 else all_stats.get('damage', 0),
+            boss_damage=all_stats.get('boss_damage', 0) * 100 if all_stats.get('boss_damage', 0) < 1 else all_stats.get('boss_damage', 0),
+            normal_damage=all_stats.get('normal_damage', 0) * 100 if all_stats.get('normal_damage', 0) < 1 else all_stats.get('normal_damage', 0),
+            crit_rate=all_stats.get('crit_rate', 0) * 100 if all_stats.get('crit_rate', 0) < 1 else all_stats.get('crit_rate', 0),
+            crit_damage=all_stats.get('crit_damage', 0) * 100 if all_stats.get('crit_damage', 0) < 1 else all_stats.get('crit_damage', 0),
+            final_damage=all_stats.get('final_damage', 0) * 100 if all_stats.get('final_damage', 0) < 1 else all_stats.get('final_damage', 0),
+            max_hp=all_stats.get('max_hp', 0),
+            def_pen=all_stats.get('def_pen', 0) * 100 if all_stats.get('def_pen', 0) < 1 else all_stats.get('def_pen', 0),
+            max_dmg_mult=all_stats.get('max_damage_mult', 0) * 100 if all_stats.get('max_damage_mult', 0) < 1 else all_stats.get('max_damage_mult', 0),
+            basic_attack_damage=all_stats.get('basic_attack_damage', 0) * 100 if all_stats.get('basic_attack_damage', 0) < 1 else all_stats.get('basic_attack_damage', 0),
+        )
+
 
 # =============================================================================
 # ARTIFACT DEFINITIONS
@@ -402,194 +819,396 @@ ARTIFACTS = {
     # -------------------------------------------------------------------------
     "hexagon_necklace": ArtifactDefinition(
         name="Hexagon Necklace",
-        tier=ArtifactTier.LEGENDARY,
+        tier=ArtifactTier.UNIQUE,  # Unique tier, not Legendary
         active_description="Damage +X% per stack (max 3 stacks)",
-        active_stat="hex_damage_per_stack",
-        active_base=0.20,  # 20% at ★0
-        active_per_star=0.02,  # +2% per star
-        inventory_description="Attack +600 (flat, doesn't scale)",
+        active_effects=[
+            ArtifactEffect(
+                stat="damage_multiplier",  # Applied as multiplier in DPS calc
+                base=0.15,  # 15% per stack at ★0
+                per_star=0.03,  # +3% per star → 30% per stack at ★5
+                effect_type=EffectType.MULTIPLICATIVE,
+                max_stacks=3,
+            ),
+        ],
+        inventory_description="Attack +X (flat)",
         inventory_stat="attack_flat",
-        inventory_base=600,
-        inventory_per_star=0,  # Doesn't scale
-        max_stacks=3,
+        inventory_base=400,
+        inventory_per_star=320,  # → 2000 at ★5 (same as other Uniques)
+        ramp_time=40.0,  # ~40s to reach 3 stacks
     ),
 
     "book_of_ancient": ArtifactDefinition(
         name="Book of Ancient",
         tier=ArtifactTier.LEGENDARY,
         active_description="Crit Rate +X%, Crit Damage by Y% of Crit Rate",
-        active_stat="crit_rate",
-        active_base=0.10,  # 10% at ★0
-        active_per_star=0.02,  # +2% per star
-        inventory_description="Crit Damage +X% (MP>=50%), doubled at MP>=75%",
-        inventory_stat="crit_damage_conditional",
-        inventory_base=0.20,  # 20% at ★0
-        inventory_per_star=0.04,  # +4% per star
-        scales_with="crit_rate",
-        conversion_rate_base=0.30,  # 30% of CR to CD at ★0
-        conversion_rate_per_star=0.06,  # +6% per star
+        active_effects=[
+            ArtifactEffect(stat="crit_rate", base=0.10, per_star=0.02),  # 10→20%
+            ArtifactEffect(
+                stat="crit_damage",
+                base=0.30,  # 30% of CR → CD at ★0
+                per_star=0.06,  # +6% per star → 60% at ★5
+                effect_type=EffectType.DERIVED,
+                derived_from="crit_rate",
+            ),
+        ],
+        inventory_description="Crit Rate +X%",
+        inventory_stat="crit_rate",
+        inventory_base=0.05,  # 5% at ★0
+        inventory_per_star=0.01,  # +1% per star → 10% at ★5
     ),
 
     "chalice": ArtifactDefinition(
         name="Chalice",
         tier=ArtifactTier.LEGENDARY,
         active_description="Final Damage +X% for 30s on boss kill",
-        active_stat="final_damage_conditional",
-        active_base=0.18,  # 18% at ★0
-        active_per_star=0.03,  # +3% per star (from ★2)
+        active_effects=[
+            ArtifactEffect(stat="final_damage", base=0.15, per_star=0.03),  # 15→30%
+        ],
         inventory_description="Damage +X%",
         inventory_stat="damage",
-        inventory_base=0.35,  # 35% at ★0
-        inventory_per_star=0.035,  # +3.5% per star
+        inventory_base=0.30,  # 30% at ★0
+        inventory_per_star=0.06,  # +6% per star → 60% at ★5
+        buff_duration=30.0,  # 30s after boss kill
+        buff_cooldown=10.0,  # Average time between boss kills on stages with normals
+        trigger_delay=10.0,  # Initial delay before first boss kill
     ),
 
     "star_rock": ArtifactDefinition(
         name="Star Rock",
         tier=ArtifactTier.LEGENDARY,
-        active_description="Enemy Dmg Taken +X%, Boss Damage +Y%",
-        active_stat="boss_damage",
-        active_base=0.50,  # 50% boss dmg at ★0
-        active_per_star=0.10,  # +10% per star
+        active_description="Self Dmg Taken +X%, Boss Damage +Y%",
+        active_effects=[
+            ArtifactEffect(stat="boss_damage", base=0.50, per_star=0.10),  # 50→100%
+        ],
         inventory_description="Defense +X%",
         inventory_stat="defense",
-        inventory_base=0.10,  # 10% at ★0
-        inventory_per_star=0.02,  # +2% per star
+        inventory_base=0.08,  # 8% at ★0
+        inventory_per_star=0.02,  # +2% per star → 18% at ★5
     ),
 
     "sayrams_necklace": ArtifactDefinition(
         name="Sayram's Necklace",
         tier=ArtifactTier.LEGENDARY,
         active_description="Normal Dmg +X% (2+ targets), Boss +Y% (1 target)",
-        active_stat="normal_damage",
-        active_base=0.30,  # 30% normal at ★0
-        active_per_star=0.06,  # +6% per star
+        active_effects=[
+            ArtifactEffect(stat="normal_damage", base=0.30, per_star=0.06),  # 30→60%
+        ],
         inventory_description="Basic Attack Damage +X%",
         inventory_stat="basic_attack_damage",
         inventory_base=0.15,  # 15% at ★0
-        inventory_per_star=0.03,  # +3% per star
+        inventory_per_star=0.03,  # +3% per star → 30% at ★5 (★2 = 21%)
     ),
 
     "lit_lamp": ArtifactDefinition(
         name="Lit Lamp",
         tier=ArtifactTier.LEGENDARY,
         active_description="[World Boss] Final Damage +X%",
-        active_stat="final_damage_world_boss",
-        active_base=0.20,  # 20% at ★0
-        active_per_star=0.04,  # +4% per star
+        active_effects=[
+            ArtifactEffect(stat="final_damage", base=0.20, per_star=0.04),  # 20→40%
+        ],
         inventory_description="Boss Monster Damage +X%",
         inventory_stat="boss_damage",
         inventory_base=0.15,  # 15% at ★0
-        inventory_per_star=0.03,  # +3% per star
+        inventory_per_star=0.03,  # +3% per star → 30% at ★5
+        scenario="world_boss",  # Only active in World Boss
     ),
 
     "soul_contract": ArtifactDefinition(
         name="Soul Contract",
         tier=ArtifactTier.LEGENDARY,
         active_description="[Chapter Hunt] Cooldown -X%",
-        active_stat="cooldown_reduction",
-        active_base=0.20,  # 20% at ★0
-        active_per_star=0.04,  # +4% per star
+        active_effects=[
+            ArtifactEffect(stat="cooldown_reduction", base=0.20, per_star=0.04),  # 20→40%
+        ],
         inventory_description="Damage +X%",
         inventory_stat="damage",
         inventory_base=0.15,  # 15% at ★0
-        inventory_per_star=0.03,  # +3% per star
+        inventory_per_star=0.03,  # +3% per star → 30% at ★5
+        scenario="chapter",  # Only active in Chapter Hunt
     ),
 
     "ancient_text_piece": ArtifactDefinition(
         name="Ancient Text Piece",
         tier=ArtifactTier.LEGENDARY,
         active_description="[Guild Conquest] Final Damage +X%",
-        active_stat="final_damage_guild",
-        active_base=0.20,  # 20% at ★0
-        active_per_star=0.04,  # +4% per star
+        active_effects=[
+            ArtifactEffect(stat="final_damage", base=0.20, per_star=0.04),  # 20→40%
+        ],
         inventory_description="Max Damage Multiplier +X%",
         inventory_stat="max_damage_mult",
         inventory_base=0.15,  # 15% at ★0
-        inventory_per_star=0.03,  # +3% per star
+        inventory_per_star=0.03,  # +3% per star → 30% at ★5
+        scenario="guild",  # Only active in Guild Conquest
     ),
 
     "clear_spring_water": ArtifactDefinition(
         name="Clear Spring Water",
-        tier=ArtifactTier.LEGENDARY,
+        tier=ArtifactTier.UNIQUE,  # Unique tier, not Legendary
         active_description="[Growth Dungeon] Final Damage +X%",
-        active_stat="final_damage_growth",
-        active_base=0.12,  # 12% at ★0
-        active_per_star=0.04,  # +4% per star
-        inventory_description="Max Damage Multiplier +X%",
-        inventory_stat="max_damage_mult",
+        active_effects=[
+            ArtifactEffect(stat="final_damage", base=0.10, per_star=0.02),  # 10→20%
+        ],
+        inventory_description="Attack +X (flat)",
+        inventory_stat="attack_flat",
+        inventory_base=400,  # ~400 at ★0
+        inventory_per_star=320,  # → 2000 at ★5
+        scenario="growth",  # Only active in Growth Dungeon
+    ),
+
+    # -------------------------------------------------------------------------
+    # LEGENDARY ARTIFACTS (continued)
+    # -------------------------------------------------------------------------
+    "fire_flower": ArtifactDefinition(
+        name="Fire Flower",
+        tier=ArtifactTier.LEGENDARY,  # Legendary tier
+        active_description="Final Damage +X% per target (max 10)",
+        active_effects=[
+            ArtifactEffect(
+                stat="final_damage",
+                base=0.01,  # 1% per target at ★0
+                per_star=0.002,  # +0.2% per star → 2% per target at ★5
+                effect_type=EffectType.FLAT,
+                max_stacks=10,  # Max 10 targets
+            ),
+        ],
+        inventory_description="Normal Monster Damage +X%",
+        inventory_stat="normal_damage",
         inventory_base=0.15,  # 15% at ★0
-        inventory_per_star=0.03,  # +3% per star
+        inventory_per_star=0.03,  # +3% per star → 30% at ★5
+        max_targets=10,
+    ),
+
+    "icy_soul_rock": ArtifactDefinition(
+        name="Icy Soul Rock",
+        tier=ArtifactTier.LEGENDARY,  # Legendary tier
+        active_description="MP regen + Crit Damage +X% at MP>=50% (doubled at 75%)",
+        active_effects=[
+            # Assumes 75%+ MP uptime (doubled value)
+            ArtifactEffect(stat="crit_damage", base=0.40, per_star=0.08),  # 40→80% (doubled from 20→40%)
+        ],
+        inventory_description="Critical Damage +X%",
+        inventory_stat="crit_damage",
+        inventory_base=0.09,  # 9% at ★0
+        inventory_per_star=0.03,  # +3% per star → 24% at ★5
+    ),
+
+    "silver_pendant": ArtifactDefinition(
+        name="Silver Pendant",
+        tier=ArtifactTier.LEGENDARY,  # Legendary tier
+        active_description="Target damage taken +X% (15% proc)",
+        active_effects=[
+            ArtifactEffect(stat="enemy_damage_taken", base=0.10, per_star=0.02),  # 10→20%
+        ],
+        inventory_description="Defense Penetration +X%",
+        inventory_stat="def_pen",
+        inventory_base=0.05,  # 5% at ★0
+        inventory_per_star=0.01,  # +1% per star → 10% at ★5
+        proc_chance=0.15,  # 15% proc rate
     ),
 
     # -------------------------------------------------------------------------
     # UNIQUE ARTIFACTS
     # -------------------------------------------------------------------------
-    "fire_flower": ArtifactDefinition(
-        name="Fire Flower",
-        tier=ArtifactTier.UNIQUE,
-        active_description="Final Damage +X% per target (max 10)",
-        active_stat="final_damage_per_target",
-        active_base=0.01,  # 1% at ★0
-        active_per_star=0.002,  # +0.2% per star
-        inventory_description="Normal Monster Damage +X%",
-        inventory_stat="normal_damage",
-        inventory_base=0.15,  # 15% at ★0
-        inventory_per_star=0.03,  # +3% per star
-    ),
-
-    "icy_soul_rock": ArtifactDefinition(
-        name="Icy Soul Rock",
-        tier=ArtifactTier.UNIQUE,
-        active_description="MP regen + Crit Damage +X% at MP>=50% (doubled at 75%)",
-        active_stat="crit_damage_mp_conditional",
-        active_base=0.20,  # 20% at ★0
-        active_per_star=0.04,  # +4% per star
-        inventory_description="Critical Damage +X%",
-        inventory_stat="crit_damage",
-        inventory_base=0.10,  # 10% at ★0
-        inventory_per_star=0.03,  # +3% per star
-    ),
-
-    "silver_pendant": ArtifactDefinition(
-        name="Silver Pendant",
-        tier=ArtifactTier.UNIQUE,
-        active_description="Target damage taken +10%, HP recovery -5%",
-        active_stat="enemy_damage_taken",
-        active_base=0.10,
-        active_per_star=0,
-        inventory_description="Defense Penetration +X%",
-        inventory_stat="def_pen",
-        inventory_base=0.05,  # 5% at ★0
-        inventory_per_star=0.01,  # +1% per star
-    ),
-
-    # -------------------------------------------------------------------------
-    # EPIC ARTIFACTS (shared inventory effect)
-    # -------------------------------------------------------------------------
     "rainbow_snail_shell": ArtifactDefinition(
         name="Rainbow-colored Snail Shell",
-        tier=ArtifactTier.EPIC,
-        active_description="+30% CR, +40% CD for 15s at battle start",
-        active_stat="battle_start_buff",
-        active_base=0.30,
-        active_per_star=0,
-        inventory_description="Attack +X / Defense +Y",
+        tier=ArtifactTier.UNIQUE,
+        active_description="CR +X%, CD +Y% for 15s at battle start",
+        active_effects=[
+            ArtifactEffect(stat="crit_rate", base=0.15, per_star=0.03),  # 15→30%
+            ArtifactEffect(stat="crit_damage", base=0.20, per_star=0.04),  # 20→40%
+        ],
+        inventory_description="Attack +X (flat)",
         inventory_stat="attack_flat",
-        inventory_base=1600,
-        inventory_per_star=80,  # 2000 at ★5
+        inventory_base=400,
+        inventory_per_star=320,  # → 2000 at ★5
+        buff_duration=15.0,  # 15s at battle start
+        buff_cooldown=float('inf'),  # One-time buff (never cycles) → 0% uptime at infinite duration
     ),
 
     "mushmom_cap": ArtifactDefinition(
         name="Mushmom's Cap",
-        tier=ArtifactTier.EPIC,
-        active_description="+2% damage per Acc exceeding Evasion (max 40%)",
-        active_stat="accuracy_damage",
-        active_base=0.02,
-        active_per_star=0,
-        inventory_description="Attack +X / Defense +Y",
+        tier=ArtifactTier.UNIQUE,
+        active_description="Damage +X% per Acc exceeding Evasion (max Y%)",
+        active_effects=[
+            # Accuracy-based damage is complex; using average estimate of 50% of max cap
+            ArtifactEffect(stat="damage", base=0.10, per_star=0.02),  # ~10→20% (half of max 20→40%)
+        ],
+        inventory_description="Attack +X (flat)",
         inventory_stat="attack_flat",
-        inventory_base=1600,
-        inventory_per_star=80,
+        inventory_base=400,
+        inventory_per_star=320,  # → 2000 at ★5
+        # Max cap: 20% at ★0 → 40% at ★5
+    ),
+
+    # -------------------------------------------------------------------------
+    # EPIC ARTIFACTS
+    # -------------------------------------------------------------------------
+    "shamaness_marble": ArtifactDefinition(
+        name="Shamaness Marble",
+        tier=ArtifactTier.EPIC,
+        active_description="Buff duration +X%",
+        active_effects=[
+            ArtifactEffect(stat="buff_duration", base=0.06, per_star=0.012),  # 6→12% (utility, no direct DPS)
+        ],
+        inventory_description="Attack +X (flat)",
+        inventory_stat="attack_flat",
+        inventory_base=200,
+        inventory_per_star=160,  # → 1000 at ★5
+    ),
+
+    "contract_of_darkness": ArtifactDefinition(
+        name="Contract of Darkness",
+        tier=ArtifactTier.EPIC,
+        active_description="Crit Rate +X% vs bosses",
+        active_effects=[
+            ArtifactEffect(stat="crit_rate", base=0.08, per_star=0.016),  # 8→16% (vs bosses, but counted as general CR)
+        ],
+        inventory_description="Attack +X (flat)",
+        inventory_stat="attack_flat",
+        inventory_base=200,
+        inventory_per_star=160,  # → 1000 at ★5
+    ),
+
+    "charm_of_undead": ArtifactDefinition(
+        name="Charm of the Undead",
+        tier=ArtifactTier.EPIC,
+        active_description="ATK +X% for 5s every 10s",
+        active_effects=[
+            ArtifactEffect(stat="attack_buff", base=0.10, per_star=0.02),  # 10→20%
+        ],
+        inventory_description="Attack +X (flat)",
+        inventory_stat="attack_flat",
+        inventory_base=200,
+        inventory_per_star=160,  # → 1000 at ★5
+        buff_duration=5.0,
+        buff_cooldown=10.0,  # 50% uptime
+    ),
+
+    "pigs_ribbon": ArtifactDefinition(
+        name="Pig's Ribbon",
+        tier=ArtifactTier.EPIC,
+        active_description="HP/MP recovery +X% on attack",
+        active_effects=[
+            ArtifactEffect(stat="hp_mp_recovery", base=0.01, per_star=0.002),  # 1→2% (utility, no DPS)
+        ],
+        inventory_description="Attack +X (flat)",
+        inventory_stat="attack_flat",
+        inventory_base=200,
+        inventory_per_star=160,  # → 1000 at ★5
+    ),
+
+    # -------------------------------------------------------------------------
+    # UNIQUE ARTIFACTS (additional)
+    # -------------------------------------------------------------------------
+    "arwens_glass_shoes": ArtifactDefinition(
+        name="Arwen's Glass Shoes",
+        tier=ArtifactTier.UNIQUE,
+        active_description="Companion duration +X%",
+        active_effects=[
+            ArtifactEffect(stat="companion_duration", base=0.20, per_star=0.04),  # 20→40% (utility, no direct DPS)
+        ],
+        inventory_description="Attack +X (flat)",
+        inventory_stat="attack_flat",
+        inventory_base=400,
+        inventory_per_star=320,  # → 2000 at ★5
+    ),
+
+    "athena_pierces_gloves": ArtifactDefinition(
+        name="Athena Pierce's Old Gloves",
+        tier=ArtifactTier.UNIQUE,
+        active_description="Atk Spd +X%, Max Dmg +Y% of Atk Spd",
+        active_effects=[
+            ArtifactEffect(stat="attack_speed", base=0.08, per_star=0.016),  # 8→16%
+            ArtifactEffect(
+                stat="max_damage_mult",
+                base=0.25,  # 25% of Atk Speed → Max Dmg at ★0
+                per_star=0.05,  # +5% per star → 50% at ★5
+                effect_type=EffectType.DERIVED,
+                derived_from="attack_speed",
+            ),
+        ],
+        inventory_description="Attack +X (flat)",
+        inventory_stat="attack_flat",
+        inventory_base=400,
+        inventory_per_star=320,  # → 2000 at ★5
+    ),
+
+    # -------------------------------------------------------------------------
+    # LEGENDARY ARTIFACTS (additional)
+    # -------------------------------------------------------------------------
+    "old_music_box": ArtifactDefinition(
+        name="Old Music Box",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="ATK +X% for 25s on debuff (CD 20s)",
+        active_effects=[
+            ArtifactEffect(stat="attack_buff", base=0.25, per_star=0.05),  # 25→50%
+        ],
+        inventory_description="Debuff Tolerance +X",
+        inventory_stat="debuff_tolerance",
+        inventory_base=8,  # 8 at ★0
+        inventory_per_star=2,  # +2 per star → 18 at ★5
+        buff_duration=25.0,
+        buff_cooldown=20.0,  # ~55% uptime
+    ),
+
+    "lunar_dew": ArtifactDefinition(
+        name="Lunar Dew",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="HP recovery +X% on hit",
+        active_effects=[
+            ArtifactEffect(stat="hp_recovery", base=0.03, per_star=0.006),  # 3→6% (utility, no DPS)
+        ],
+        inventory_description="Damage Taken Decrease +X%",
+        inventory_stat="damage_taken_decrease",
+        inventory_base=0.04,  # 4% at ★0
+        inventory_per_star=0.01,  # +1% per star → 9% at ★5
+    ),
+
+    "soul_pouch": ArtifactDefinition(
+        name="Soul Pouch",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="[Arena] Final Damage +X%",
+        active_effects=[
+            ArtifactEffect(stat="final_damage", base=0.20, per_star=0.04),  # 20→40%
+        ],
+        inventory_description="Evasion +X",
+        inventory_stat="evasion",
+        inventory_base=16,  # 16 at ★0
+        inventory_per_star=4,  # +4 per star → 36 at ★5
+        scenario="arena",  # Only active in Arena
+    ),
+
+    # -------------------------------------------------------------------------
+    # ZAKUM RAID ARTIFACT
+    # -------------------------------------------------------------------------
+    "zakum_raid_artifact": ArtifactDefinition(
+        name="Zakum Raid Artifact",
+        tier=ArtifactTier.UNIQUE,
+        active_description="[Zakum Raid] Final Damage +X%",
+        active_effects=[
+            ArtifactEffect(stat="final_damage", base=0.20, per_star=0.08),  # 20→60%
+        ],
+        inventory_description="Final Damage +X%",
+        inventory_stat="final_damage",
+        inventory_base=0.01,  # 1% at ★0
+        inventory_per_star=0.002,  # +0.2% per star → 2% at ★5
+        scenario="zakum",  # Only active in Zakum Raid
+    ),
+
+    # -------------------------------------------------------------------------
+    # FLAMING LAVA (Complex active effect - simplified)
+    # -------------------------------------------------------------------------
+    "flaming_lava": ArtifactDefinition(
+        name="Flaming Lava",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="Complex effect (simplified model)",
+        active_effects=[
+            ArtifactEffect(stat="utility", base=0.0, per_star=0.0),  # Hard to model, treating as utility
+        ],
+        inventory_description="Accuracy +X",
+        inventory_stat="accuracy",
+        inventory_base=10,  # 10 at ★0
+        inventory_per_star=2,  # +2 per star → 20 at ★5
     ),
 }
 
@@ -600,14 +1219,89 @@ ARTIFACTS = {
 
 def calculate_hex_multiplier(stars: int, stacks: int = 3) -> float:
     """
-    Calculate Hexagon Necklace total damage multiplier.
+    Calculate Hexagon Necklace total damage multiplier at a given stack count.
 
     At 3 stacks:
-    ★0: 1.60, ★1: 1.66, ★2: 1.72, ★3: 1.78, ★4: 1.84, ★5: 1.90
+    ★0: 1.45, ★1: 1.54, ★2: 1.63, ★3: 1.72, ★4: 1.81, ★5: 1.90
     """
     hex_def = ARTIFACTS["hexagon_necklace"]
-    per_stack = hex_def.get_active_value(stars)
+    # Get per-stack value from active_effects (new format)
+    # Use stacks=1 to get single-stack value, then multiply by actual stacks
+    if hex_def.active_effects:
+        effect = hex_def.active_effects[0]
+        per_stack = effect.base + (stars * effect.per_star)  # base value without stacks multiplier
+    else:
+        per_stack = hex_def.get_active_value(stars)
     return 1 + (min(stacks, 3) * per_stack)
+
+
+def calculate_hex_average_multiplier(stars: int, fight_duration: float) -> float:
+    """
+    Calculate average Hex Necklace multiplier over a fight.
+
+    Hex stacks build up every 20 seconds:
+    - 0-20s: 0 stacks (multiplier = 1.0)
+    - 21-40s: 1 stack
+    - 41-60s: 2 stacks
+    - 61+s: 3 stacks (max)
+
+    Args:
+        stars: Artifact star level (0-5)
+        fight_duration: Total fight duration in seconds (use inf for long/infinite fights)
+
+    Returns:
+        Time-weighted average multiplier over the fight
+    """
+    if fight_duration <= 0:
+        return 1.0
+
+    hex_def = ARTIFACTS["hexagon_necklace"]
+    # Get per-stack value from active_effects (new format)
+    # Use base value directly without stacks multiplier
+    if hex_def.active_effects:
+        effect = hex_def.active_effects[0]
+        per_stack = effect.base + (stars * effect.per_star)
+    else:
+        per_stack = hex_def.get_active_value(stars)
+
+    # For infinite duration, return max stacks multiplier
+    if fight_duration == float('inf'):
+        return 1 + (3 * per_stack)  # Max 3 stacks
+
+    # Stack thresholds (in seconds)
+    stack_times = [20, 40, 60]  # Time when stack 1, 2, 3 become active
+
+    # Calculate weighted average multiplier
+    total_weight = 0.0
+    weighted_mult = 0.0
+
+    prev_time = 0
+    for i, threshold in enumerate(stack_times):
+        stacks = i  # 0, 1, 2 stacks during this period
+        if fight_duration <= threshold:
+            # Fight ends before reaching this threshold
+            duration = fight_duration - prev_time
+            if duration > 0:
+                mult = 1 + (stacks * per_stack)
+                weighted_mult += mult * duration
+                total_weight += duration
+            break
+        else:
+            # Full duration at this stack count
+            duration = threshold - prev_time
+            mult = 1 + (stacks * per_stack)
+            weighted_mult += mult * duration
+            total_weight += duration
+            prev_time = threshold
+    else:
+        # Fight continues past 60s at 3 stacks
+        remaining = fight_duration - 60
+        if remaining > 0:
+            mult = 1 + (3 * per_stack)  # Max 3 stacks
+            weighted_mult += mult * remaining
+            total_weight += remaining
+
+    return weighted_mult / total_weight if total_weight > 0 else 1.0
 
 
 def calculate_book_of_ancient_bonus(stars: int, crit_rate: float) -> Tuple[float, float]:
@@ -892,9 +1586,13 @@ def calculate_artifact_upgrade_efficiency(
     definition = ARTIFACTS[artifact_key]
     drop_rate = ARTIFACT_DROP_RATES.get(artifact_key, 0)
 
+    # Get tier-specific duplicate costs
+    tier = definition.tier
+    tier_dupes = TOTAL_DUPLICATES_BY_TIER.get(tier, TOTAL_DUPLICATES_BY_TIER[ArtifactTier.LEGENDARY])
+
     # Calculate duplicates needed
-    current_dupes = TOTAL_DUPLICATES_TO_STAR.get(current_stars, 0)
-    target_dupes = TOTAL_DUPLICATES_TO_STAR.get(target_stars, 0)
+    current_dupes = tier_dupes.get(current_stars, 0)
+    target_dupes = tier_dupes.get(target_stars, 0)
     dupes_needed = target_dupes - current_dupes
 
     if dupes_needed <= 0:

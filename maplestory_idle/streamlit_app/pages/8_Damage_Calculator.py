@@ -42,7 +42,7 @@ def aggregate_stats():
     return shared_aggregate_stats(data)
 
 
-def calculate_dps(stats, combat_mode='stage', enemy_def=None):
+def calculate_dps(stats, combat_mode='stage', enemy_def=None, log_actions=False):
     """Wrapper that calls shared calculate_dps with correct enemy defense."""
     # Determine enemy defense based on combat mode if not explicitly provided
     if enemy_def is None:
@@ -56,7 +56,17 @@ def calculate_dps(stats, combat_mode='stage', enemy_def=None):
             except (ValueError, AttributeError):
                 chapter_num = 27
             enemy_def = get_enemy_defense(chapter_num)
-    return shared_calculate_dps(stats, combat_mode, enemy_def)
+
+    # Check if user has enabled realistic DPS calculation
+    use_realistic_dps = getattr(data, 'use_realistic_dps', False)
+    boss_importance = getattr(data, 'boss_importance', 70) / 100.0
+
+    return shared_calculate_dps(
+        stats, combat_mode, enemy_def,
+        use_realistic_dps=use_realistic_dps,
+        boss_importance=boss_importance,
+        log_actions=log_actions,
+    )
 
 
 st.title("💥 Damage Calculator")
@@ -78,8 +88,9 @@ else:
         chapter_num = 27
     enemy_def = get_enemy_defense(chapter_num)
 
-# Calculate DPS
-result = calculate_dps(stats, combat_mode, enemy_def)
+# Calculate DPS (request fight log if realistic DPS is enabled)
+use_realistic_dps = getattr(data, 'use_realistic_dps', False)
+result = calculate_dps(stats, combat_mode, enemy_def, log_actions=use_realistic_dps)
 
 # Display DPS
 col1, col2 = st.columns([2, 1])
@@ -212,3 +223,103 @@ Based on your current stats, here are general recommendations:
 - **Low on Final Damage?** Very valuable as it's multiplicative (each source multiplies separately)
 - **Low on Defense Pen?** Important for higher chapter progression (also multiplicative stacking)
 """)
+
+# Fight Simulation Log (only when realistic DPS is enabled)
+fight_log = result.get('fight_log')
+if fight_log:
+    st.divider()
+    st.subheader("Fight Simulation Log")
+
+    # Determine mob duration for phase labels
+    from stage_settings import COMBAT_SCENARIO_PARAMS, get_combat_mode_from_string
+    combat_mode_enum = get_combat_mode_from_string(combat_mode)
+    scenario = COMBAT_SCENARIO_PARAMS.get(combat_mode_enum)
+    if scenario:
+        mob_duration = scenario.fight_duration * scenario.mob_time_fraction
+        fight_duration = scenario.fight_duration
+    else:
+        mob_duration = 36.0
+        fight_duration = 60.0
+
+    # Summary stats
+    mob_actions = [e for e in fight_log if e.phase == 'mob']
+    boss_actions = [e for e in fight_log if e.phase == 'boss']
+
+    summary_cols = st.columns(4)
+    with summary_cols[0]:
+        st.metric("Total Actions", len(fight_log))
+    with summary_cols[1]:
+        st.metric("Mob Phase Actions", len(mob_actions))
+    with summary_cols[2]:
+        st.metric("Boss Phase Actions", len(boss_actions))
+    with summary_cols[3]:
+        total_damage = sum(e.damage for e in fight_log)
+        st.metric("Total Damage", f"{total_damage:,.0f}")
+
+    # Skill usage breakdown
+    from collections import Counter
+    skill_counter = Counter(e.skill_name for e in fight_log)
+    skill_damage = {}
+    for entry in fight_log:
+        skill_damage[entry.skill_name] = skill_damage.get(entry.skill_name, 0) + entry.damage
+
+    st.markdown("**Skill Usage Summary:**")
+    skill_data = []
+    for skill_name, count in skill_counter.most_common():
+        display_name = skill_name.replace('_', ' ').title()
+        damage = skill_damage.get(skill_name, 0)
+        pct = (damage / total_damage * 100) if total_damage > 0 else 0
+        skill_data.append({
+            'Skill': display_name,
+            'Uses': count,
+            'Total Damage': f"{damage:,.0f}",
+            '% of Damage': f"{pct:.1f}%",
+        })
+
+    import pandas as pd
+    st.dataframe(pd.DataFrame(skill_data), hide_index=True, use_container_width=True)
+
+    # Detailed log in expander
+    with st.expander("Detailed Action Log", expanded=False):
+        st.markdown(f"*Mob Phase: 0.0s - {mob_duration:.1f}s | Boss Phase: {mob_duration:.1f}s - {fight_duration:.1f}s*")
+
+        # Group consecutive same-skill actions
+        log_entries = []
+        i = 0
+        while i < len(fight_log):
+            entry = fight_log[i]
+            count = 1
+            total_dmg = entry.damage
+            end_time = entry.time + entry.cast_time
+
+            # Look ahead for same skill in same phase
+            j = i + 1
+            while j < len(fight_log) and fight_log[j].skill_name == entry.skill_name and fight_log[j].phase == entry.phase:
+                count += 1
+                total_dmg += fight_log[j].damage
+                end_time = fight_log[j].time + fight_log[j].cast_time
+                j += 1
+
+            display_name = entry.skill_name.replace('_', ' ').title()
+            phase_emoji = "M" if entry.phase == 'mob' else "B"
+
+            if count > 1:
+                log_entries.append({
+                    'Time': f"{entry.time:.1f}s - {end_time:.1f}s",
+                    'Phase': phase_emoji,
+                    'Skill': f"{display_name} x{count}",
+                    'Damage': f"{total_dmg:,.0f}",
+                    'Reason': entry.reason,
+                })
+            else:
+                log_entries.append({
+                    'Time': f"{entry.time:.1f}s",
+                    'Phase': phase_emoji,
+                    'Skill': display_name,
+                    'Damage': f"{entry.damage:,.0f}",
+                    'Reason': entry.reason,
+                })
+
+            i = j
+
+        st.dataframe(pd.DataFrame(log_entries), hide_index=True, use_container_width=True)

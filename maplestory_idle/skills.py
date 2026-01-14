@@ -37,7 +37,7 @@ class DamageType(Enum):
 
 
 class Job(Enum):
-    FIRST = 1    # Level 1-29
+    FIRST = 1    # Level 10-29
     SECOND = 2   # Level 30-59
     THIRD = 3    # Level 60-99 (skill points 60-99)
     FOURTH = 4   # Level 100+ (skill points 100+)
@@ -45,7 +45,7 @@ class Job(Enum):
 
 # Job advancement levels
 JOB_LEVEL_RANGES = {
-    Job.FIRST: (1, 29),
+    Job.FIRST: (10, 29),  # 20 levels × 3 = 60 skill points
     Job.SECOND: (30, 59),
     Job.THIRD: (60, 99),
     Job.FOURTH: (100, 999),
@@ -770,7 +770,8 @@ class CharacterState:
     main_stat_flat: float = 0  # Flat DEX/main stat
     main_stat_pct: float = 0   # DEX%/main stat %
     damage_pct: float = 0
-    boss_damage_pct: float = 0
+    boss_damage_pct: float = 0       # Global boss damage % (applied during boss phase)
+    normal_damage_pct: float = 0     # Global normal monster damage % (applied during mob phase)
     crit_rate: float = 50.0
     crit_damage: float = 150.0
     min_dmg_mult: float = 0
@@ -780,6 +781,15 @@ class CharacterState:
     final_damage_pct: float = 0
     defense_pen: float = 0
     attack_speed_pct: float = 0
+
+    # Equipment potentials
+    ba_target_bonus: int = 0  # +BA Targets from potentials (e.g., +3 from Mystic pot)
+
+    # Job-specific skill level bonuses from equipment sub stats
+    skill_1st_bonus: int = 0  # +1st Job Skill levels
+    skill_2nd_bonus: int = 0  # +2nd Job Skill levels
+    skill_3rd_bonus: int = 0  # +3rd Job Skill levels
+    skill_4th_bonus: int = 0  # +4th Job Skill levels
 
     # Skill cooldown reduction from hat special potential (flat seconds)
     skill_cd_reduction: float = 0.0
@@ -807,23 +817,34 @@ class CharacterState:
         - Base level (1)
         - Job-specific skill points from leveling (3 per level in that job)
         - +All Skills bonus from gear
+        - Job-specific skill bonuses from equipment (e.g., +5 1st Job Skill)
 
-        Example at level 103 with +44 All Skills:
-        - 1st Job skill: 1 + 87 + 44 = 132
-        - 2nd Job skill: 1 + 90 + 44 = 135
-        - 3rd Job skill: 1 + 120 + 44 = 165
-        - 4th Job skill: 1 + 9 + 44 = 54
+        Example at level 103 with +44 All Skills and +5 1st Job:
+        - 1st Job skill: 1 + 87 + 44 + 5 = 137
+        - 2nd Job skill: 1 + 90 + 44 + 0 = 135
+        - 3rd Job skill: 1 + 120 + 44 + 0 = 165
+        - 4th Job skill: 1 + 9 + 44 + 0 = 54
         """
         base = self.skill_levels.get(skill_name, 1)
 
-        # Get job-specific skill point bonus
+        # Get job-specific skill point bonus from leveling
+        job_skill_points = 0
+        job_equipment_bonus = 0
         if skill_name in BOWMASTER_SKILLS:
             skill_job = BOWMASTER_SKILLS[skill_name].job
             job_skill_points = get_skill_points_for_job(self.level, skill_job)
-        else:
-            job_skill_points = 0
 
-        return base + job_skill_points + self.all_skills_bonus
+            # Add job-specific equipment bonus
+            if skill_job == Job.FIRST:
+                job_equipment_bonus = self.skill_1st_bonus
+            elif skill_job == Job.SECOND:
+                job_equipment_bonus = self.skill_2nd_bonus
+            elif skill_job == Job.THIRD:
+                job_equipment_bonus = self.skill_3rd_bonus
+            elif skill_job == Job.FOURTH:
+                job_equipment_bonus = self.skill_4th_bonus
+
+        return base + job_skill_points + self.all_skills_bonus + job_equipment_bonus
 
     def get_current_job(self) -> Job:
         """Get current job advancement."""
@@ -893,6 +914,35 @@ class DPSResult:
     total_basic_attack_dmg_pct: float = 0
     total_final_damage_pct: float = 0
 
+    # Fight simulation log (optional, only from realistic DPS)
+    fight_log: List['FightLogEntry'] = None
+
+
+@dataclass
+class SkillActionValue:
+    """Precalculated action values for a skill in both combat phases.
+
+    Used by realistic DPS simulation to avoid recalculating damage each tick.
+    """
+    skill_name: str
+    damage_per_use_mob: float    # Total damage when used in mob phase
+    damage_per_use_boss: float   # Total damage when used in boss phase
+    cast_time: float             # Time to execute this action
+    cooldown: float              # Cooldown after use (0 for basic attack)
+    dps_value_mob: float         # damage_per_use_mob / cast_time
+    dps_value_boss: float        # damage_per_use_boss / cast_time
+
+
+@dataclass
+class FightLogEntry:
+    """A single action in the fight simulation log."""
+    time: float                  # Time when action started
+    skill_name: str              # Name of skill used
+    phase: str                   # 'mob' or 'boss'
+    damage: float                # Damage dealt by this action
+    cast_time: float             # Duration of this action
+    reason: str = ""             # Why this skill was chosen (e.g., "highest DPS value")
+
 
 class DPSCalculator:
     """
@@ -904,8 +954,9 @@ class DPSCalculator:
     - Proper skill unlocking
     """
 
-    def __init__(self, char: CharacterState):
+    def __init__(self, char: CharacterState, enemy_def: float = 0.752):
         self.char = char
+        self.enemy_def = enemy_def  # Enemy defense value (default: stage ~0.752)
         self.mastery_bonuses = get_mastery_bonuses(char.level)
 
     def get_mastery_bonus(self, skill_name: str, effect_type: str) -> float:
@@ -1077,17 +1128,56 @@ class DPSCalculator:
         return hits
 
     def get_skill_targets(self, skill_name: str) -> int:
-        """Get total targets for a skill including masteries."""
+        """Get total targets for a skill including masteries and equipment bonuses."""
         if skill_name not in BOWMASTER_SKILLS:
             return 1
 
         skill = BOWMASTER_SKILLS[skill_name]
         targets = skill.base_targets
 
-        # Add mastery target bonuses
+        # Add mastery target bonuses (skill-specific)
         targets += int(self.get_mastery_bonus(skill_name, "skill_targets"))
 
+        # For basic attacks, also add global BA target bonuses
+        if skill.skill_type == SkillType.BASIC_ATTACK:
+            # Global mastery bonus (+1 at level 62)
+            targets += int(self.get_global_stat("basic_attack_targets"))
+            # Bonus from equipment potentials (stored on character state)
+            targets += getattr(self.char, 'ba_target_bonus', 0)
+
         return targets
+
+    def get_effective_targets(
+        self,
+        skill_name: str,
+        num_enemies: int,
+        mob_time_fraction: float,
+    ) -> float:
+        """
+        Calculate effective targets for a skill in the given combat scenario.
+
+        During mob waves: hit min(skill_targets, num_enemies) enemies
+        During boss: hit 1 enemy (bosses are always single target)
+
+        Returns weighted average based on mob_time_fraction:
+            effective = (mob_targets × mob_fraction) + (boss_targets × (1 - mob_fraction))
+
+        Args:
+            skill_name: Name of the skill
+            num_enemies: Number of enemies during mob waves (12 for stages)
+            mob_time_fraction: Fraction of fight spent on mobs (0.0-1.0)
+
+        Returns:
+            Effective target count for DPS calculation
+        """
+        targets = self.get_skill_targets(skill_name)
+
+        # During mob waves: capped by num_enemies
+        # During boss: always 1 target
+        mob_targets = min(targets, num_enemies)
+        boss_targets = 1
+
+        return (mob_targets * mob_time_fraction) + (boss_targets * (1 - mob_time_fraction))
 
     def get_total_stat_bonus(self, stat_type: str) -> float:
         """
@@ -1115,9 +1205,18 @@ class DPSCalculator:
         skill_damage_pct: float,
         damage_type: DamageType,
         skill_name: str = "",
+        is_boss_phase: bool = None,
     ) -> float:
-        """Calculate damage for a single hit."""
+        """Calculate damage for a single hit.
 
+        Args:
+            skill_damage_pct: Skill damage percentage
+            damage_type: BASIC or SKILL
+            skill_name: Name of skill for mastery lookups
+            is_boss_phase: If True, apply boss damage multipliers.
+                          If False, apply normal monster damage multipliers.
+                          If None (default), use old behavior (boss_mult applied to all).
+        """
         base = self.char.attack * (skill_damage_pct / 100)
 
         # Main stat - same formula as simple calculator
@@ -1128,10 +1227,23 @@ class DPSCalculator:
         # Damage %
         damage_mult = 1 + (self.char.damage_pct + self.get_total_stat_bonus("damage_pct")) / 100
 
-        # Boss damage (for single target boss)
-        boss_dmg = self.char.boss_damage_pct
-        boss_dmg += self.get_mastery_bonus(skill_name, "skill_boss_damage")
-        boss_mult = 1 + boss_dmg / 100
+        # Phase-specific damage multiplier (for realistic DPS calculation)
+        if is_boss_phase is True:
+            # Boss phase: apply global boss damage + skill-specific boss damage masteries
+            phase_dmg = self.char.boss_damage_pct
+            phase_dmg += self.get_mastery_bonus(skill_name, "skill_boss_damage")
+            phase_mult = 1 + phase_dmg / 100
+        elif is_boss_phase is False:
+            # Mob phase: apply global normal damage + skill-specific normal monster damage masteries
+            phase_dmg = self.char.normal_damage_pct
+            phase_dmg += self.get_mastery_bonus(skill_name, "skill_normal_monster_damage")
+            phase_mult = 1 + phase_dmg / 100
+        else:
+            # Legacy behavior (is_boss_phase=None): apply boss_mult to everything
+            # This preserves backward compatibility for existing calculate_total_dps()
+            boss_dmg = self.char.boss_damage_pct
+            boss_dmg += self.get_mastery_bonus(skill_name, "skill_boss_damage")
+            phase_mult = 1 + boss_dmg / 100
 
         # Skill/Basic Attack damage type
         # Note: get_total_stat_bonus already includes global mastery bonuses
@@ -1232,18 +1344,421 @@ class DPSCalculator:
             ab_level = self.char.get_effective_skill_level("armor_break")
             ab_skill = BOWMASTER_SKILLS["armor_break"]
             def_pen += ab_skill.base_stat_value + ab_skill.stat_per_level * (ab_level - 1)
-        def_pen_mult = 1 + def_pen / 100 * 0.3
+        # Defense multiplier: 1 / (1 + enemy_def * (1 - def_pen))
+        def_pen_decimal = min(def_pen / 100, 1.0)  # Cap at 100%
+        def_pen_mult = 1 / (1 + self.enemy_def * (1 - def_pen_decimal))
 
-        damage = base * main_stat_mult * damage_mult * boss_mult * type_mult
+        damage = base * main_stat_mult * damage_mult * phase_mult * type_mult
         damage *= final_mult * crit_mult * def_pen_mult
 
         return damage
 
-    def calculate_total_dps(self) -> DPSResult:
-        """Calculate total DPS with current character state."""
+    def _precalculate_skill_values(self, num_enemies: int) -> Dict[str, SkillActionValue]:
+        """Precalculate damage values for all player action skills in both phases.
+
+        This enables efficient simulation by calculating damage once per skill
+        rather than once per action tick.
+
+        Args:
+            num_enemies: Number of enemies during mob phase (for target calculation)
+
+        Returns:
+            Dictionary mapping skill name to SkillActionValue with mob/boss damage
+        """
+        values = {}
+
+        # Basic Attack (current tier based on level)
+        ba_name = self.char.get_active_basic_attack()
+        if ba_name and self.char.is_skill_unlocked(ba_name):
+            ba_skill = BOWMASTER_SKILLS[ba_name]
+            hits = self.get_skill_hits(ba_name)
+            targets_mob = min(self.get_skill_targets(ba_name), num_enemies)
+            cast_time = self.get_cast_time(1.0, ba_skill.scales_with_attack_speed)
+
+            dmg_mob = self.calculate_hit_damage(
+                self.get_skill_damage_pct(ba_name),
+                ba_skill.damage_type,
+                ba_name,
+                is_boss_phase=False,
+            )
+            dmg_boss = self.calculate_hit_damage(
+                self.get_skill_damage_pct(ba_name),
+                ba_skill.damage_type,
+                ba_name,
+                is_boss_phase=True,
+            )
+
+            damage_mob = dmg_mob * hits * targets_mob
+            damage_boss = dmg_boss * hits * 1  # Single target during boss phase
+
+            values[ba_name] = SkillActionValue(
+                skill_name=ba_name,
+                damage_per_use_mob=damage_mob,
+                damage_per_use_boss=damage_boss,
+                cast_time=cast_time,
+                cooldown=0,  # No cooldown for basic attack
+                dps_value_mob=damage_mob / cast_time,
+                dps_value_boss=damage_boss / cast_time,
+            )
+
+        # Active skills (Hurricane, Covering Fire)
+        for skill_name in ["hurricane", "covering_fire"]:
+            if not self.char.is_skill_unlocked(skill_name):
+                continue
+
+            skill = BOWMASTER_SKILLS[skill_name]
+            hits = self.get_skill_hits(skill_name)
+            targets_mob = min(self.get_skill_targets(skill_name), num_enemies)
+
+            # Calculate cast time
+            if skill.attack_interval > 0:
+                # Hurricane: fires arrows over time, attack speed affects firing rate
+                base_cast_time = hits * skill.attack_interval
+                if skill.scales_with_attack_speed:
+                    skill_cast_time = base_cast_time / self.get_effective_attack_speed()
+                else:
+                    skill_cast_time = base_cast_time
+            else:
+                skill_cast_time = self.get_cast_time(1.0, skill.scales_with_attack_speed)
+
+            dmg_mob = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=False,
+            )
+            dmg_boss = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=True,
+            )
+
+            # Get effective cooldown with hat reduction
+            effective_cd = self.char.get_effective_skill_cooldown(skill.cooldown, 0)
+
+            damage_mob = dmg_mob * hits * targets_mob
+            damage_boss = dmg_boss * hits * 1  # Single target during boss
+
+            values[skill_name] = SkillActionValue(
+                skill_name=skill_name,
+                damage_per_use_mob=damage_mob,
+                damage_per_use_boss=damage_boss,
+                cast_time=skill_cast_time,
+                cooldown=effective_cd,
+                dps_value_mob=damage_mob / skill_cast_time,
+                dps_value_boss=damage_boss / skill_cast_time,
+            )
+
+        return values
+
+    def _simulate_fight(
+        self,
+        fight_duration: float,
+        num_enemies: int,
+        mob_time_fraction: float,
+        log_actions: bool = False,
+    ) -> Tuple[float, float, float, float, float, List[FightLogEntry]]:
+        """Simulate fight by picking best action at each decision point.
+
+        At each action window, picks the skill with highest DPS value for
+        the current phase (mob or boss).
+
+        Args:
+            fight_duration: Total fight duration in seconds
+            num_enemies: Number of enemies during mob phase
+            mob_time_fraction: Fraction of fight spent on mobs (0.0-1.0)
+                              Mob phase comes first, then boss phase.
+            log_actions: If True, build a detailed log of each action taken
+
+        Returns:
+            Tuple of (total_damage, basic_damage, active_damage, mob_damage, boss_damage, fight_log)
+        """
+        mob_duration = fight_duration * mob_time_fraction
+        skill_values = self._precalculate_skill_values(num_enemies)
+        fight_log: List[FightLogEntry] = [] if log_actions else None
+
+        if not skill_values:
+            return 0.0, 0.0, 0.0, 0.0, 0.0, fight_log
+
+        t = 0.0
+        total_damage = 0.0
+        basic_damage = 0.0
+        active_damage = 0.0
+        mob_damage = 0.0
+        boss_damage = 0.0
+        cooldowns = {name: 0.0 for name in skill_values}
+
+        while t < fight_duration:
+            is_boss = t >= mob_duration
+            phase = "boss" if is_boss else "mob"
+
+            # Find best available action and track alternatives for logging
+            best_action = None
+            best_dps_value = -1.0
+            available_options = []
+
+            for name, sv in skill_values.items():
+                if cooldowns[name] > 0:
+                    continue  # On cooldown
+
+                dps_value = sv.dps_value_boss if is_boss else sv.dps_value_mob
+                available_options.append((name, dps_value))
+                if dps_value > best_dps_value:
+                    best_dps_value = dps_value
+                    best_action = sv
+
+            if best_action is None:
+                # All skills on cooldown - advance time by minimum remaining cooldown
+                min_cd = min(cooldowns.values())
+                if min_cd <= 0:
+                    break  # Safety: avoid infinite loop
+                for name in cooldowns:
+                    cooldowns[name] = max(0, cooldowns[name] - min_cd)
+                t += min_cd
+                continue
+
+            # Execute action
+            damage = best_action.damage_per_use_boss if is_boss else best_action.damage_per_use_mob
+
+            # Handle partial execution at fight end
+            remaining_time = fight_duration - t
+            if best_action.cast_time > remaining_time:
+                # Partial damage
+                fraction = remaining_time / best_action.cast_time
+                damage *= fraction
+                time_used = remaining_time
+            else:
+                time_used = best_action.cast_time
+
+            # Log the action if requested
+            if log_actions:
+                # Build reason string showing why this skill was chosen
+                if len(available_options) > 1:
+                    sorted_options = sorted(available_options, key=lambda x: -x[1])
+                    reason = f"DPS: {best_dps_value:,.0f}/s"
+                    if len(sorted_options) > 1:
+                        runner_up = sorted_options[1]
+                        reason += f" (vs {runner_up[0]}: {runner_up[1]:,.0f}/s)"
+                else:
+                    reason = "only option available"
+
+                fight_log.append(FightLogEntry(
+                    time=t,
+                    skill_name=best_action.skill_name,
+                    phase=phase,
+                    damage=damage,
+                    cast_time=time_used,
+                    reason=reason,
+                ))
+
+            total_damage += damage
+
+            # Track by type
+            if best_action.cooldown == 0:
+                basic_damage += damage
+            else:
+                active_damage += damage
+
+            # Track by phase
+            if is_boss:
+                boss_damage += damage
+            else:
+                mob_damage += damage
+
+            # Set cooldown for this skill
+            if best_action.cooldown > 0:
+                cooldowns[best_action.skill_name] = best_action.cooldown
+
+            # Advance time and decrement all cooldowns
+            for name in cooldowns:
+                cooldowns[name] = max(0, cooldowns[name] - time_used)
+            t += time_used
+
+        return total_damage, basic_damage, active_damage, mob_damage, boss_damage, fight_log
+
+    def _calc_summons_dps_phased(
+        self,
+        fight_duration: float,
+        num_enemies: int,
+        mob_time_fraction: float,
+    ) -> Tuple[float, float, float]:
+        """Calculate summon DPS with proper phase weighting.
+
+        Summons attack independently of player actions. Their damage is
+        weighted by phase duration with appropriate multipliers.
+
+        Args:
+            fight_duration: Total fight duration in seconds
+            num_enemies: Number of enemies during mob phase
+            mob_time_fraction: Fraction of fight spent on mobs
+
+        Returns:
+            Tuple of (total_dps, mob_dps, boss_dps)
+        """
+        from cooldown_calc import calculate_buff_uptime
+
+        total_summon_dps = 0.0
+        total_mob_dps = 0.0
+        total_boss_dps = 0.0
+
+        for skill_name in ["phoenix", "arrow_platter", "quiver_cartridge"]:
+            if not self.char.is_skill_unlocked(skill_name):
+                continue
+
+            skill = BOWMASTER_SKILLS[skill_name]
+
+            if skill.duration <= 0 or skill.attack_interval <= 0:
+                continue
+
+            # Calculate damage for each phase
+            dmg_mob = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=False,
+            )
+            dmg_boss = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=True,
+            )
+
+            # Calculate uptime
+            if skill.cooldown > 0:
+                cd = skill.cooldown
+                mastery_pct_reduction = 0.0
+                if skill_name == "phoenix" and self.char.level >= 104:
+                    mastery_pct_reduction = 50.0
+                cd = self.char.get_effective_skill_cooldown(cd, mastery_pct_reduction)
+                uptime = calculate_buff_uptime(
+                    cooldown=cd,
+                    buff_duration=skill.duration,
+                    fight_duration=fight_duration,
+                )
+            else:
+                uptime = 1.0
+
+            # Attack interval (quiver scales with AS)
+            interval = skill.attack_interval
+            if skill_name == "quiver_cartridge":
+                as_mult = min(self.get_effective_attack_speed(), 2.0)
+                interval = skill.attack_interval / as_mult
+
+            attacks_per_second = 1 / interval
+
+            # Calculate targets for each phase
+            targets_mob = min(self.get_skill_targets(skill_name), num_enemies)
+            targets_boss = 1
+
+            # Weight by phase duration
+            mob_dps = dmg_mob * targets_mob * attacks_per_second * uptime * mob_time_fraction
+            boss_dps = dmg_boss * targets_boss * attacks_per_second * uptime * (1 - mob_time_fraction)
+
+            total_summon_dps += mob_dps + boss_dps
+            total_mob_dps += mob_dps
+            total_boss_dps += boss_dps
+
+        return total_summon_dps, total_mob_dps, total_boss_dps
+
+    def _calc_procs_dps_phased(
+        self,
+        fight_duration: float,
+        num_enemies: int,
+        mob_time_fraction: float,
+    ) -> Tuple[float, float, float]:
+        """Calculate proc DPS with proper phase weighting.
+
+        Procs trigger on player attacks. Their damage is weighted by
+        phase duration with appropriate multipliers.
+
+        Args:
+            fight_duration: Total fight duration in seconds
+            num_enemies: Number of enemies during mob phase
+            mob_time_fraction: Fraction of fight spent on mobs
+
+        Returns:
+            Tuple of (total_dps, mob_dps, boss_dps)
+        """
+        total_proc_dps = 0.0
+        total_mob_dps = 0.0
+        total_boss_dps = 0.0
+        cast_time = self.get_cast_time(1.0, True)
+
+        for skill_name in ["final_attack", "flash_mirage"]:
+            if not self.char.is_skill_unlocked(skill_name):
+                continue
+
+            skill = BOWMASTER_SKILLS[skill_name]
+
+            # Calculate damage for each phase
+            dmg_mob = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=False,
+            )
+            dmg_boss = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=True,
+            )
+
+            # Proc chance (may scale with AS)
+            proc_chance = skill.proc_chance
+            if skill.scales_with_attack_speed:
+                proc_chance = min(proc_chance * self.get_effective_attack_speed(), proc_chance * 2)
+
+            # Account for internal cooldown
+            if skill.cooldown > 0:
+                mastery_pct_reduction = 0.0
+                if skill_name == "flash_mirage" and self.char.level >= 122:
+                    mastery_pct_reduction = 40.0
+                effective_cd = self.char.get_effective_skill_cooldown(skill.cooldown, mastery_pct_reduction)
+                procs_per_second = min(1 / cast_time * proc_chance, 1 / effective_cd)
+            else:
+                procs_per_second = 1 / cast_time * proc_chance
+
+            # Calculate targets for each phase
+            targets_mob = min(self.get_skill_targets(skill_name), num_enemies)
+            targets_boss = 1
+
+            # Weight by phase duration
+            mob_dps = dmg_mob * targets_mob * procs_per_second * mob_time_fraction
+            boss_dps = dmg_boss * targets_boss * procs_per_second * (1 - mob_time_fraction)
+
+            total_proc_dps += mob_dps + boss_dps
+            total_mob_dps += mob_dps
+            total_boss_dps += boss_dps
+
+        return total_proc_dps, total_mob_dps, total_boss_dps
+
+    def calculate_total_dps(
+        self,
+        fight_duration: float = 60.0,
+        num_enemies: int = 1,
+        mob_time_fraction: float = 1.0,
+    ) -> DPSResult:
+        """Calculate total DPS with current character state.
+
+        Uses unified cooldown_calc module for accurate trigger/uptime calculations
+        that account for partial triggers at fight end.
+
+        Args:
+            fight_duration: Fight duration in seconds (default 60s rotation)
+            num_enemies: Number of enemies during mob waves (1 for pure boss fights)
+                         Multi-target skills hit min(skill_targets, num_enemies) enemies.
+            mob_time_fraction: Fraction of fight time spent on mob waves (0.0-1.0)
+                         Remaining time (1 - mob_time_fraction) is spent on boss (single target).
+                         Default 1.0 = all mob waves (pure multi-target).
+                         Example: 0.6 = 60% mobs, 40% boss (typical chapter stage).
+        """
+        from cooldown_calc import calculate_triggers, calculate_buff_uptime
 
         cast_time = self.get_cast_time(1.0, True)
-        rotation_length = 60.0
+        rotation_length = fight_duration
 
         basic_dps = 0
         active_dps = 0
@@ -1261,9 +1776,10 @@ class DPSCalculator:
                 basic_skill_name,
             )
             hits = self.get_skill_hits(basic_skill_name)
-            targets = self.get_skill_targets(basic_skill_name)
+            effective_targets = self.get_effective_targets(basic_skill_name, num_enemies, mob_time_fraction)
             attacks_per_second = 1 / cast_time
-            basic_dps = damage * hits * min(targets, 1) * attacks_per_second  # Single target
+
+            basic_dps = damage * hits * effective_targets * attacks_per_second
             skills_used.append(basic_skill_name)
 
         # Active skills
@@ -1274,6 +1790,7 @@ class DPSCalculator:
 
             skill = BOWMASTER_SKILLS[skill_name]
             hits = self.get_skill_hits(skill_name)
+            effective_targets = self.get_effective_targets(skill_name, num_enemies, mob_time_fraction)
 
             # Calculate cast time
             if skill.attack_interval > 0:
@@ -1292,21 +1809,40 @@ class DPSCalculator:
             if skill.cooldown > 0:
                 # Apply skill CD reduction from hat potential
                 effective_cd = self.char.get_effective_skill_cooldown(skill.cooldown, 0)
-                uses_per_rotation = rotation_length / effective_cd
-                time_per_rotation = skill_cast_time * uses_per_rotation
-                active_skill_time_used += time_per_rotation
+
+                # Use unified trigger calculation (accounts for partial triggers)
+                triggers = calculate_triggers(
+                    cooldown=effective_cd,
+                    duration=skill_cast_time,
+                    fight_duration=rotation_length,
+                )
 
                 damage = self.calculate_hit_damage(
                     self.get_skill_damage_pct(skill_name),
                     skill.damage_type,
                     skill_name,
                 )
-                total_damage = damage * hits * uses_per_rotation
-                active_dps += total_damage / rotation_length
+
+                # Handle infinite fight duration (steady state DPS)
+                if math.isinf(rotation_length):
+                    # Steady state: DPS = damage_per_use / cooldown
+                    damage_per_use = damage * hits * effective_targets
+                    active_dps += damage_per_use / effective_cd
+                    # Time ratio for basic attack: skill_cast_time / cooldown
+                    active_skill_time_used += skill_cast_time / effective_cd
+                else:
+                    time_per_rotation = skill_cast_time * triggers
+                    active_skill_time_used += time_per_rotation
+                    total_damage = damage * hits * effective_targets * triggers
+                    active_dps += total_damage / rotation_length
                 skills_used.append(skill_name)
 
         # Adjust basic DPS for time spent on actives
-        basic_time_ratio = max(0, rotation_length - active_skill_time_used) / rotation_length
+        if math.isinf(rotation_length):
+            # At infinite duration, use fraction of time spent on actives
+            basic_time_ratio = max(0, 1.0 - active_skill_time_used)
+        else:
+            basic_time_ratio = max(0, rotation_length - active_skill_time_used) / rotation_length
         basic_dps *= basic_time_ratio
 
         # Summons
@@ -1322,7 +1858,7 @@ class DPSCalculator:
             )
 
             if skill.duration > 0 and skill.attack_interval > 0:
-                # Calculate uptime
+                # Calculate uptime using unified module
                 if skill.cooldown > 0:
                     # Phoenix cooldown reduction from mastery
                     cd = skill.cooldown
@@ -1332,7 +1868,12 @@ class DPSCalculator:
                     # Apply skill CD reduction from hat potential
                     cd = self.char.get_effective_skill_cooldown(cd, mastery_pct_reduction)
 
-                    uptime = min(skill.duration / cd, 1.0)
+                    # Use unified uptime calculation (accounts for partial triggers)
+                    uptime = calculate_buff_uptime(
+                        cooldown=cd,
+                        buff_duration=skill.duration,
+                        fight_duration=rotation_length,
+                    )
                 else:
                     uptime = 1.0
 
@@ -1344,8 +1885,8 @@ class DPSCalculator:
                     interval = skill.attack_interval / as_mult
 
                 attacks_per_second = 1 / interval
-                targets = self.get_skill_targets(skill_name)
-                summon_dps += damage * min(targets, 1) * attacks_per_second * uptime
+                effective_targets = self.get_effective_targets(skill_name, num_enemies, mob_time_fraction)
+                summon_dps += damage * effective_targets * attacks_per_second * uptime
                 skills_used.append(skill_name)
 
         # Procs
@@ -1359,6 +1900,7 @@ class DPSCalculator:
                 skill.damage_type,
                 skill_name,
             )
+            effective_targets = self.get_effective_targets(skill_name, num_enemies, mob_time_fraction)
 
             # Proc chance (may scale with AS)
             proc_chance = skill.proc_chance
@@ -1378,7 +1920,7 @@ class DPSCalculator:
             else:
                 procs_per_second = 1 / cast_time * proc_chance
 
-            proc_dps += damage * procs_per_second
+            proc_dps += damage * effective_targets * procs_per_second
             skills_used.append(skill_name)
 
         total_dps = basic_dps + active_dps + summon_dps + proc_dps
@@ -1394,6 +1936,101 @@ class DPSCalculator:
             total_skill_damage_pct=self.get_total_stat_bonus("skill_damage"),
             total_basic_attack_dmg_pct=self.get_total_stat_bonus("basic_attack_damage"),
             total_final_damage_pct=self.char.final_damage_pct,
+        )
+
+    def calculate_realistic_dps(
+        self,
+        fight_duration: float = 60.0,
+        num_enemies: int = 12,
+        mob_time_fraction: float = 0.6,
+        boss_importance: float = 0.7,
+        log_actions: bool = False,
+    ) -> DPSResult:
+        """Calculate DPS using realistic phase-aware simulation.
+
+        This method properly handles:
+        1. Boss vs Normal damage stats applied only during their respective phases
+        2. Skill scheduling: picks best action at each decision point
+        3. Hurricane saved for boss phase when multi-target BA is better during mobs
+        4. Proper phase-weighted summon and proc damage
+        5. Boss importance weighting for optimization recommendations
+
+        Phase order: Mob phase first, then boss phase.
+        Example: 60/40 = 60% mob (36s), then 40% boss (24s) for a 60s fight.
+
+        The boss_importance parameter allows users to tune how much boss vs mob
+        damage matters for their progression. Default 70% reflects that bosses
+        typically have ~70% of total stage HP.
+
+        Args:
+            fight_duration: Total fight duration in seconds
+            num_enemies: Number of enemies during mob phase
+            mob_time_fraction: Fraction of fight spent on mobs (0.0-1.0)
+            boss_importance: How much to weight boss damage (0.0-1.0)
+                            Higher = boss is the bottleneck
+                            Lower = mobs are the bottleneck
+            log_actions: If True, include detailed fight log in result
+
+        Returns:
+            DPSResult with breakdown by source (and fight_log if log_actions=True)
+        """
+        # Handle infinite duration (chapter hunt)
+        if math.isinf(fight_duration):
+            # Steady state: use original method (simulation doesn't work at infinity)
+            return self.calculate_total_dps(fight_duration, num_enemies, mob_time_fraction)
+
+        # Simulate player actions - returns (total, basic, active, mob, boss, log)
+        total_dmg, basic_dmg, active_dmg, player_mob_dmg, player_boss_dmg, fight_log = self._simulate_fight(
+            fight_duration, num_enemies, mob_time_fraction, log_actions=log_actions
+        )
+
+        # Calculate summon and proc DPS (run in parallel with player)
+        # Returns (total, mob, boss) for each
+        summon_total, summon_mob, summon_boss = self._calc_summons_dps_phased(
+            fight_duration, num_enemies, mob_time_fraction
+        )
+        proc_total, proc_mob, proc_boss = self._calc_procs_dps_phased(
+            fight_duration, num_enemies, mob_time_fraction
+        )
+
+        # Convert player damage to DPS
+        player_mob_dps = player_mob_dmg / fight_duration
+        player_boss_dps = player_boss_dmg / fight_duration
+
+        # Total mob and boss DPS across all sources
+        total_mob_dps = player_mob_dps + summon_mob + proc_mob
+        total_boss_dps = player_boss_dps + summon_boss + proc_boss
+
+        # Apply boss importance weighting
+        # This weights how valuable each phase's damage is for optimization
+        mob_importance = 1.0 - boss_importance
+        weighted_total_dps = total_mob_dps * mob_importance + total_boss_dps * boss_importance
+
+        # For breakdown display, use unweighted values
+        basic_dps = basic_dmg / fight_duration
+        active_dps = active_dmg / fight_duration
+
+        # Get skills used from precalculation
+        skill_values = self._precalculate_skill_values(num_enemies)
+        skills_used = list(skill_values.keys())
+
+        # Add summons and procs to skills list
+        for skill_name in ["phoenix", "arrow_platter", "quiver_cartridge", "final_attack", "flash_mirage"]:
+            if self.char.is_skill_unlocked(skill_name) and skill_name not in skills_used:
+                skills_used.append(skill_name)
+
+        return DPSResult(
+            total_dps=weighted_total_dps,
+            basic_attack_dps=basic_dps,
+            active_skill_dps=active_dps,
+            summon_dps=summon_total,
+            proc_dps=proc_total,
+            rotation_length=fight_duration,
+            skills_used=skills_used,
+            total_skill_damage_pct=self.get_total_stat_bonus("skill_damage"),
+            total_basic_attack_dmg_pct=self.get_total_stat_bonus("basic_attack_damage"),
+            total_final_damage_pct=self.char.final_damage_pct,
+            fight_log=fight_log,
         )
 
 

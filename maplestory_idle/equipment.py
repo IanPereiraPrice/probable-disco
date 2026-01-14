@@ -4,12 +4,19 @@ MapleStory Idle - Equipment & Starforce System
 Complete equipment stat calculations, starforce enhancement,
 and potential system mechanics.
 
-Last Updated: December 2025
+Last Updated: January 2026
+
+New in this version:
+- Equipment class with bidirectional base/amplified conversion
+- StatBlock integration for type-safe stat aggregation
 """
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 from enum import Enum
+
+if TYPE_CHECKING:
+    from maplestory_idle.stats import StatBlock
 
 
 # =============================================================================
@@ -225,21 +232,24 @@ def calculate_starforce_expected_cost(
             break
             
         stage = STARFORCE_TABLE[star]
-        
+
+        # Destruction protection not available for last 3 stages (22, 23, 24 -> stars 23, 24, 25)
+        can_use_destroy_prot = use_destroy_protection and star not in {22, 23, 24}
+
         # Calculate effective success rate considering failures
         success = stage.success_rate
         decrease = 0 if use_decrease_protection else stage.decrease_rate
-        destroy = stage.destroy_rate * (0.5 if use_destroy_protection else 1.0)
-        
+        destroy = stage.destroy_rate * (0.5 if can_use_destroy_prot else 1.0)
+
         # Expected attempts to get +1 star (simplified model)
         # This doesn't account for star regression fully
         expected_attempts_this_stage = 1 / success if success > 0 else float('inf')
-        
+
         # Cost multiplier for protections
         cost_mult = 1.0
         if use_decrease_protection and stage.decrease_rate > 0:
             cost_mult += 1.0
-        if use_destroy_protection and stage.destroy_rate > 0:
+        if can_use_destroy_prot and stage.destroy_rate > 0:
             cost_mult += 1.0
         
         meso_per_attempt = stage.meso * cost_mult
@@ -640,6 +650,253 @@ class EquipmentItem:
             special_stat_type=special_stat_type,
             special_stat_value=special_stat_value,
         )
+
+
+# =============================================================================
+# EQUIPMENT CLASS (NEW - Type-safe with StatBlock integration)
+# =============================================================================
+
+# Stats that use Main Amplify (attack, hp, third stat)
+MAIN_AMPLIFY_STATS = {'attack', 'max_hp', 'third_stat'}
+
+# Stats that use Sub Amplify (everything else)
+SUB_AMPLIFY_STATS = {
+    'boss_damage', 'normal_damage', 'crit_rate', 'crit_damage',
+    'sub_attack', 'damage_pct', 'all_skills', 'final_damage',
+    'skill_1st', 'skill_2nd', 'skill_3rd', 'skill_4th',
+}
+
+
+@dataclass
+class Equipment:
+    """
+    Equipment item with bidirectional base/amplified stat conversion.
+
+    Stats are stored as base values internally. Use get_base()/set_base() and
+    get_amplified()/set_amplified() for bidirectional conversion.
+
+    Setting amplified stats (from OCR) automatically derives base values.
+    Uses verified starforce amplification rates from STARFORCE_TABLE.
+
+    Main stats (attack, max_hp, third_stat): Use Main Amplify
+    Sub stats (all others): Use Sub Amplify
+    """
+    slot: str
+    name: str = ""
+    rarity: str = "unique"  # epic/unique/legendary/mystic/ancient
+    tier: int = 4           # 1-4, T1 is best
+    stars: int = 0          # 0-25
+    is_special: bool = False  # Special items can have damage_pct, all_skills, final_damage
+
+    # Internal storage for all stats (base values before starforce)
+    _stats: Dict[str, float] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self):
+        """Initialize stats dict if not provided."""
+        if self._stats is None:
+            self._stats = {}
+
+    # ========================
+    # AMPLIFICATION RATES
+    # ========================
+
+    @property
+    def main_amplify_rate(self) -> float:
+        """Get Main Option Amplify multiplier from verified starforce table."""
+        return get_amplify_multiplier(self.stars, is_sub=False)
+
+    @property
+    def sub_amplify_rate(self) -> float:
+        """Get Sub Option Amplify multiplier from verified starforce table."""
+        return get_amplify_multiplier(self.stars, is_sub=True)
+
+    def _get_amplify_rate(self, stat_name: str) -> float:
+        """Get appropriate amplify rate for a stat."""
+        if stat_name in MAIN_AMPLIFY_STATS:
+            return self.main_amplify_rate
+        return self.sub_amplify_rate
+
+    # ========================
+    # GENERIC STAT ACCESS
+    # ========================
+
+    def get_base(self, stat_name: str) -> float:
+        """Get base stat value (before starforce)."""
+        return self._stats.get(stat_name, 0.0)
+
+    def set_base(self, stat_name: str, value: float):
+        """Set base stat value."""
+        self._stats[stat_name] = value
+
+    def get_amplified(self, stat_name: str) -> float:
+        """Get amplified stat value (after starforce)."""
+        base = self.get_base(stat_name)
+        return base * self._get_amplify_rate(stat_name)
+
+    def set_amplified(self, stat_name: str, value: float):
+        """Set from amplified value (e.g., OCR) - automatically derives base."""
+        rate = self._get_amplify_rate(stat_name)
+        if rate > 0:
+            self._stats[stat_name] = value / rate
+        else:
+            self._stats[stat_name] = value
+
+    def get_third_stat_name(self) -> str:
+        """Get the name of the 3rd main stat for this slot."""
+        return SLOT_THIRD_MAIN_STAT.get(self.slot, "main_stat")
+
+    # ========================
+    # CONVENIENCE PROPERTIES
+    # ========================
+
+    # These provide cleaner access for common stats while still using
+    # the generic get_base/set_base/get_amplified/set_amplified internally
+
+    @property
+    def base_attack(self) -> float:
+        return self.get_base('attack')
+
+    @base_attack.setter
+    def base_attack(self, value: float):
+        self.set_base('attack', value)
+
+    @property
+    def amplified_attack(self) -> float:
+        return self.get_amplified('attack')
+
+    @amplified_attack.setter
+    def amplified_attack(self, value: float):
+        self.set_amplified('attack', value)
+
+    @property
+    def base_max_hp(self) -> float:
+        return self.get_base('max_hp')
+
+    @base_max_hp.setter
+    def base_max_hp(self, value: float):
+        self.set_base('max_hp', value)
+
+    @property
+    def amplified_max_hp(self) -> float:
+        return self.get_amplified('max_hp')
+
+    @amplified_max_hp.setter
+    def amplified_max_hp(self, value: float):
+        self.set_amplified('max_hp', value)
+
+    # ========================
+    # STATBLOCK INTEGRATION
+    # ========================
+
+    def get_stats(self) -> 'StatBlock':
+        """
+        Get total stats from this equipment as a StatBlock.
+        Returns amplified values (after starforce).
+        """
+        from stats import StatBlock
+
+        # Build kwargs for StatBlock
+        kwargs = {
+            # Main attack + sub attack flat combined
+            'attack_flat': self.get_amplified('attack') + self.get_amplified('sub_attack'),
+            'max_hp': self.get_amplified('max_hp'),
+            # Sub stats
+            'boss_damage': self.get_amplified('boss_damage'),
+            'normal_damage': self.get_amplified('normal_damage'),
+            'crit_rate': self.get_amplified('crit_rate'),
+            'crit_damage': self.get_amplified('crit_damage'),
+            # Skill bonuses
+            'skill_1st': int(self.get_base('skill_1st')),
+            'skill_2nd': int(self.get_base('skill_2nd')),
+            'skill_3rd': int(self.get_base('skill_3rd')),
+            'skill_4th': int(self.get_base('skill_4th')),
+        }
+
+        # Add third stat based on slot type
+        third_stat_name = self.get_third_stat_name()
+        if third_stat_name == "defense":
+            kwargs['defense'] = self.get_amplified('third_stat')
+        elif third_stat_name == "accuracy":
+            kwargs['accuracy'] = self.get_amplified('third_stat')
+        # main_stat handled separately in job-aware aggregation
+
+        # Add special stats if applicable
+        if self.is_special:
+            if self.get_base('damage_pct') > 0:
+                kwargs['damage_pct'] = self.get_amplified('damage_pct')
+            if self.get_base('all_skills') > 0:
+                kwargs['all_skills'] = int(self.get_amplified('all_skills'))
+            if self.get_base('final_damage') > 0:
+                kwargs['final_damage'] = self.get_amplified('final_damage')
+
+        return StatBlock(**kwargs)
+
+    # ========================
+    # SERIALIZATION
+    # ========================
+
+    def to_dict(self) -> Dict:
+        """Serialize for storage/CSV export. Stores base values."""
+        result = {
+            'slot': self.slot,
+            'name': self.name,
+            'rarity': self.rarity,
+            'tier': self.tier,
+            'stars': self.stars,
+            'is_special': self.is_special,
+        }
+        # Add all stored stats with 'base_' prefix
+        for stat_name, value in self._stats.items():
+            result[f'base_{stat_name}'] = value
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'Equipment':
+        """Deserialize from storage. Expects base values."""
+        equip = cls(
+            slot=data.get('slot', ''),
+            name=data.get('name', ''),
+            rarity=data.get('rarity', 'unique'),
+            tier=int(data.get('tier', 4)),
+            stars=int(data.get('stars', 0)),
+            is_special=str(data.get('is_special', 'False')).lower() == 'true',
+        )
+        # Load all stats that have 'base_' prefix
+        for key, value in data.items():
+            if key.startswith('base_'):
+                stat_name = key[5:]  # Remove 'base_' prefix
+                equip.set_base(stat_name, float(value))
+        return equip
+
+    @classmethod
+    def from_equipment_item(cls, item: 'EquipmentItem') -> 'Equipment':
+        """Convert legacy EquipmentItem to new Equipment class."""
+        equip = cls(
+            slot=item.slot,
+            name=item.name,
+            rarity=item.rarity,
+            tier=item.tier,
+            stars=item.stars,
+            is_special=item.is_special,
+        )
+        # Main stats
+        equip.set_base('attack', item.base_attack)
+        equip.set_base('max_hp', item.base_max_hp)
+        equip.set_base('third_stat', item.base_third_stat)
+        # Sub stats
+        equip.set_base('boss_damage', item.sub_boss_damage)
+        equip.set_base('normal_damage', item.sub_normal_damage)
+        equip.set_base('crit_rate', item.sub_crit_rate)
+        equip.set_base('crit_damage', item.sub_crit_damage)
+        equip.set_base('sub_attack', item.sub_attack_flat)
+        equip.set_base('skill_1st', item.sub_skill_first_job)
+        equip.set_base('skill_2nd', item.sub_skill_second_job)
+        equip.set_base('skill_3rd', item.sub_skill_third_job)
+        equip.set_base('skill_4th', item.sub_skill_fourth_job)
+        # Special stat
+        if item.is_special and item.special_stat_value > 0:
+            equip.set_base(item.special_stat_type, item.special_stat_value)
+        return equip
 
 
 # =============================================================================

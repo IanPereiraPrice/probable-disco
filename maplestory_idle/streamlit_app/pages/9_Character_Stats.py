@@ -17,6 +17,8 @@ from utils.dps_calculator import (
     BASE_MAX_DMG,
 )
 from equipment import get_amplify_multiplier
+from job_classes import JobClass, get_main_stat_name, get_secondary_stat_name
+from constants import is_percentage_stat
 
 st.set_page_config(page_title="Character Stats", page_icon="📊", layout="wide")
 
@@ -99,22 +101,31 @@ def auto_save():
     save_user_data(st.session_state.username, data)
 
 
-def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
+def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None) -> List[Tuple[str, float]]:
     """
     Get breakdown of sources for a specific stat.
     Returns list of (source_name, value) tuples.
+
+    Uses standardized stat names (attack_flat, dex_pct, damage_pct, etc.)
     """
     sources = []
 
+    # Get main stat keys for this job class
+    if job_class is None:
+        job_class = JobClass.BOWMASTER
+    main_stat = get_main_stat_name(job_class)  # e.g., 'dex'
+    main_flat_key = f'{main_stat}_flat'
+    main_pct_key = f'{main_stat}_pct'
+
     # Equipment base stats (with starforce)
-    if stat_key in ['base_attack', 'flat_dex']:
+    if stat_key in ['attack_flat', main_flat_key]:
         for slot in EQUIPMENT_SLOTS:
             item = data.equipment_items.get(slot, {})
             stars = int(item.get('stars', 0))
             main_mult = get_amplify_multiplier(stars, is_sub=False)
             sub_mult = get_amplify_multiplier(stars, is_sub=True)
 
-            if stat_key == 'base_attack':
+            if stat_key == 'attack_flat':
                 base_val = item.get('base_attack', 0) * main_mult
                 sub_val = item.get('sub_attack_flat', 0) * sub_mult
                 total = base_val + sub_val
@@ -137,16 +148,16 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
                         pot_stats[key] = {}
                     pot_stats[key][stat] = pot_stats[key].get(stat, 0) + value
 
-    # Map stat_key to potential stat names
+    # Map stat_key to potential stat names (using standardized names)
     pot_stat_mapping = {
-        'dex_percent': ['dex_pct', 'main_stat_pct'],
-        'flat_dex': ['dex_flat', 'main_stat_flat'],
-        'damage_percent': ['damage', 'damage_pct'],
+        main_pct_key: [main_pct_key, 'main_stat_pct'],
+        main_flat_key: [main_flat_key, 'main_stat_flat'],
+        'damage_pct': ['damage_pct', 'damage'],
         'boss_damage': ['boss_damage'],
         'normal_damage': ['normal_damage'],
         'crit_rate': ['crit_rate'],
         'crit_damage': ['crit_damage'],
-        'defense_pen': ['def_pen', 'defense_pen'],
+        'def_pen': ['def_pen'],
         'final_damage': ['final_damage'],
         'attack_speed': ['attack_speed'],
         'min_dmg_mult': ['min_dmg_mult'],
@@ -157,19 +168,23 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
     for slot_key, stats in pot_stats.items():
         slot_total = sum(stats.get(pn, 0) for pn in pot_names)
         if slot_total > 0:
-            slot_name = slot_key.replace('_pot', '').replace('_bonus_', ' Bonus ')
             is_bonus = 'bonus_' in slot_key
+            # Extract just the slot name (e.g., "hat" from "hat_bonus_pot" or "hat_pot")
+            slot_name = slot_key.replace('_bonus_pot', '').replace('_pot', '')
             label = f"{slot_name.title()} {'Bonus ' if is_bonus else ''}Potential"
             sources.append((label, slot_total))
 
-    # Hero Power Lines
+    # Hero Power Lines (uses standardized stat names)
+    # Note: Hero Power's 'main_stat_pct' is actually flat main stat (legacy naming issue)
     hp_stat_mapping = {
-        'damage_percent': 'damage',
+        'damage_pct': 'damage_pct',
         'boss_damage': 'boss_damage',
         'normal_damage': 'normal_damage',
         'crit_damage': 'crit_damage',
-        'defense_pen': 'def_pen',
-        'flat_dex': 'main_stat_pct',
+        'def_pen': 'def_pen',
+        'min_dmg_mult': 'min_dmg_mult',
+        'max_dmg_mult': 'max_dmg_mult',
+        main_flat_key: 'main_stat_pct',  # Hero Power's main_stat_pct provides flat stat
     }
     hp_name = hp_stat_mapping.get(stat_key)
     if hp_name:
@@ -183,9 +198,9 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
     # Hero Power Passives
     from hero_power import HeroPowerPassiveStatType, HERO_POWER_PASSIVE_STATS
     hpp_mapping = {
-        'flat_dex': 'main_stat',
-        'damage_percent': 'damage_percent',
-        'base_attack': 'attack',
+        main_flat_key: 'main_stat',
+        'damage_pct': 'damage_percent',
+        'attack_flat': 'attack',
     }
     hpp_key = hpp_mapping.get(stat_key)
     if hpp_key:
@@ -203,8 +218,8 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
     from maple_rank import MapleRankStatType, MAPLE_RANK_STATS, get_cumulative_main_stat, MAIN_STAT_SPECIAL
     mr = data.maple_rank or {}
     mr_mapping = {
-        'flat_dex': 'main_stat_flat',
-        'damage_percent': 'damage_percent',
+        main_flat_key: 'main_stat_flat',
+        'damage_pct': 'damage_percent',
         'boss_damage': 'boss_damage',
         'normal_damage': 'normal_damage',
         'crit_damage': 'crit_damage',
@@ -214,7 +229,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
         'attack_speed': 'attack_speed',
     }
 
-    if stat_key == 'flat_dex':
+    if stat_key == main_flat_key:
         stage = mr.get('current_stage', 1)
         ms_level = mr.get('main_stat_level', 0)
         special = mr.get('special_main_stat', 0)
@@ -235,7 +250,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
                         value = level * per_level
                         sources.append(("Maple Rank", value))
 
-    # Companions
+    # Companions (inventory stats use standardized names)
     from companions import COMPANIONS
     companion_levels = data.companion_levels or {}
     comp_mapping = {
@@ -245,9 +260,9 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
         'min_dmg_mult': 'min_dmg_mult',
         'max_dmg_mult': 'max_dmg_mult',
         'attack_speed': 'attack_speed',
-        'base_attack': 'flat_attack',
-        'damage_percent': 'damage',
-        'flat_dex': 'main_stat',
+        'attack_flat': 'attack_flat',
+        'damage_pct': 'damage_pct',
+        main_flat_key: 'main_stat_flat',
     }
     comp_stat = comp_mapping.get(stat_key)
     if comp_stat:
@@ -281,13 +296,13 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
 
     # Artifacts - read from artifacts_inventory using new potentials format
     art_mapping = {
-        'damage_percent': 'damage',
+        'damage_pct': 'damage',
         'boss_damage': 'boss_damage',
         'crit_damage': 'crit_damage',
-        'defense_pen': 'def_pen',
-        'flat_dex': 'main_stat_flat',
-        'dex_percent': 'main_stat',
-        'base_attack': 'attack_flat',
+        'def_pen': 'def_pen',
+        main_flat_key: 'main_stat_flat',
+        main_pct_key: 'main_stat',
+        'attack_flat': 'attack_flat',
     }
     art_stat = art_mapping.get(stat_key)
     if art_stat:
@@ -313,13 +328,13 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
     # Guild Skills
     guild_skills = getattr(data, 'guild_skills', {}) or {}
     guild_mapping = {
-        'defense_pen': 'def_pen',
+        'def_pen': 'def_pen',
         'final_damage': 'final_damage',
-        'damage_percent': 'damage',
+        'damage_pct': 'damage',
         'boss_damage': 'boss_damage',
         'crit_damage': 'crit_damage',
-        'dex_percent': 'main_stat',
-        'base_attack': 'attack',
+        main_pct_key: 'main_stat',
+        'attack_flat': 'attack',
     }
     guild_stat = guild_mapping.get(stat_key)
     if guild_stat:
@@ -328,7 +343,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
             sources.append(("Guild Skills", guild_val))
 
     # Equipment Sets (medal, costume)
-    if stat_key == 'flat_dex':
+    if stat_key == main_flat_key:
         medal_val = data.equipment_sets.get('medal', 0)
         costume_val = data.equipment_sets.get('costume', 0)
         if medal_val > 0:
@@ -344,8 +359,8 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
         mastery_stats = calculate_mastery_stats(mastery_stages)
 
         mastery_mapping = {
-            'base_attack': 'attack',
-            'flat_dex': 'main_stat',
+            'attack_flat': 'attack',
+            main_flat_key: 'main_stat',
             'accuracy': 'accuracy',
             'min_dmg_mult': 'min_dmg_mult',
             'max_dmg_mult': 'max_dmg_mult',
@@ -355,7 +370,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
             sources.append(("Weapon Mastery", mastery_stats[mastery_key]))
 
     # Weapons (attack %)
-    if stat_key == 'attack_percent':
+    if stat_key == 'attack_pct':
         from weapons import calculate_weapon_atk_str, get_inventory_ratio
         weapons_data = getattr(data, 'weapons_data', {}) or {}
         equipped_weapon_key = getattr(data, 'equipped_weapon_key', '') or ''
@@ -390,20 +405,18 @@ def get_stat_sources(stat_key: str, raw_stats: Dict) -> List[Tuple[str, float]]:
     return sources
 
 
-def show_stat_breakdown_dialog(stat_name: str, stat_key: str, raw_stats: Dict, calculated_value: float):
+def show_stat_breakdown_dialog(stat_name: str, stat_key: str, raw_stats: Dict, calculated_value: float, job_class: JobClass = None):
     """Show a dialog with stat breakdown."""
-    sources = get_stat_sources(stat_key, raw_stats)
+    sources = get_stat_sources(stat_key, raw_stats, job_class)
+    is_pct = is_percentage_stat(stat_key)
 
     with st.container():
         st.markdown(f"### {stat_name} (Calculated)")
-        st.markdown(f"**Total: {calculated_value:,.1f}{'%' if 'pct' in stat_key or stat_key.endswith('_percent') or stat_key in ['boss_damage', 'normal_damage', 'crit_rate', 'crit_damage', 'defense_pen', 'final_damage', 'attack_speed', 'min_dmg_mult', 'max_dmg_mult', 'dex_percent'] else ''}**")
+        st.markdown(f"**Total: {calculated_value:,.1f}{'%' if is_pct else ''}**")
 
         if sources:
             st.markdown("---")
             for source_name, value in sources:
-                is_pct = stat_key in ['dex_percent', 'damage_percent', 'boss_damage', 'normal_damage',
-                                      'crit_rate', 'crit_damage', 'defense_pen', 'final_damage',
-                                      'attack_speed', 'min_dmg_mult', 'max_dmg_mult', 'attack_percent']
                 if is_pct:
                     st.write(f"**{source_name}:** {value:.1f}%")
                 else:
@@ -413,55 +426,76 @@ def show_stat_breakdown_dialog(stat_name: str, stat_key: str, raw_stats: Dict, c
 
 
 # ============================================================================
-# STAT DEFINITIONS
+# STAT DEFINITIONS (Using standardized stat names)
 # ============================================================================
 
-# Define all stats to show in the comparison table
-# (key, display_name, is_percentage, include_baseline, baseline_value)
-STAT_DEFINITIONS = [
-    # Main stats
-    ("total_dex", "DEX (Total)", False, False, 0),
-    ("flat_dex", "DEX (Flat)", False, False, 0),
-    ("dex_percent", "DEX %", True, False, 0),
-    # Attack
-    ("total_attack", "Attack (Total)", False, False, 0),
-    ("base_attack", "Attack (Flat)", False, False, 0),
-    ("attack_percent", "Attack %", True, False, 0),
-    # Damage stats
-    ("damage_percent", "Damage %", True, False, 0),
-    ("boss_damage", "Boss Damage %", True, False, 0),
-    ("normal_damage", "Normal Dmg %", True, False, 0),
-    # Crit stats
-    ("crit_rate", "Crit Rate %", True, True, BASE_CRIT_RATE),
-    ("crit_damage", "Crit Damage %", True, True, BASE_CRIT_DMG),
-    # Defense/Final
-    ("defense_pen", "Defense Pen %", True, False, 0),
-    ("final_damage", "Final Damage %", True, False, 0),
-    # Other
-    ("skill_damage", "Skill Damage %", True, False, 0),
-    ("min_dmg_mult", "Min Dmg Mult %", True, True, BASE_MIN_DMG),
-    ("max_dmg_mult", "Max Dmg Mult %", True, True, BASE_MAX_DMG),
-    ("attack_speed", "Attack Speed %", True, False, 0),
-    ("accuracy", "Accuracy", False, False, 0),
-]
+def get_stat_definitions(job_class: JobClass = None):
+    """Get stat definitions with dynamic main stat based on job class."""
+    if job_class is None:
+        job_class = JobClass.BOWMASTER
+    main_stat = get_main_stat_name(job_class).upper()  # e.g., 'DEX', 'STR'
+    main_stat_lower = main_stat.lower()
+
+    # Define all stats to show in the comparison table
+    # (key, display_name, is_percentage, include_baseline, baseline_value)
+    return [
+        # Main stats (dynamic based on job)
+        ("total_main_stat", f"{main_stat} (Total)", False, False, 0),
+        (f"{main_stat_lower}_flat", f"{main_stat} (Flat)", False, False, 0),
+        (f"{main_stat_lower}_pct", f"{main_stat} %", True, False, 0),
+        # Attack
+        ("total_attack", "Attack (Total)", False, False, 0),
+        ("attack_flat", "Attack (Flat)", False, False, 0),
+        ("attack_pct", "Attack %", True, False, 0),
+        # Damage stats
+        ("damage_pct", "Damage %", True, False, 0),
+        ("boss_damage", "Boss Damage %", True, False, 0),
+        ("normal_damage", "Normal Dmg %", True, False, 0),
+        # Crit stats
+        ("crit_rate", "Crit Rate %", True, True, BASE_CRIT_RATE),
+        ("crit_damage", "Crit Damage %", True, True, BASE_CRIT_DMG),
+        # Defense/Final
+        ("def_pen", "Defense Pen %", True, False, 0),
+        ("final_damage", "Final Damage %", True, False, 0),
+        # Other
+        ("skill_damage", "Skill Damage %", True, False, 0),
+        ("min_dmg_mult", "Min Dmg Mult %", True, True, BASE_MIN_DMG),
+        ("max_dmg_mult", "Max Dmg Mult %", True, True, BASE_MAX_DMG),
+        ("attack_speed", "Attack Speed %", True, False, 0),
+        ("accuracy", "Accuracy", False, False, 0),
+    ]
 
 
-def get_calculated_stats() -> Tuple[Dict[str, float], Dict]:
+def get_calculated_stats(job_class: JobClass = None) -> Tuple[Dict[str, float], Dict, JobClass]:
     """Get all calculated stats from the shared aggregate function.
 
     Uses apply_adjustments=False to get raw calculated values
     (before manual adjustments are applied).
+
+    Returns (stats_dict, raw_stats, job_class)
     """
     raw_stats = shared_aggregate_stats(data, apply_adjustments=False)
 
+    # Determine job class for main stat keys
+    if job_class is None:
+        job_class_str = getattr(data, 'job_class', 'bowmaster')
+        try:
+            job_class = JobClass(job_class_str.lower())
+        except ValueError:
+            job_class = JobClass.BOWMASTER
+
+    main_stat = get_main_stat_name(job_class)  # e.g., 'dex'
+    main_flat_key = f'{main_stat}_flat'
+    main_pct_key = f'{main_stat}_pct'
+
     stats = {}
 
-    # Basic stats from raw
-    stats['flat_dex'] = raw_stats.get('flat_dex', 0)
-    stats['dex_percent'] = raw_stats.get('dex_percent', 0)
-    stats['base_attack'] = raw_stats.get('base_attack', 0)
-    stats['attack_percent'] = raw_stats.get('attack_percent', 0)
-    stats['damage_percent'] = raw_stats.get('damage_percent', 0)
+    # Main stats (using standardized names)
+    stats[main_flat_key] = raw_stats.get(main_flat_key, 0)
+    stats[main_pct_key] = raw_stats.get(main_pct_key, 0)
+    stats['attack_flat'] = raw_stats.get('attack_flat', 0)
+    stats['attack_pct'] = raw_stats.get('attack_pct', 0)
+    stats['damage_pct'] = raw_stats.get('damage_pct', 0)
     stats['boss_damage'] = raw_stats.get('boss_damage', 0)
     stats['normal_damage'] = raw_stats.get('normal_damage', 0)
     stats['crit_rate'] = raw_stats.get('crit_rate', 0) + BASE_CRIT_RATE
@@ -471,19 +505,19 @@ def get_calculated_stats() -> Tuple[Dict[str, float], Dict]:
     stats['max_dmg_mult'] = raw_stats.get('max_dmg_mult', 0) + BASE_MAX_DMG
     stats['accuracy'] = raw_stats.get('accuracy', 0)
 
-    # Calculate total DEX
-    stats['total_dex'] = stats['flat_dex'] * (1 + stats['dex_percent'] / 100)
+    # Calculate total main stat
+    stats['total_main_stat'] = stats[main_flat_key] * (1 + stats[main_pct_key] / 100)
 
     # Calculate total attack (base * (1 + atk%/100))
-    stats['total_attack'] = stats['base_attack'] * (1 + stats['attack_percent'] / 100)
+    stats['total_attack'] = stats['attack_flat'] * (1 + stats['attack_pct'] / 100)
 
     # Defense pen from sources
-    def_pen_sources = raw_stats.get('defense_pen_sources', [])
+    def_pen_sources = raw_stats.get('def_pen_sources', [])
     if def_pen_sources:
         total_def_pen, _ = calculate_effective_defense_pen_with_sources(def_pen_sources)
-        stats['defense_pen'] = total_def_pen * 100
+        stats['def_pen'] = total_def_pen * 100
     else:
-        stats['defense_pen'] = 0
+        stats['def_pen'] = 0
 
     # Attack speed from sources
     atk_spd_sources = raw_stats.get('attack_speed_sources', [])
@@ -503,7 +537,7 @@ def get_calculated_stats() -> Tuple[Dict[str, float], Dict]:
     else:
         stats['final_damage'] = 0
 
-    return stats, raw_stats
+    return stats, raw_stats, job_class
 
 
 # ============================================================================
@@ -557,8 +591,11 @@ with col2:
 
 st.markdown("---")
 
-# Get calculated stats
-calculated_stats, raw_stats = get_calculated_stats()
+# Get calculated stats (with job class)
+calculated_stats, raw_stats, current_job_class = get_calculated_stats()
+
+# Get stat definitions for this job class
+STAT_DEFINITIONS = get_stat_definitions(current_job_class)
 
 # ============================================================================
 # STAT COMPARISON TABLE
@@ -691,20 +728,17 @@ if st.session_state.breakdown_stat:
             break
 
     calc_val = calculated_stats.get(stat_key, 0)
+    is_pct = is_percentage_stat(stat_key)
 
     @st.dialog(f"Stat Breakdown: {display_name} (Calculated)")
     def show_breakdown():
         st.markdown(f"### {display_name} (Calculated)")
-        is_pct = stat_key in ['dex_percent', 'damage_percent', 'boss_damage', 'normal_damage',
-                              'crit_rate', 'crit_damage', 'defense_pen', 'final_damage',
-                              'attack_speed', 'min_dmg_mult', 'max_dmg_mult', 'attack_percent',
-                              'skill_damage']
         if is_pct:
             st.markdown(f"**Total: {calc_val:.1f}%**")
         else:
             st.markdown(f"**Total: {calc_val:,.0f}**")
 
-        sources = get_stat_sources(stat_key, raw_stats)
+        sources = get_stat_sources(stat_key, raw_stats, current_job_class)
 
         if sources:
             st.markdown("---")
@@ -740,7 +774,7 @@ st.markdown("<div class='section-header'>Additional Combat Stats (click for brea
 col1, col2 = st.columns(2)
 
 with col1:
-    def_pen_sources = raw_stats.get('defense_pen_sources', [])
+    def_pen_sources = raw_stats.get('def_pen_sources', [])
     if def_pen_sources:
         total_def_pen, breakdown = calculate_effective_defense_pen_with_sources(def_pen_sources)
         with st.expander(f"▸ Defense Pen %: {total_def_pen*100:.1f}%"):

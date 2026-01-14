@@ -4,8 +4,14 @@ Each user has a single CSV file with all their character data.
 """
 import os
 import csv
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
+
+if TYPE_CHECKING:
+    from equipment import Equipment
+    from stats import StatBlock
+    from cubes import SlotPotentials
+    from job_classes import JobClass
 
 # Path to user data directory
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
@@ -24,6 +30,7 @@ class UserData:
     # Character info
     username: str = ""
     character_level: int = 100
+    job_class: str = "bowmaster"  # Job class (from job_classes.py JobClass enum)
     all_skills: int = 0  # Auto-calculated from equipment potentials & sub stats
     combat_mode: str = "stage"
     chapter: str = "Chapter 27"
@@ -78,6 +85,107 @@ class UserData:
 
     # Guild skills
     guild_skills: Dict[str, float] = field(default_factory=dict)
+
+    def get_equipment(self, slot: str) -> 'Equipment':
+        """
+        Get Equipment object for a slot.
+        Converts stored dict format to Equipment class.
+
+        Handles the CSV flat format:
+        - base_attack, base_max_hp, base_third_stat (main stats)
+        - sub_boss_damage, sub_normal_damage, sub_crit_rate, etc. (sub stats)
+        - special_stat_type, special_stat_value (special item stats)
+        """
+        from equipment import Equipment
+
+        item_data = self.equipment_items.get(slot, {})
+        if not item_data:
+            return Equipment(slot=slot)
+
+        equip = Equipment(
+            slot=slot,
+            name=item_data.get('name', ''),
+            rarity=item_data.get('rarity', 'unique'),
+            tier=int(item_data.get('tier', 4)),
+            stars=int(item_data.get('stars', 0)),
+            is_special=item_data.get('is_special', False),
+        )
+
+        # Load main stats from flat CSV format (base_attack, base_max_hp, base_third_stat)
+        equip.set_base('attack', float(item_data.get('base_attack', 0)))
+        equip.set_base('max_hp', float(item_data.get('base_max_hp', 0)))
+        equip.set_base('third_stat', float(item_data.get('base_third_stat', 0)))
+
+        # Load sub stats from flat CSV format (sub_boss_damage, sub_crit_rate, etc.)
+        sub_stat_mappings = {
+            'sub_boss_damage': 'boss_damage',
+            'sub_normal_damage': 'normal_damage',
+            'sub_crit_rate': 'crit_rate',
+            'sub_crit_damage': 'crit_damage',
+            'sub_attack_flat': 'sub_attack',
+            'sub_skill_1st': 'skill_1st',
+            'sub_skill_2nd': 'skill_2nd',
+            'sub_skill_3rd': 'skill_3rd',
+            'sub_skill_4th': 'skill_4th',
+        }
+        for csv_key, equip_key in sub_stat_mappings.items():
+            value = item_data.get(csv_key, 0)
+            if value:
+                equip.set_base(equip_key, float(value))
+
+        # Handle special stat (damage_pct, all_skills, final_damage)
+        if equip.is_special:
+            special_type = item_data.get('special_stat_type', 'damage_pct')
+            special_value = float(item_data.get('special_stat_value', 0))
+            if special_value > 0:
+                equip.set_base(special_type, special_value)
+
+        return equip
+
+    def get_all_equipment(self) -> Dict[str, 'Equipment']:
+        """Get all equipment as Equipment objects."""
+        return {slot: self.get_equipment(slot) for slot in EQUIPMENT_SLOTS}
+
+    def get_equipment_stats(self) -> 'StatBlock':
+        """Get combined stats from all equipment (base stats only, not potentials)."""
+        from stats import EMPTY_STATS
+        return sum((self.get_equipment(slot).get_stats() for slot in EQUIPMENT_SLOTS), EMPTY_STATS)
+
+    def get_potentials(self, slot: str) -> 'SlotPotentials':
+        """
+        Get SlotPotentials object for a slot.
+        Converts stored dict format to SlotPotentials class.
+        """
+        from cubes import SlotPotentials
+
+        pot_data = self.equipment_potentials.get(slot, {})
+        return SlotPotentials.from_dict(slot, pot_data)
+
+    def get_all_potentials(self) -> Dict[str, 'SlotPotentials']:
+        """Get all potentials as SlotPotentials objects."""
+        return {slot: self.get_potentials(slot) for slot in EQUIPMENT_SLOTS}
+
+    def get_potentials_stats(self, job_class: 'JobClass' = None) -> 'StatBlock':
+        """
+        Get combined stats from all equipment potentials.
+
+        Args:
+            job_class: Job class for stat_per_level conversion. If None, uses self.job_class.
+        """
+        from stats import EMPTY_STATS
+        from job_classes import JobClass as JC
+
+        if job_class is None:
+            try:
+                job_class = JC(self.job_class)
+            except ValueError:
+                job_class = JC.BOWMASTER
+
+        return sum(
+            (self.get_potentials(slot).get_stats(job_class, self.character_level)
+             for slot in EQUIPMENT_SLOTS),
+            EMPTY_STATS
+        )
 
 
 def _get_user_file(username: str) -> str:
@@ -372,6 +480,7 @@ def _parse_value(value: str) -> Any:
 def _init_default_data(data: UserData):
     """Initialize data with default values."""
     # Default equipment items
+    # Stats use standardized keys from stat_names.py
     for slot in EQUIPMENT_SLOTS:
         data.equipment_items[slot] = {
             'name': slot.title(),
@@ -380,22 +489,27 @@ def _init_default_data(data: UserData):
             'stars': 0,
             'is_special': False,
             # Main Stats (Main Amplify)
-            'base_attack': 0,
-            'base_max_hp': 0,
-            'base_third_stat': 0,
-            # Sub Stats (Sub Amplify)
-            'sub_boss_damage': 0,
-            'sub_normal_damage': 0,
-            'sub_crit_rate': 0,
-            'sub_crit_damage': 0,
-            'sub_attack_flat': 0,
-            'sub_skill_1st': 0,
-            'sub_skill_2nd': 0,
-            'sub_skill_3rd': 0,
-            'sub_skill_4th': 0,
-            # Special sub stat (only on special items)
-            'special_stat_type': 'damage_pct',
-            'special_stat_value': 0,
+            'main_stats': {
+                'attack_flat': 0,
+                'max_hp': 0,
+                'third_stat': 0,  # Varies by slot (defense, accuracy, etc.)
+            },
+            # Sub Stats (Sub Amplify) - includes special stats
+            'sub_stats': {
+                'boss_damage': 0,
+                'normal_damage': 0,
+                'crit_rate': 0,
+                'crit_damage': 0,
+                'attack_flat': 0,
+                'skill_1st': 0,
+                'skill_2nd': 0,
+                'skill_3rd': 0,
+                'skill_4th': 0,
+                # Special stats (only on special items, is_special=True)
+                'damage_pct': 0,
+                'all_skills': 0,
+                'final_damage': 0,
+            },
         }
         data.equipment_potentials[slot] = {
             # Regular potential
@@ -515,7 +629,14 @@ def export_user_data_csv(data: UserData) -> str:
     # Artifacts inventory
     for artifact_id, artifact in data.artifacts_inventory.items():
         for key, value in artifact.items():
-            writer.writerow(['artifact_inventory', artifact_id, key, str(value)])
+            if key == 'potentials' and isinstance(value, list):
+                # Export each potential as a separate row with indexed subkey
+                for pot_idx, pot in enumerate(value):
+                    if isinstance(pot, dict):
+                        for pot_key, pot_val in pot.items():
+                            writer.writerow(['artifact_potential', artifact_id, f'{pot_idx}_{pot_key}', str(pot_val)])
+            else:
+                writer.writerow(['artifact_inventory', artifact_id, key, str(value)])
 
     # Artifacts resonance
     for key, value in data.artifacts_resonance.items():
@@ -651,6 +772,26 @@ def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
                 if key not in data.artifacts_inventory:
                     data.artifacts_inventory[key] = {}
                 data.artifacts_inventory[key][subkey] = _parse_value(value)
+
+            elif section == 'artifact_potential':
+                # Handle artifact potentials with format: artifact_id, "idx_field", value
+                artifact_id = key
+                if artifact_id not in data.artifacts_inventory:
+                    data.artifacts_inventory[artifact_id] = {'stars': 0, 'dupes': 0, 'potentials': []}
+                if 'potentials' not in data.artifacts_inventory[artifact_id]:
+                    data.artifacts_inventory[artifact_id]['potentials'] = []
+
+                # Parse subkey format: "0_stat", "0_value", "0_tier", "1_stat", etc.
+                parts = subkey.split('_', 1)
+                if len(parts) == 2:
+                    pot_idx = int(parts[0])
+                    field_name = parts[1]
+
+                    # Ensure potentials list is long enough
+                    while len(data.artifacts_inventory[artifact_id]['potentials']) <= pot_idx:
+                        data.artifacts_inventory[artifact_id]['potentials'].append({'stat': '', 'value': 0, 'tier': 'legendary'})
+
+                    data.artifacts_inventory[artifact_id]['potentials'][pot_idx][field_name] = _parse_value(value)
 
             elif section == 'artifact_resonance':
                 data.artifacts_resonance[key] = _parse_value(value)

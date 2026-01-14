@@ -4,9 +4,16 @@ Configure character level, combat mode, and chapter.
 All Skills bonus is auto-calculated from equipment sources.
 """
 import streamlit as st
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 from utils.data_manager import save_user_data, export_user_data_csv, import_user_data_csv, EQUIPMENT_SLOTS
 from constants import ENEMY_DEFENSE_VALUES
 from equipment import get_amplify_multiplier
+from job_classes import JobClass, JOB_DISPLAY_NAMES, get_job_stats, get_main_stat_name, get_secondary_stat_name
 
 st.set_page_config(page_title="Character Settings", page_icon="⚔️", layout="wide")
 
@@ -85,6 +92,39 @@ with col1:
         data.character_level = new_level
         auto_save()
 
+    # Job Class Selector
+    job_options = list(JobClass)
+    job_display_options = [JOB_DISPLAY_NAMES[j] for j in job_options]
+
+    # Get current job class from data, default to bowmaster
+    current_job_str = getattr(data, 'job_class', 'bowmaster')
+    try:
+        current_job = JobClass(current_job_str)
+        current_idx = job_options.index(current_job)
+    except (ValueError, KeyError):
+        current_job = JobClass.BOWMASTER
+        current_idx = 0
+
+    selected_job_display = st.selectbox(
+        "Job Class",
+        options=job_display_options,
+        index=current_idx,
+        help="Your character's job class. Determines main and secondary stats."
+    )
+
+    # Find selected job enum
+    selected_idx = job_display_options.index(selected_job_display)
+    selected_job = job_options[selected_idx]
+
+    if selected_job.value != current_job_str:
+        data.job_class = selected_job.value
+        auto_save()
+
+    # Show main/secondary stat info
+    main_stat = get_main_stat_name(selected_job).upper()
+    secondary_stat = get_secondary_stat_name(selected_job).upper()
+    st.caption(f"Main Stat: **{main_stat}** | Secondary: **{secondary_stat}**")
+
     # All Skills (calculated automatically)
     calculated_all_skills = calculate_all_skills()
     st.metric(
@@ -140,6 +180,7 @@ with col2:
     # Combat Mode
     combat_modes = {
         "stage": "Stage (Mixed) - 60% normal, 40% boss",
+        "chapter_hunt": "Chapter Hunt - 100% normal, infinite duration",
         "boss": "Boss (Single) - 100% boss damage",
         "world_boss": "World Boss - 100% boss damage"
     }
@@ -157,6 +198,45 @@ with col2:
     if new_mode != data.combat_mode:
         data.combat_mode = new_mode
         auto_save()
+
+    # Realistic DPS toggle
+    if not hasattr(data, 'use_realistic_dps'):
+        data.use_realistic_dps = False
+
+    use_realistic = st.checkbox(
+        "Use Realistic DPS",
+        value=data.use_realistic_dps,
+        help="Phase-aware simulation: applies boss damage only during boss phase, "
+             "normal damage only during mob phase, and optimizes skill usage per phase "
+             "(e.g., saves Hurricane for boss when multi-target BA is better during mobs)"
+    )
+    if use_realistic != data.use_realistic_dps:
+        data.use_realistic_dps = use_realistic
+        auto_save()
+
+    # Boss Importance slider (only visible when realistic DPS is enabled and in stage mode)
+    if use_realistic and new_mode == "stage":
+        if not hasattr(data, 'boss_importance'):
+            data.boss_importance = 70  # Default: boss has ~70% of total HP
+
+        boss_importance = st.slider(
+            "Boss Importance",
+            min_value=0,
+            max_value=100,
+            value=data.boss_importance,
+            step=5,
+            help="How much to weight boss damage vs normal damage. "
+                 "Higher = boss is your bottleneck (struggle to kill boss). "
+                 "Lower = mobs are your bottleneck (struggle to clear waves). "
+                 "Default 70% reflects boss having ~70% of total stage HP."
+        )
+        if boss_importance != data.boss_importance:
+            data.boss_importance = boss_importance
+            auto_save()
+
+        # Show what this means
+        mob_weight = 100 - boss_importance
+        st.caption(f"Mob damage valued at {mob_weight}%, Boss damage valued at {boss_importance}%")
 
     st.divider()
 

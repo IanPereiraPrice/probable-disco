@@ -1,5 +1,5 @@
 """
-Equipment Page - Compact Layout with Cube Priority Recommendations
+Equipment Potentials Page - Compact Layout with Cube Priority Recommendations
 Matches original Tkinter app design with all potentials visible + DPS-based recommendations.
 """
 import streamlit as st
@@ -21,9 +21,31 @@ from utils.distribution_chart import (
     get_percentile_label,
     get_percentile_color,
 )
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
-st.set_page_config(page_title="Equipment", page_icon="🛡️", layout="wide")
+# Import cube system classes and helpers
+from cubes import (
+    PotentialTier,
+    StatType,
+    POTENTIAL_STATS,
+    SPECIAL_POTENTIALS,
+    TIER_COLORS,
+    TIER_ABBREVIATIONS,
+    EquipmentPotential,
+    SlotPotentials,
+    get_stat_display_name,
+    get_stat_short_name,
+    get_tier_color,
+    get_tier_abbreviation,
+    get_tier_from_string,
+    get_available_stats_for_slot,
+    get_stat_value_at_tier,
+    get_special_stat_for_slot,
+    format_stat_value,
+)
+from job_classes import JobClass
+
+st.set_page_config(page_title="Equipment Potentials", page_icon="🛡️", layout="wide")
 
 # Compact CSS styling
 st.markdown("""
@@ -85,131 +107,57 @@ if 'logged_in' not in st.session_state or not st.session_state.logged_in:
 data = st.session_state.user_data
 
 # ============================================================================
-# CONSTANTS
+# CONSTANTS - UI specific (data comes from cubes.py)
 # ============================================================================
 
+# Tier list for UI dropdowns (string format)
 POTENTIAL_TIERS = ["Rare", "Epic", "Unique", "Legendary", "Mystic"]
-TIER_ABBREV = {"Rare": "RAR", "Epic": "EPC", "Unique": "UNI", "Legendary": "LEG", "Mystic": "MYS"}
-TIER_COLORS = {"Rare": "#5599ff", "Epic": "#cc77ff", "Unique": "#ffcc00", "Legendary": "#66ff66", "Mystic": "#ff6666"}
 
-POTENTIAL_VALUES = {
-    "dex_pct": {"Rare": 4.5, "Epic": 6.0, "Unique": 9.0, "Legendary": 12.0, "Mystic": 15.0},
-    "str_pct": {"Rare": 4.5, "Epic": 6.0, "Unique": 9.0, "Legendary": 12.0, "Mystic": 15.0},
-    "int_pct": {"Rare": 4.5, "Epic": 6.0, "Unique": 9.0, "Legendary": 12.0, "Mystic": 15.0},
-    "luk_pct": {"Rare": 4.5, "Epic": 6.0, "Unique": 9.0, "Legendary": 12.0, "Mystic": 15.0},
-    "dex_flat": {"Epic": 200, "Unique": 400, "Legendary": 600, "Mystic": 1000},
-    "str_flat": {"Epic": 200, "Unique": 400, "Legendary": 600, "Mystic": 1000},
-    "int_flat": {"Epic": 200, "Unique": 400, "Legendary": 600, "Mystic": 1000},
-    "luk_flat": {"Epic": 200, "Unique": 400, "Legendary": 600, "Mystic": 1000},
-    "damage": {"Rare": 8.0, "Epic": 12.0, "Unique": 18.0, "Legendary": 25.0, "Mystic": 35.0},
-    "crit_rate": {"Rare": 4.5, "Epic": 6.0, "Unique": 9.0, "Legendary": 12.0, "Mystic": 15.0},
-    "min_dmg_mult": {"Rare": 6.0, "Epic": 8.0, "Unique": 10.0, "Legendary": 15.0, "Mystic": 25.0},
-    "max_dmg_mult": {"Rare": 6.0, "Epic": 8.0, "Unique": 10.0, "Legendary": 15.0, "Mystic": 25.0},
-    "attack_speed": {"Rare": 3.5, "Epic": 4.0, "Unique": 5.0, "Legendary": 7.0, "Mystic": 10.0},
-    "defense": {"Rare": 4.5, "Epic": 6.0, "Unique": 9.0, "Legendary": 12.0, "Mystic": 15.0},
-    "max_hp": {"Epic": 12.0, "Unique": 15.0, "Legendary": 20.0, "Mystic": 25.0},
-    "max_mp": {"Epic": 6.0, "Unique": 9.0, "Legendary": 12.0, "Mystic": 15.0},
-}
-
-SPECIAL_POTENTIAL_VALUES = {
-    "skill_cd": {"Epic": 0.5, "Unique": 1.0, "Legendary": 1.5, "Mystic": 2.0},
-    "crit_damage": {"Unique": 20.0, "Legendary": 30.0, "Mystic": 50.0},
-    "def_pen": {"Unique": 8.0, "Legendary": 12.0, "Mystic": 20.0},
-    "all_skills": {"Epic": 5, "Unique": 8, "Legendary": 12, "Mystic": 16},
-    "final_damage": {"Epic": 3.0, "Unique": 5.0, "Legendary": 8.0, "Mystic": 12.0},
-    "buff_duration": {"Epic": 5.0, "Unique": 8.0, "Legendary": 12.0, "Mystic": 20.0},
-    "stat_per_level": {"Epic": 3, "Unique": 5, "Legendary": 8, "Mystic": 12},
-    "ba_targets": {"Unique": 1, "Legendary": 2, "Mystic": 3},
-}
-
-TIER_PREV = {"Rare": None, "Epic": "Rare", "Unique": "Epic", "Legendary": "Unique", "Mystic": "Legendary"}
-
-BASE_POTENTIAL_STATS = [
-    "", "dex_pct", "str_pct", "int_pct", "luk_pct",
-    "dex_flat", "str_flat", "int_flat", "luk_flat",
-    "damage", "crit_rate", "min_dmg_mult", "max_dmg_mult", "attack_speed",
-    "defense", "max_hp", "max_mp",
-]
-
-SPECIAL_POTENTIALS = {
-    "hat": {"stat": "skill_cd", "name": "Skill Cooldown"},
-    "gloves": {"stat": "crit_damage", "name": "Crit Damage"},
-    "shoulder": {"stat": "def_pen", "name": "Defense Pen"},
-    "ring": {"stat": "all_skills", "name": "All Skills"},
-    "necklace": {"stat": "all_skills", "name": "All Skills"},
-    "cape": {"stat": "final_damage", "name": "Final Damage"},
-    "bottom": {"stat": "final_damage", "name": "Final Damage"},
-    "belt": {"stat": "buff_duration", "name": "Buff Duration"},
-    "face": {"stat": "stat_per_level", "name": "Stat/Level"},
-    "top": {"stat": "ba_targets", "name": "BA Targets"},
-    "shoes": None,
-}
-
+# Max values for rating calculation (at Legendary tier)
 MAX_POT_VALUES = {
-    "damage": 25.0, "crit_rate": 12.0, "crit_damage": 30.0, "def_pen": 12.0,
-    "final_damage": 8.0, "all_skills": 12, "dex_pct": 12.0, "str_pct": 12.0,
-    "int_pct": 12.0, "luk_pct": 12.0, "min_dmg_mult": 15.0, "max_dmg_mult": 15.0,
-}
-
-STAT_DISPLAY = {
-    "dex_pct": "DEX%", "str_pct": "STR%", "int_pct": "INT%", "luk_pct": "LUK%",
-    "dex_flat": "DEX", "str_flat": "STR", "int_flat": "INT", "luk_flat": "LUK",
-    "damage": "DMG%", "crit_rate": "CR%", "crit_damage": "CD%", "def_pen": "DP%",
-    "final_damage": "FD%", "all_skills": "AS", "min_dmg_mult": "MinD%", "max_dmg_mult": "MaxD%",
-    "attack_speed": "AS%", "defense": "DEF%", "max_hp": "HP%", "max_mp": "MP%",
-    "skill_cd": "CDR", "buff_duration": "Buff%", "stat_per_level": "S/Lv", "ba_targets": "BA+",
-}
-
-# Typical cube roll values for priority calculation
-TYPICAL_ROLL_VALUES = {
-    "damage": 30,           # Mystic Damage % line
-    "dex_pct": 15,          # Mystic Main Stat % line
-    "crit_damage": 30,      # Mystic Crit Damage (special)
-    "def_pen": 12,          # Defense Pen (special)
-    "final_damage": 8,      # Final Damage (special)
-    "min_dmg_mult": 15,     # Min Damage %
-    "max_dmg_mult": 15,     # Max Damage %
-    "all_skills": 12,       # All Skills (special)
+    StatType.DAMAGE_PCT: 25.0,
+    StatType.CRIT_RATE: 12.0,
+    StatType.CRIT_DAMAGE: 30.0,
+    StatType.DEF_PEN: 12.0,
+    StatType.FINAL_DAMAGE: 8.0,
+    StatType.ALL_SKILLS: 12,
+    StatType.DEX_PCT: 12.0,
+    StatType.STR_PCT: 12.0,
+    StatType.INT_PCT: 12.0,
+    StatType.LUK_PCT: 12.0,
+    StatType.MIN_DMG_MULT: 15.0,
+    StatType.MAX_DMG_MULT: 15.0,
 }
 
 
-def get_stat_value(stat: str, tier: str, is_yellow: bool, slot: str) -> float:
-    """Get auto-calculated value for a stat."""
-    if not stat:
+def get_stat_value_for_ui(stat_str: str, tier_str: str, is_yellow: bool, slot: str) -> float:
+    """Get auto-calculated value for a stat (UI wrapper for cubes.py function)."""
+    if not stat_str:
         return 0.0
-
-    if slot in SPECIAL_POTENTIALS and SPECIAL_POTENTIALS[slot]:
-        special_stat = SPECIAL_POTENTIALS[slot]["stat"]
-        if stat == special_stat or stat == SPECIAL_POTENTIALS[slot]["name"]:
-            values = SPECIAL_POTENTIAL_VALUES.get(special_stat, {})
-            if is_yellow:
-                return values.get(tier, 0.0)
-            else:
-                prev = TIER_PREV.get(tier)
-                return values.get(prev, 0.0) if prev else 0.0
-
-    values = POTENTIAL_VALUES.get(stat, {})
-    if is_yellow:
-        return values.get(tier, 0.0)
-    else:
-        prev = TIER_PREV.get(tier)
-        return values.get(prev, 0.0) if prev else 0.0
+    try:
+        stat_type = StatType(stat_str)
+        tier = get_tier_from_string(tier_str)
+        return get_stat_value_at_tier(stat_type, tier, slot, is_yellow)
+    except ValueError:
+        return 0.0
 
 
 def get_stat_options(slot: str) -> list:
-    """Get stat options for a slot."""
-    options = BASE_POTENTIAL_STATS.copy()
-    if slot in SPECIAL_POTENTIALS and SPECIAL_POTENTIALS[slot]:
-        special = SPECIAL_POTENTIALS[slot]["stat"]
-        options = [special] + options
-    return options
+    """Get stat options for a slot as string values (for UI dropdowns)."""
+    stat_types = get_available_stats_for_slot(slot)
+    # Convert to strings and add empty option at the beginning
+    return [""] + [st.value for st in stat_types]
 
 
-def format_stat(stat: str) -> str:
-    """Format stat for display."""
-    if not stat:
+def format_stat_for_display(stat_str: str) -> str:
+    """Format stat string for short display."""
+    if not stat_str:
         return "---"
-    return STAT_DISPLAY.get(stat, stat.replace("_", " ").title())
+    try:
+        stat_type = StatType(stat_str)
+        return get_stat_short_name(stat_type)
+    except ValueError:
+        return stat_str.replace("_", " ").title()
 
 
 def ensure_pot_fields(pots: dict) -> dict:
@@ -245,20 +193,26 @@ def calculate_rating(slot: str, pots: dict, pot_type: str = "regular") -> float:
     return min(total_value, 100)
 
 
-def format_pot_line(stat: str, val: float, is_yellow: bool) -> str:
+def format_pot_line(stat_str: str, val: float, is_yellow: bool) -> str:
     """Format a single potential line for display."""
-    if not stat or val == 0:
+    if not stat_str or val == 0:
         return ""
 
     line_marker = "<span class='yellow-line'>[Y]</span>" if is_yellow else "<span class='grey-line'>[G]</span>"
-    stat_name = format_stat(stat)
+    stat_name = format_stat_for_display(stat_str)
 
-    if "flat" in stat or stat in ["all_skills", "ba_targets"]:
-        val_str = f"+{int(val)}"
-    elif stat == "skill_cd":
-        val_str = f"-{val:.1f}s"
-    else:
-        val_str = f"+{val:.1f}%"
+    # Use format_stat_value from cubes.py if we can parse the stat
+    try:
+        stat_type = StatType(stat_str)
+        val_str = format_stat_value(stat_type, val)
+    except ValueError:
+        # Fallback for unknown stats
+        if "flat" in stat_str or stat_str in ["all_skills", "ba_targets"]:
+            val_str = f"+{int(val)}"
+        elif stat_str == "skill_cd":
+            val_str = f"-{val:.1f}s"
+        else:
+            val_str = f"+{val:.1f}%"
 
     return f"{line_marker} {stat_name}: {val_str}"
 
@@ -267,9 +221,10 @@ def build_pot_summary(slot: str, pots: dict, pot_type: str = "regular") -> str:
     """Build compact potential summary string."""
     prefix = "" if pot_type == "regular" else "bonus_"
     tier_key = "tier" if pot_type == "regular" else "bonus_tier"
-    tier = pots.get(tier_key, "Legendary")
-    tier_abbr = TIER_ABBREV.get(tier, "???")
-    tier_color = TIER_COLORS.get(tier, "#fff")
+    tier_str = pots.get(tier_key, "Legendary")
+    tier = get_tier_from_string(tier_str)
+    tier_abbr = get_tier_abbreviation(tier)
+    tier_color = get_tier_color(tier)
 
     parts = []
     for i in range(1, 4):
@@ -366,7 +321,12 @@ def calculate_dps_from_stats(stats: Dict[str, Any], combat_mode: str = 'stage', 
             except (ValueError, AttributeError):
                 chapter_num = 27
             enemy_def = get_enemy_defense(chapter_num)
-    return calculate_dps(stats, combat_mode, enemy_def)
+
+    # Check if user has enabled realistic DPS calculation
+    use_realistic_dps = getattr(data, 'use_realistic_dps', False)
+    boss_importance = getattr(data, 'boss_importance', 70) / 100.0
+
+    return calculate_dps(stats, combat_mode, enemy_def, use_realistic_dps=use_realistic_dps, boss_importance=boss_importance)
 
 
 @st.cache_data(ttl=30)
@@ -447,7 +407,7 @@ with col_editor:
                 stat = pots.get(f"{prefix}line{i}_stat", "")
                 if stat:
                     is_yellow = True if i == 1 else pots.get(f"{prefix}line{i}_yellow", True)
-                    pots[f"{prefix}line{i}_value"] = get_stat_value(stat, new_tier, is_yellow, selected_slot)
+                    pots[f"{prefix}line{i}_value"] = get_stat_value_for_ui(stat, new_tier, is_yellow, selected_slot)
             auto_save()
             st.rerun()
 
@@ -482,7 +442,7 @@ with col_editor:
                 if st.button(yg_label, key=f"yg_{prefix}{i}", help="Toggle Yellow/Grey"):
                     pots[yellow_key] = not is_yellow
                     if current_stat:
-                        pots[val_key] = get_stat_value(current_stat, current_tier, not is_yellow, selected_slot)
+                        pots[val_key] = get_stat_value_for_ui(current_stat, current_tier, not is_yellow, selected_slot)
                     auto_save()
                     st.rerun()
 
@@ -494,24 +454,24 @@ with col_editor:
 
             new_stat = st.selectbox(
                 f"L{i}", stat_options, index=stat_idx,
-                format_func=format_stat,
+                format_func=format_stat_for_display,
                 key=f"stat_{prefix}{i}",
                 label_visibility="collapsed"
             )
             if new_stat != current_stat:
                 pots[stat_key] = new_stat
-                pots[val_key] = get_stat_value(new_stat, current_tier, is_yellow, selected_slot)
+                pots[val_key] = get_stat_value_for_ui(new_stat, current_tier, is_yellow, selected_slot)
                 auto_save()
                 st.rerun()
 
         with val_col:
             val = pots.get(val_key, 0)
             if current_stat and val > 0:
-                if "flat" in current_stat or current_stat in ["all_skills", "ba_targets"]:
-                    st.markdown(f"**+{int(val)}**")
-                elif current_stat == "skill_cd":
-                    st.markdown(f"**-{val:.1f}s**")
-                else:
+                try:
+                    stat_type = StatType(current_stat)
+                    val_str = format_stat_value(stat_type, val)
+                    st.markdown(f"**{val_str}**")
+                except ValueError:
                     st.markdown(f"**{val:.1f}%**")
             else:
                 st.markdown("—")
@@ -603,14 +563,13 @@ with bottom_left:
         sorted_stats = sorted(totals.items(), key=lambda x: x[1], reverse=True)
 
         cols = st.columns(3)
-        for idx, (stat, val) in enumerate(sorted_stats[:9]):
+        for idx, (stat_str, val) in enumerate(sorted_stats[:9]):
             with cols[idx % 3]:
-                stat_name = format_stat(stat)
-                if "flat" in stat or stat in ["all_skills", "ba_targets"]:
-                    val_str = f"+{int(val)}"
-                elif stat == "skill_cd":
-                    val_str = f"-{val:.1f}s"
-                else:
+                stat_name = format_stat_for_display(stat_str)
+                try:
+                    stat_type = StatType(stat_str)
+                    val_str = format_stat_value(stat_type, val)
+                except ValueError:
                     val_str = f"{val:.1f}%"
 
                 st.markdown(f"""
@@ -656,12 +615,13 @@ with bottom_right:
         recommendations = st.session_state.cube_recommendations
 
         # Number selector for how many to show
-        num_to_show = st.slider("Show top N recommendations", 1, 10, 5, key="num_recs")
+        num_to_show = st.slider("Show top N recommendations", 1, 22, 5, key="num_recs")
 
         for rec in recommendations[:num_to_show]:
             slot_display = rec.slot.upper()
             pot_type = "BON" if rec.is_bonus else "REG"
-            tier_color = TIER_COLORS.get(rec.tier, "#fff")
+            rec_tier = get_tier_from_string(rec.tier)
+            tier_color = get_tier_color(rec_tier)
             tier_upper = rec.tier.upper()
 
             # Efficiency indicator emoji
@@ -702,12 +662,11 @@ with bottom_right:
                     prefix_char = "├─" if i < 3 else "└─"
 
                     if stat:
-                        stat_display = format_stat(stat)
-                        if "flat" in stat or stat in ["all_skills", "ba_targets"]:
-                            val_str = f"+{int(val)}"
-                        elif stat == "skill_cd":
-                            val_str = f"-{val:.1f}s"
-                        else:
+                        stat_display = format_stat_for_display(stat)
+                        try:
+                            stat_type = StatType(stat)
+                            val_str = format_stat_value(stat_type, val)
+                        except ValueError:
                             val_str = f"+{val:.1f}%"
                         lines_html += f"{prefix_char} L{i} [<span style='color:{y_color}'>{y_marker}</span>]: {stat_display} {val_str} <span style='color:#66ff66'>(+{dps_gain:.2f}% DPS)</span><br>"
                     else:

@@ -141,6 +141,167 @@ BOWMASTER_FD_SOURCES: Dict[str, dict] = {
 
 
 # =============================================================================
+# RARITY DISPLAY (Colors, Abbreviations)
+# =============================================================================
+
+RARITY_COLORS: Dict[Rarity, str] = {
+    Rarity.NORMAL: "#888888",
+    Rarity.RARE: "#5599ff",
+    Rarity.EPIC: "#cc77ff",
+    Rarity.UNIQUE: "#ffcc00",
+    Rarity.LEGENDARY: "#66ff66",
+    Rarity.MYSTIC: "#ff6666",
+    Rarity.ANCIENT: "#ff9933",
+}
+
+RARITY_ABBREVIATIONS: Dict[Rarity, str] = {
+    Rarity.NORMAL: "NOR",
+    Rarity.RARE: "RAR",
+    Rarity.EPIC: "EPC",
+    Rarity.UNIQUE: "UNI",
+    Rarity.LEGENDARY: "LEG",
+    Rarity.MYSTIC: "MYS",
+    Rarity.ANCIENT: "ANC",
+}
+
+
+def get_rarity_color(rarity: Rarity) -> str:
+    """Get hex color for a rarity tier."""
+    return RARITY_COLORS.get(rarity, "#ffffff")
+
+
+def get_rarity_abbreviation(rarity: Rarity) -> str:
+    """Get 3-letter abbreviation for a rarity tier."""
+    return RARITY_ABBREVIATIONS.get(rarity, "???")
+
+
+def rarity_from_string(s: str) -> Rarity:
+    """Parse rarity from string (case-insensitive)."""
+    try:
+        return Rarity(s.lower())
+    except ValueError:
+        return Rarity.LEGENDARY  # Default
+
+
+# =============================================================================
+# STAT DISPLAY NAMES (Short & Long)
+# =============================================================================
+
+# Short names for compact UI (stat_name -> abbreviation)
+STAT_SHORT_NAMES: Dict[str, str] = {
+    # Main stats %
+    "dex_pct": "DEX%",
+    "str_pct": "STR%",
+    "int_pct": "INT%",
+    "luk_pct": "LUK%",
+    # Main stats flat
+    "dex_flat": "DEX",
+    "str_flat": "STR",
+    "int_flat": "INT",
+    "luk_flat": "LUK",
+    # Damage stats
+    "damage_pct": "DMG%",
+    "crit_rate": "CR%",
+    "crit_damage": "CD%",
+    "def_pen": "DP%",
+    "final_damage": "FD%",
+    "min_dmg_mult": "MinD%",
+    "max_dmg_mult": "MaxD%",
+    # Special stats
+    "all_skills": "AS",
+    "attack_speed": "AtkSpd%",
+    "skill_cd": "CDR",
+    "buff_duration": "Buff%",
+    "main_stat_per_level": "S/Lv",
+    "ba_targets": "BA+",
+    # Defense stats
+    "defense": "DEF%",
+    "max_hp": "HP%",
+    "max_mp": "MP%",
+}
+
+# Full display names
+STAT_DISPLAY_NAMES: Dict[str, str] = {
+    # Main stats %
+    "dex_pct": "DEX %",
+    "str_pct": "STR %",
+    "int_pct": "INT %",
+    "luk_pct": "LUK %",
+    # Main stats flat
+    "dex_flat": "DEX (Flat)",
+    "str_flat": "STR (Flat)",
+    "int_flat": "INT (Flat)",
+    "luk_flat": "LUK (Flat)",
+    # Damage stats
+    "damage_pct": "Damage %",
+    "crit_rate": "Crit Rate %",
+    "crit_damage": "Crit Damage %",
+    "def_pen": "Defense Pen %",
+    "final_damage": "Final Damage %",
+    "min_dmg_mult": "Min Damage Mult %",
+    "max_dmg_mult": "Max Damage Mult %",
+    # Special stats
+    "all_skills": "All Skills Level",
+    "attack_speed": "Attack Speed %",
+    "skill_cd": "Skill CD Reduction",
+    "buff_duration": "Buff Duration %",
+    "main_stat_per_level": "Main Stat per Level",
+    "ba_targets": "BA Targets +",
+    # Defense stats
+    "defense": "Defense %",
+    "max_hp": "Max HP %",
+    "max_mp": "Max MP %",
+}
+
+
+def get_stat_short_name(stat_name: str) -> str:
+    """Get short display name for a stat."""
+    return STAT_SHORT_NAMES.get(stat_name, stat_name)
+
+
+def get_stat_display_name(stat_name: str) -> str:
+    """Get full display name for a stat."""
+    return STAT_DISPLAY_NAMES.get(stat_name, stat_name.replace("_", " ").title())
+
+
+def is_percentage_stat(stat_name: str) -> bool:
+    """
+    Determine if a stat should be displayed as a percentage.
+
+    Flat stats: dex_flat, str_flat, int_flat, luk_flat, all_skills, ba_targets, accuracy
+    Percentage stats: Everything else (_pct suffix, damage_pct, crit_rate, etc.)
+    """
+    # Explicit flat stats (no % sign)
+    flat_stats = {
+        "dex_flat", "str_flat", "int_flat", "luk_flat",
+        "all_skills", "ba_targets", "accuracy",
+        "attack_flat", "main_stat_flat",
+    }
+
+    # Flat stats by suffix
+    if stat_name in flat_stats:
+        return False
+    if stat_name.endswith('_flat'):
+        return False
+
+    # Everything else is a percentage stat
+    return True
+
+
+def format_stat_value(stat_name: str, value: float) -> str:
+    """Format a stat value with appropriate suffix."""
+    if value == 0:
+        return "—"
+
+    if stat_name == "skill_cd":
+        return f"-{value:.1f}s"
+    elif is_percentage_stat(stat_name):
+        return f"+{value:.1f}%"
+    else:
+        return f"+{int(value)}"
+
+
+# =============================================================================
 # RARITY & TIER MULTIPLIERS
 # =============================================================================
 

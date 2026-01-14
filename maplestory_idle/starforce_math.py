@@ -22,6 +22,10 @@ MESO_TO_DIAMOND = 4.0 / 1000
 SCROLL_DIAMOND_COST = 350
 DESTRUCTION_FEE = 1_000_000  # 1M meso
 
+# Last 3 starforce stages cannot use destruction protection
+# Stages 22, 23, 24 (to reach stars 23, 24, 25)
+NO_DESTROY_PROTECTION_STAGES = {22, 23, 24}
+
 def diamond_cost(meso, scrolls):
     return meso * MESO_TO_DIAMOND + scrolls * SCROLL_DIAMOND_COST
 
@@ -67,7 +71,9 @@ def solve_markov_chain(start_stage, target_stage, use_decrease_prot=False, use_d
 
             p = data.success_rate
             d = 0 if use_decrease_prot else data.decrease_rate
-            x = data.destroy_rate * (0.5 if use_destroy_prot else 1.0)
+            # Destruction protection not available for last 3 stages (22, 23, 24)
+            can_use_destroy_prot = use_destroy_prot and stage not in NO_DESTROY_PROTECTION_STAGES
+            x = data.destroy_rate * (0.5 if can_use_destroy_prot else 1.0)
 
             # Where does decrease go?
             dec_target = max(start_stage, stage - 1)
@@ -124,7 +130,9 @@ def calculate_total_cost(start_stage, target_stage, use_decrease_prot=False, use
         cost_mult = 1.0
         if use_decrease_prot and data.decrease_rate > 0:
             cost_mult += 1.0
-        if use_destroy_prot and data.destroy_rate > 0:
+        # Destruction protection not available for last 3 stages (22, 23, 24)
+        can_use_destroy_prot = use_destroy_prot and stage not in NO_DESTROY_PROTECTION_STAGES
+        if can_use_destroy_prot and data.destroy_rate > 0:
             cost_mult += 1.0
 
         stage_cost = attempts * diamond_cost(data.meso * cost_mult, data.stones * cost_mult)
@@ -210,7 +218,9 @@ def print_stage_breakdown(start_stage, target_stage, strategy_name, use_dec, use
     for stage in range(start_stage, target_stage):
         data = STARFORCE_TABLE[stage]
         d = 0 if use_dec else data.decrease_rate
-        x = data.destroy_rate * (0.5 if use_dest else 1.0)
+        # Destruction protection not available for last 3 stages (22, 23, 24)
+        can_use_destroy_prot = use_dest and stage not in NO_DESTROY_PROTECTION_STAGES
+        x = data.destroy_rate * (0.5 if can_use_destroy_prot else 1.0)
 
         print(f"{stage}->{stage+1:<5} {data.success_rate*100:<9.1f} {d*100:<9.0f} {x*100:<9.1f} "
               f"{E[stage]:<13.2f} {P_s[stage]*100:<11.2f}%")

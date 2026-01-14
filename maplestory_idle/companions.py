@@ -223,7 +223,14 @@ class CompanionDefinition:
         return base + (level - 1) * per_level
 
     def get_inventory_stats(self, level: int) -> Dict[str, float]:
-        """Get inventory effect stats at given level."""
+        """Get inventory effect stats at given level.
+
+        Returns stats using standardized stat names from stat_names.py:
+        - attack_flat: Flat attack bonus
+        - main_stat_flat: Flat main stat (resolved by job class)
+        - damage_pct: Damage percentage
+        - max_hp: Max HP
+        """
         level = max(0, min(level, self.max_level))
         if level == 0:
             return {}
@@ -233,30 +240,30 @@ class CompanionDefinition:
         if self.advancement == JobAdvancement.BASIC:
             # Basic gives Attack + Max HP
             scaling = INVENTORY_SCALING[JobAdvancement.BASIC]
-            stats["attack"] = level * scaling["attack_per_level"]
+            stats["attack_flat"] = level * scaling["attack_per_level"]
             stats["max_hp"] = level * scaling["max_hp_per_level"]
 
         elif self.advancement == JobAdvancement.FIRST:
             # 1st job gives Attack + Max HP
             scaling = INVENTORY_SCALING[JobAdvancement.FIRST]
-            stats["attack"] = level * scaling["attack_per_level"]
+            stats["attack_flat"] = level * scaling["attack_per_level"]
             stats["max_hp"] = level * scaling["max_hp_per_level"]
 
         elif self.advancement == JobAdvancement.SECOND:
             # 2nd job gives Main Stat + Max HP (confirmed from screenshots)
             scaling = INVENTORY_SCALING[JobAdvancement.SECOND]
-            stats["main_stat"] = level * scaling["main_stat_per_level"]
+            stats["main_stat_flat"] = level * scaling["main_stat_per_level"]
             stats["max_hp"] = level * scaling["max_hp_per_level"]
 
         elif self.advancement == JobAdvancement.THIRD:
             # 3rd job gives generic Damage % (NOT their on-equip stat type)
             scaling = INVENTORY_SCALING[JobAdvancement.THIRD]
-            stats["damage"] = scaling["damage_base"] + (level - 1) * scaling["damage_per_level"]
+            stats["damage_pct"] = scaling["damage_base"] + (level - 1) * scaling["damage_per_level"]
 
         elif self.advancement == JobAdvancement.FOURTH:
             # 4th job gives generic Damage % (NOT their on-equip stat type)
             scaling = INVENTORY_SCALING[JobAdvancement.FOURTH]
-            stats["damage"] = scaling["damage_base"] + (level - 1) * scaling["damage_per_level"]
+            stats["damage_pct"] = scaling["damage_base"] + (level - 1) * scaling["damage_per_level"]
 
         return stats
 
@@ -378,59 +385,26 @@ class CompanionConfig:
 
         return sources
 
-    def get_inventory_summary(self) -> Dict[str, any]:
-        """Get summary of inventory effects by job advancement."""
-        summary = {
-            "basic_count": 0,
-            "basic_attack": 0.0,
-            "basic_max_hp": 0.0,
-            "1st_job_count": 0,
-            "1st_job_attack": 0.0,
-            "1st_job_max_hp": 0.0,
-            "2nd_job_count": 0,
-            "2nd_job_main_stat": 0.0,
-            "2nd_job_max_hp": 0.0,
-            "3rd_job_count": 0,
-            "3rd_job_damage": 0.0,
-            "4th_job_count": 0,
-            "4th_job_damage": 0.0,
-            "total_damage": 0.0,
-        }
+    def get_inventory_stats_total(self) -> Dict[str, float]:
+        """Get total inventory stats from all owned companions.
+
+        Returns aggregated stats using standardized names:
+        - attack_flat: Total flat attack
+        - main_stat_flat: Total flat main stat (resolved by job class)
+        - damage_pct: Total damage percentage
+        - max_hp: Total max HP
+        """
+        totals: Dict[str, float] = {}
 
         for companion in self.inventory:
             if companion.level == 0:
                 continue
 
-            adv = companion.definition.advancement
             inv_stats = companion.get_inventory_stats()
+            for stat_key, value in inv_stats.items():
+                totals[stat_key] = totals.get(stat_key, 0.0) + value
 
-            if adv == JobAdvancement.BASIC:
-                summary["basic_count"] += 1
-                summary["basic_attack"] += inv_stats.get("attack", 0)
-                summary["basic_max_hp"] += inv_stats.get("max_hp", 0)
-
-            elif adv == JobAdvancement.FIRST:
-                summary["1st_job_count"] += 1
-                summary["1st_job_attack"] += inv_stats.get("attack", 0)
-                summary["1st_job_max_hp"] += inv_stats.get("max_hp", 0)
-
-            elif adv == JobAdvancement.SECOND:
-                summary["2nd_job_count"] += 1
-                summary["2nd_job_main_stat"] += inv_stats.get("main_stat", 0)
-                summary["2nd_job_max_hp"] += inv_stats.get("max_hp", 0)
-
-            elif adv == JobAdvancement.THIRD:
-                summary["3rd_job_count"] += 1
-                summary["3rd_job_damage"] += inv_stats.get("damage", 0)
-
-            elif adv == JobAdvancement.FOURTH:
-                summary["4th_job_count"] += 1
-                summary["4th_job_damage"] += inv_stats.get("damage", 0)
-
-        summary["total_damage"] = summary["3rd_job_damage"] + summary["4th_job_damage"]
-        summary["total_attack"] = summary["basic_attack"] + summary["1st_job_attack"]
-
-        return summary
+        return totals
 
     def to_dict(self) -> Dict:
         """Serialize to dict for saving."""
@@ -475,6 +449,41 @@ class CompanionConfig:
                     ))
 
         return config
+
+    def get_stats(self, job_class=None):
+        """
+        Get all companion stats as a StatBlock.
+
+        Note: Attack speed is NOT included here because it uses diminishing returns
+        and needs special handling. Use get_attack_speed_sources() for attack speed.
+
+        Args:
+            job_class: Job class for main_stat mapping (defaults to Bowmaster)
+
+        Returns:
+            StatBlock with all companion stats
+        """
+        from stats import create_stat_block_for_job
+        from job_classes import JobClass
+
+        if job_class is None:
+            job_class = JobClass.BOWMASTER
+
+        all_stats = self.get_all_stats()
+
+        return create_stat_block_for_job(
+            job_class=job_class,
+            main_stat_flat=all_stats.get('flat_main_stat', 0),
+            attack_flat=all_stats.get('flat_attack', 0),
+            damage_pct=all_stats.get('damage', 0),
+            boss_damage=all_stats.get('boss_damage', 0),
+            normal_damage=all_stats.get('normal_damage', 0),
+            crit_rate=all_stats.get('crit_rate', 0),
+            min_dmg_mult=all_stats.get('min_dmg_mult', 0),
+            max_dmg_mult=all_stats.get('max_dmg_mult', 0),
+            max_hp=all_stats.get('inv_max_hp', 0),
+            # Note: attack_speed excluded - needs special handling
+        )
 
 
 # =============================================================================
