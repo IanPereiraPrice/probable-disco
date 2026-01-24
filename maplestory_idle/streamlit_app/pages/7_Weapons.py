@@ -9,6 +9,10 @@ from weapon_mastery import (
     ALL_WEAPONS, WEAPON_MASTERY_REWARDS, RARITIES,
     calculate_mastery_stages_from_weapons, calculate_mastery_stats
 )
+from weapon_optimizer import (
+    calculate_optimal_enhancer_allocation, find_best_potential_weapon,
+    get_max_level
+)
 
 st.set_page_config(page_title="Weapons", page_icon="🏹", layout="wide")
 
@@ -40,6 +44,27 @@ if not hasattr(data, 'weapons_data') or data.weapons_data is None:
 if not hasattr(data, 'equipped_weapon_key') or data.equipped_weapon_key is None:
     data.equipped_weapon_key = ""
 
+# Auto-equip the best weapon if none is selected but weapons exist
+if not data.equipped_weapon_key and data.weapons_data:
+    best_key = ""
+    best_atk = 0.0
+    for key, weapon_data in data.weapons_data.items():
+        level = weapon_data.get('level', 0)
+        if level <= 0:
+            continue
+        parts = key.rsplit('_', 1)
+        if len(parts) != 2:
+            continue
+        rarity, tier = parts[0], int(parts[1])
+        stats = calculate_weapon_atk_str(rarity, tier, level)
+        on_equip_atk = stats['on_equip_atk']
+        if on_equip_atk > best_atk:
+            best_atk = on_equip_atk
+            best_key = key
+    if best_key:
+        data.equipped_weapon_key = best_key
+        auto_save()
+
 st.title("🏹 Weapons")
 
 st.info("""
@@ -52,7 +77,7 @@ st.info("""
 """)
 
 # Create tabs
-tab1, tab2, tab3, tab4 = st.tabs(["All Weapons", "Equipped Weapon", "Stats Summary", "Mastery Bonuses"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["All Weapons", "Equipped Weapon", "Stats Summary", "Mastery Bonuses", "Enhancer Optimizer"])
 
 with tab1:
     st.subheader("All Weapons")
@@ -235,6 +260,22 @@ with tab3:
 
     st.divider()
 
+    # Weapon Summoning Level
+    st.markdown("### Weapon Summoning")
+    summoning_level = st.number_input(
+        "Summoning Level",
+        min_value=1,
+        max_value=17,
+        value=getattr(data, 'summoning_level', 15),
+        help="Your weapon summoning level (affects drop rates in Upgrade Optimizer)",
+        key="weapon_summoning_level"
+    )
+    if summoning_level != getattr(data, 'summoning_level', 15):
+        data.summoning_level = summoning_level
+        auto_save()
+
+    st.divider()
+
     # Weapon breakdown table
     st.markdown("### Weapon Breakdown")
     table_data = []
@@ -341,3 +382,129 @@ with tab4:
                     if reward.max_dmg_mult:
                         parts.append(f"Max Dmg +{reward.max_dmg_mult}%")
                     st.write(f"{achieved} **Stage {reward.stage}**: {', '.join(parts)}")
+
+with tab5:
+    st.subheader("Enhancer Budget Optimizer")
+    st.markdown("""
+    Enter the number of weapon enhancers you have available, and get an optimal
+    upgrade path that maximizes your ATK% gain.
+    """)
+
+    # Input for available enhancers
+    available_enhancers = st.number_input(
+        "Available Weapon Enhancers",
+        min_value=0,
+        max_value=1_000_000_000,
+        value=st.session_state.get('weapon_enhancers', 0),
+        step=10000,
+        format="%d",
+        help="Enter how many weapon enhancers you have to spend",
+        key="enhancer_budget_input"
+    )
+
+    # Store in session state for persistence
+    st.session_state.weapon_enhancers = available_enhancers
+
+    # Auto-detect best weapon to treat as equipped
+    best_weapon_key = find_best_potential_weapon(data.weapons_data)
+
+    if best_weapon_key:
+        best_parts = best_weapon_key.rsplit('_', 1)
+        if len(best_parts) == 2:
+            best_rarity, best_tier = best_parts[0], int(best_parts[1])
+            best_awakening = data.weapons_data.get(best_weapon_key, {}).get('awakening', 0)
+            best_max_level = get_max_level(best_awakening)
+            best_stats = calculate_weapon_atk_str(best_rarity, best_tier, best_max_level)
+            st.info(
+                f"**Best Weapon (treated as equipped):** {best_rarity.capitalize()} T{best_tier} "
+                f"(max level {best_max_level} with {best_awakening} awakening, "
+                f"potential +{best_stats['on_equip_atk']:.1f}% ATK)"
+            )
+
+    if available_enhancers > 0:
+        recommendations, equipped_key = calculate_optimal_enhancer_allocation(
+            weapons_data=data.weapons_data,
+            available_enhancers=available_enhancers,
+            equipped_weapon_key=None,  # Auto-detect best weapon
+        )
+
+        if recommendations:
+            st.markdown("### Recommended Upgrades")
+
+            # Summary line (user's requested format)
+            summary_parts = []
+            for rec in recommendations:
+                name = f"{rec.display_name.replace(' (Equipped)', '')}"
+                summary_parts.append(f"{name}: {rec.from_level}→{rec.to_level}")
+
+            st.success(", ".join(summary_parts))
+
+            # Totals
+            total_cost = sum(r.cost for r in recommendations)
+            total_gain = sum(r.atk_gain for r in recommendations)
+            remaining = available_enhancers - total_cost
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Cost", f"{total_cost:,} enhancers")
+            with col2:
+                st.metric("Total ATK% Gain", f"+{total_gain:.1f}%")
+            with col3:
+                st.metric("Remaining", f"{remaining:,} enhancers")
+
+            # Detailed table
+            st.markdown("### Upgrade Details")
+            table_data = []
+            for rec in recommendations:
+                table_data.append({
+                    "Weapon": rec.display_name,
+                    "Upgrade": f"{rec.from_level} → {rec.to_level}",
+                    "Levels": rec.to_level - rec.from_level,
+                    "Cost": f"{rec.cost:,}",
+                    "ATK% Gain": f"+{rec.atk_gain:.1f}%",
+                })
+
+            st.dataframe(table_data, use_container_width=True, hide_index=True)
+
+            # Explanation
+            with st.expander("How does this work?"):
+                st.markdown("""
+                The optimizer uses a **greedy algorithm** that allocates enhancers one level at a time,
+                always choosing the upgrade with the best ATK%/enhancer efficiency.
+
+                **Key assumptions:**
+                - The weapon with the highest potential ATK% (based on awakening level cap) is treated as "equipped"
+                - Equipped weapons contribute full ATK% + inventory bonus (125% total)
+                - Non-equipped weapons only contribute inventory bonus (25-28.57% depending on rarity)
+                - Higher level upgrades cost more enhancers but give the same ATK% per level (within level ranges)
+
+                This greedy approach is **mathematically optimal** because all weapons have diminishing
+                returns on efficiency (cost increases exponentially, ATK gain stays linear).
+                """)
+        else:
+            st.warning("No upgrades recommended. Either all weapons are at max level or the budget is too small for any upgrade.")
+    else:
+        # Show owned weapons that can be upgraded
+        upgradeable = []
+        for key, weapon_data in data.weapons_data.items():
+            level = weapon_data.get('level', 0)
+            if level <= 0:
+                continue
+            awakening = weapon_data.get('awakening', 0)
+            max_level = get_max_level(awakening)
+            if level < max_level:
+                parts = key.rsplit('_', 1)
+                if len(parts) == 2:
+                    rarity, tier = parts[0], int(parts[1])
+                    upgradeable.append({
+                        "Weapon": f"{rarity.capitalize()} T{tier}",
+                        "Current Level": level,
+                        "Max Level": max_level,
+                        "Awakening": awakening,
+                    })
+
+        if upgradeable:
+            st.markdown("### Weapons Available for Upgrade")
+            st.dataframe(upgradeable, use_container_width=True, hide_index=True)
+        else:
+            st.info("No weapons available for upgrade. Add weapons with Level > 0 in the 'All Weapons' tab.")

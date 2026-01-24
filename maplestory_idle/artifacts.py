@@ -57,19 +57,19 @@ STANDARD_STAT_RATE = 0.105075
 PREMIUM_STAT_RATE = 0.052895  # Half of standard
 
 POTENTIAL_STAT_RATES = {
-    # Standard stats (10.5075% each)
+    # Standard stats (10.5075% each) - using standardized stat names
     "main_stat_pct": STANDARD_STAT_RATE,
     "damage_taken_decrease": STANDARD_STAT_RATE,
     "defense": STANDARD_STAT_RATE,
     "accuracy": STANDARD_STAT_RATE,
     "crit_rate": STANDARD_STAT_RATE,
-    "min_damage_mult": STANDARD_STAT_RATE,
-    "max_damage_mult": STANDARD_STAT_RATE,
+    "min_dmg_mult": STANDARD_STAT_RATE,    # standardized
+    "max_dmg_mult": STANDARD_STAT_RATE,    # standardized
     # Premium stats (5.2895% each - half rate)
     "boss_damage": PREMIUM_STAT_RATE,
     "normal_damage": PREMIUM_STAT_RATE,
     "status_effect_damage": PREMIUM_STAT_RATE,
-    "damage": PREMIUM_STAT_RATE,
+    "damage_pct": PREMIUM_STAT_RATE,       # standardized
     "def_pen": PREMIUM_STAT_RATE,
 }
 
@@ -80,6 +80,7 @@ MYSTIC_HIGH_VALUE_CHANCE = 0.25  # 25% chance for higher value
 # Potential values by tier (stat: {tier: (low, high)})
 # For Mystic tier with two values: low has 75% chance, high has 25% chance
 POTENTIAL_VALUES = {
+    # Standardized stat names (consistent with rest of codebase)
     "main_stat_pct": {
         PotentialTier.RARE: (2.0, 2.0),
         PotentialTier.EPIC: (3.0, 3.0),
@@ -115,21 +116,21 @@ POTENTIAL_VALUES = {
         PotentialTier.LEGENDARY: (7.0, 7.0),
         PotentialTier.MYSTIC: (10.0, 12.0),
     },
-    "min_damage_mult": {
+    "min_dmg_mult": {  # Changed from min_damage_mult
         PotentialTier.RARE: (2.0, 2.0),
         PotentialTier.EPIC: (3.0, 3.0),
         PotentialTier.UNIQUE: (4.5, 4.5),
         PotentialTier.LEGENDARY: (7.0, 7.0),
         PotentialTier.MYSTIC: (10.0, 12.0),
     },
-    "max_damage_mult": {
+    "max_dmg_mult": {  # Changed from max_damage_mult
         PotentialTier.RARE: (2.0, 2.0),
         PotentialTier.EPIC: (3.0, 3.0),
         PotentialTier.UNIQUE: (4.5, 4.5),
         PotentialTier.LEGENDARY: (7.0, 7.0),
         PotentialTier.MYSTIC: (10.0, 12.0),
     },
-    "damage": {
+    "damage_pct": {  # Changed from damage
         PotentialTier.RARE: (4.0, 4.0),
         PotentialTier.EPIC: (6.0, 6.0),
         PotentialTier.UNIQUE: (9.0, 9.0),
@@ -167,7 +168,7 @@ POTENTIAL_VALUES = {
 }
 
 # Premium stats appear at half rate
-PREMIUM_STATS = ["boss_damage", "normal_damage", "status_effect_damage", "damage", "def_pen"]
+PREMIUM_STATS = ["boss_damage", "normal_damage", "status_effect_damage", "damage_pct", "def_pen"]
 
 # Reconfigure costs (meso + artifact enhancers)
 RECONFIGURE_COSTS = {
@@ -358,10 +359,18 @@ def calculate_resonance_hp(level: int) -> int:
     """
     Calculate HP bonus at a given resonance level using geometric series.
 
-    Formula: HP(L) = round(1000 + 33.392 × (1.0035^L - 1.0035) / 0.0035)
+    Formula: HP(L) = int(1000 + 33.51 × (r^(L-1) - 1) / (r - 1)) where r = 1.00350013
 
-    The HP bonus grows at 0.35% per level, starting from 1000 at level 1.
-    Max error: ±1 across all tested levels (1-361).
+    The HP bonus grows at ~0.35% per level, starting from 1000 at level 1.
+    Uses int() truncation to match game behavior.
+
+    Validated against actual game data:
+    - L=1: 1000 (exact)
+    - L=3: 1067 vs actual 1068 (error -1)
+    - L=4: 1100 vs actual 1102 (error -2)
+    - L=160: 8112 (exact)
+    - L=296: 18263 (exact)
+    - L=368: 25939 (exact)
 
     Args:
         level: Resonance level (1 to 705)
@@ -373,10 +382,11 @@ def calculate_resonance_hp(level: int) -> int:
         return 0
     if level == 1:
         return 1000
-    # Geometric series: HP = base + A * (B^L - B) / (B - 1)
-    A = 33.392
-    B = 1.0035
-    return round(1000 + A * (B ** level - B) / (B - 1))
+    # Geometric series: HP = base + k * (r^(L-1) - 1) / (r - 1)
+    k = 33.51
+    r = 1.00350013
+    s = (r ** (level - 1) - 1) / (r - 1)
+    return int(1000 + k * s)
 
 
 def calculate_resonance_main_stat(level: int) -> int:
@@ -403,7 +413,17 @@ def calculate_resonance_upgrade_cost(level: int) -> int:
     """
     Calculate artifact enhancer cost to upgrade FROM a given level to level+1.
 
-    Formula: round(1490 + 18.28*L + 0.01537*L² + 0.0000195*L³)
+    Formula: int(1500 + 18 * ((1.002^(L-1) - 1) / 0.002))
+
+    This is a geometric series where the increment grows by ~0.2% per level.
+    Base cost is 1500 at level 1, with 18 as the initial increment.
+
+    Validated against actual game data:
+    - L=1: 1500 (exact)
+    - L=150: 4621 vs actual 4619 (error +2, 0.04%)
+    - L=300: 8856 vs actual 8852 (error +4, 0.05%)
+    - L=600: 22285 vs actual 22275 (error +10, 0.04%)
+    - L=900: 46740 vs actual 46723 (error +17, 0.04%)
 
     Args:
         level: Current resonance level
@@ -413,7 +433,7 @@ def calculate_resonance_upgrade_cost(level: int) -> int:
     """
     if level < 1:
         return 0
-    return round(1490.0031 + 18.280250 * level + 0.01536632 * level**2 + 0.0000194991 * level**3)
+    return int(1500 + 18 * ((1.002 ** (level - 1)) - 1) / 0.002)
 
 
 def calculate_resonance_total_cost(from_level: int, to_level: int) -> int:
@@ -920,8 +940,8 @@ ARTIFACTS = {
         active_effects=[
             ArtifactEffect(stat="cooldown_reduction", base=0.20, per_star=0.04),  # 20→40%
         ],
-        inventory_description="Damage +X%",
-        inventory_stat="damage",
+        inventory_description="Skill Damage +X%",
+        inventory_stat="skill_damage",
         inventory_base=0.15,  # 15% at ★0
         inventory_per_star=0.03,  # +3% per star → 30% at ★5
         scenario="chapter",  # Only active in Chapter Hunt

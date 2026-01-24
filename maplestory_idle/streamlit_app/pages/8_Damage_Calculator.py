@@ -60,12 +60,14 @@ def calculate_dps(stats, combat_mode='stage', enemy_def=None, log_actions=False)
     # Check if user has enabled realistic DPS calculation
     use_realistic_dps = getattr(data, 'use_realistic_dps', False)
     boss_importance = getattr(data, 'boss_importance', 70) / 100.0
+    boss_damage_multiplier = getattr(data, 'boss_damage_multiplier', 1.0)
 
     return shared_calculate_dps(
         stats, combat_mode, enemy_def,
         use_realistic_dps=use_realistic_dps,
         boss_importance=boss_importance,
         log_actions=log_actions,
+        boss_damage_multiplier=boss_damage_multiplier,
     )
 
 
@@ -101,6 +103,35 @@ with col1:
 with col2:
     st.metric("Combat Mode", combat_mode.replace("_", " ").title())
 
+# Phase DPS breakdown (only shown in realistic DPS mode)
+if use_realistic_dps and result.get('mob_phase_dps', 0) > 0:
+    st.divider()
+    st.subheader("Phase DPS Breakdown")
+
+    boss_multiplier = result.get('boss_damage_multiplier', 1.0)
+    phase_cols = st.columns(3)
+
+    with phase_cols[0]:
+        st.metric("Mob Phase DPS", f"{result['mob_phase_dps']:,.0f}")
+
+    with phase_cols[1]:
+        if boss_multiplier != 1.0:
+            st.metric(
+                f"Boss Phase DPS (×{boss_multiplier:.1f})",
+                f"{result['boss_phase_dps_display']:,.0f}",
+                help=f"Actual: {result['boss_phase_dps']:,.0f} | Display scaled by {boss_multiplier}x for comparison"
+            )
+        else:
+            st.metric("Boss Phase DPS", f"{result['boss_phase_dps']:,.0f}")
+
+    with phase_cols[2]:
+        boss_importance = getattr(data, 'boss_importance', 70)
+        mob_importance = 100 - boss_importance
+        st.metric("Weighting", f"Mob {mob_importance}% / Boss {boss_importance}%")
+
+    if boss_multiplier != 1.0:
+        st.caption(f"💡 Boss damage display scaled by {boss_multiplier}x to compare with multi-target mob damage")
+
 st.divider()
 
 # Multiplier breakdown
@@ -133,15 +164,15 @@ stat_col1, stat_col2, stat_col3 = st.columns(3)
 
 with stat_col1:
     st.markdown("**Main Stats**")
-    st.write(f"Flat DEX: {stats['flat_dex']:,.0f}")
-    st.write(f"DEX %: {stats['dex_percent']:.1f}%")
+    st.write(f"Flat DEX: {stats.get('dex_flat', 0):,.0f}")
+    st.write(f"DEX %: {stats.get('dex_pct', 0):.1f}%")
     st.write(f"Total DEX: {result['total_dex']:,.0f}")
-    st.write(f"Base Attack: {stats['base_attack']:,.0f}")
+    st.write(f"Base Attack: {stats.get('attack_flat', 0):,.0f}")
 
 with stat_col2:
     st.markdown("**Damage Stats**")
-    st.write(f"Damage %: {stats['damage_percent']:.1f}%")
-    st.write(f"Damage Amp %: {stats['damage_amp']:.1f}%")
+    st.write(f"Damage %: {stats.get('damage_pct', 0):.1f}%")
+    st.write(f"Damage Amp %: {stats.get('damage_amp', 0):.1f}%")
     st.write(f"Boss Damage %: {stats['boss_damage']:.1f}%")
     st.write(f"Normal Damage %: {stats['normal_damage']:.1f}%")
     st.write(f"Crit Rate %: {stats['crit_rate']:.1f}%")
@@ -230,21 +261,14 @@ if fight_log:
     st.divider()
     st.subheader("Fight Simulation Log")
 
-    # Determine mob duration for phase labels
-    from stage_settings import COMBAT_SCENARIO_PARAMS, get_combat_mode_from_string
-    combat_mode_enum = get_combat_mode_from_string(combat_mode)
-    scenario = COMBAT_SCENARIO_PARAMS.get(combat_mode_enum)
-    if scenario:
-        mob_duration = scenario.fight_duration * scenario.mob_time_fraction
-        fight_duration = scenario.fight_duration
-    else:
-        mob_duration = 36.0
-        fight_duration = 60.0
-
-    # Summary stats
+    # Determine mob duration from actual fight log timestamps
     mob_actions = [e for e in fight_log if e.phase == 'mob']
     boss_actions = [e for e in fight_log if e.phase == 'boss']
 
+    mob_duration = max(e.time + e.cast_time for e in mob_actions) if mob_actions else 0.0
+    fight_duration = max(e.time + e.cast_time for e in fight_log)
+
+    # Summary stats
     summary_cols = st.columns(4)
     with summary_cols[0]:
         st.metric("Total Actions", len(fight_log))
@@ -323,3 +347,107 @@ if fight_log:
             i = j
 
         st.dataframe(pd.DataFrame(log_entries), hide_index=True, use_container_width=True)
+
+    # Skill Action Values debug section
+    with st.expander("🔧 Skill Action Values (Debug)", expanded=False):
+        st.markdown("**Precalculated skill values used by the simulator:**")
+        st.caption("These are the damage values and DPS for each skill in mob vs boss phase")
+
+        # Re-create the DPS calculator to get skill values
+        from skills import DPSCalculator, create_character_at_level
+        from stage_settings import COMBAT_SCENARIO_PARAMS, get_combat_mode_from_string
+
+        # Get scenario params
+        combat_mode_enum = get_combat_mode_from_string(combat_mode)
+        scenario_params = COMBAT_SCENARIO_PARAMS.get(combat_mode_enum)
+        num_enemies = scenario_params.num_enemies if scenario_params else 5
+
+        # Create character and calculator
+        level = stats.get('character_level', 140)
+        all_skills = int(stats.get('all_skills', 0))
+
+        from skills import create_character_at_level
+        char = create_character_at_level(level, all_skills)
+
+        # Set character stats from aggregated stats
+        char.attack = stats.get('attack_flat', 10000) * (1 + stats.get('attack_pct', 0) / 100)
+        char.main_stat_flat = stats.get('dex_flat', 0)
+        char.main_stat_pct = stats.get('dex_pct', 0)
+        char.damage_pct = stats.get('damage_pct', 0)
+        char.boss_damage_pct = stats.get('boss_damage', 0)
+        char.normal_damage_pct = stats.get('normal_damage', 0)
+        char.crit_rate = stats.get('crit_rate', 0)
+        char.crit_damage = stats.get('crit_damage', 0)
+        char.final_damage_pct = (result.get('fd_mult', 1.0) - 1) * 100
+        char.ba_targets = int(stats.get('ba_targets', 0))
+
+        calc = DPSCalculator(char, enemy_def=enemy_def)
+
+        # Calculate attack speed multiplier from result
+        total_attack_speed = result.get('attack_speed', 0)
+        attack_speed_mult = min(1 + total_attack_speed / 100, 2.5)
+
+        skill_values = calc._precalculate_skill_values(num_enemies, attack_speed_mult)
+
+        skill_value_data = []
+        for skill_name, sv in skill_values.items():
+            skill_value_data.append({
+                'Skill': skill_name.replace('_', ' ').title(),
+                'Cast Time': f"{sv.cast_time:.2f}s",
+                'Cooldown': f"{sv.cooldown:.1f}s" if sv.cooldown > 0 else "-",
+                'Mob Dmg': f"{sv.damage_per_use_mob:,.0f}",
+                'Boss Dmg': f"{sv.damage_per_use_boss:,.0f}",
+                'Mob DPS': f"{sv.dps_value_mob:,.0f}",
+                'Boss DPS': f"{sv.dps_value_boss:,.0f}",
+            })
+
+        st.dataframe(pd.DataFrame(skill_value_data), hide_index=True, use_container_width=True)
+
+        # Show detailed breakdown for active skills
+        st.markdown("**Skill Calculation Breakdown:**")
+        from skills import BOWMASTER_SKILLS
+        for skill_name in ["arrow_stream", "hurricane", "covering_fire"]:
+            if skill_name not in skill_values:
+                continue
+            skill = BOWMASTER_SKILLS.get(skill_name)
+            if not skill:
+                continue
+
+            sv = skill_values[skill_name]
+            hits = calc.get_skill_hits(skill_name)
+            targets = calc.get_skill_targets(skill_name)
+            dmg_pct = calc.get_skill_damage_pct(skill_name)
+
+            # Calculate per-hit damage
+            dmg_per_hit_boss = sv.damage_per_use_boss / hits if hits > 0 else 0
+
+            # Check for Maple Hero FD bonus
+            # Formula: floor(base + per_level * level)
+            maple_hero_note = ""
+            if char.is_skill_unlocked("maple_hero"):
+                from skills import BOWMASTER_SKILLS
+                mh_skill = BOWMASTER_SKILLS["maple_hero"]
+                if mh_skill.skill_bonuses and skill_name in mh_skill.skill_bonuses:
+                    mh_level = char.get_effective_skill_level("maple_hero")
+                    base, per_level = mh_skill.skill_bonuses[skill_name]
+                    mh_fd = int(base + per_level * mh_level)
+                    maple_hero_note = f" (Maple Hero +{mh_fd}% FD)"
+
+            st.markdown(f"**{skill_name.replace('_', ' ').title()}**: "
+                       f"{dmg_pct:.0f}% dmg × {hits} hits × 1 target = {sv.damage_per_use_boss:,.0f} total | "
+                       f"Cast: {sv.cast_time:.2f}s | "
+                       f"Per hit: {dmg_per_hit_boss:,.0f}{maple_hero_note}")
+
+        st.markdown("**Summons & Procs (calculated separately):**")
+        st.caption("These run in parallel with player actions")
+
+        # Show summon/proc info
+        summon_info = []
+        for skill_name in ["phoenix", "arrow_platter", "quiver_cartridge", "final_attack"]:
+            if char.is_skill_unlocked(skill_name):
+                summon_info.append(skill_name.replace('_', ' ').title())
+
+        if summon_info:
+            st.write(f"Active summons/procs: {', '.join(summon_info)}")
+        else:
+            st.write("No summons/procs unlocked")

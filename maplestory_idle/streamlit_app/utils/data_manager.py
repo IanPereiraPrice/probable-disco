@@ -86,6 +86,12 @@ class UserData:
     # Guild skills
     guild_skills: Dict[str, float] = field(default_factory=dict)
 
+    # Equipment scrolls (slot -> {damage_amp, flat_attack, flat_main_stat})
+    equipment_scrolls: Dict[str, Dict] = field(default_factory=dict)
+
+    # Hero Power passive stat values (direct values, not levels)
+    hero_power_passive_values: Dict[str, float] = field(default_factory=dict)
+
     def get_equipment(self, slot: str) -> 'Equipment':
         """
         Get Equipment object for a slot.
@@ -317,6 +323,17 @@ def save_user_data(username: str, data: UserData) -> bool:
             for stat, value in data.guild_skills.items():
                 writer.writerow(['guild_skill', stat, '', str(value)])
 
+            # Equipment scrolls
+            equipment_scrolls = getattr(data, 'equipment_scrolls', {}) or {}
+            for slot, scroll_data in equipment_scrolls.items():
+                for key, value in scroll_data.items():
+                    writer.writerow(['equipment_scroll', slot, key, str(value)])
+
+            # Hero Power passive values (direct values)
+            hero_power_passive_values = getattr(data, 'hero_power_passive_values', {}) or {}
+            for stat_key, value in hero_power_passive_values.items():
+                writer.writerow(['hero_power_passive_value', stat_key, '', str(value)])
+
         return True
     except Exception as e:
         print(f"Error saving user data: {e}")
@@ -455,6 +472,14 @@ def load_user_data(username: str) -> UserData:
 
                 elif section == 'guild_skill':
                     data.guild_skills[key] = float(value)
+
+                elif section == 'equipment_scroll':
+                    if key not in data.equipment_scrolls:
+                        data.equipment_scrolls[key] = {}
+                    data.equipment_scrolls[key][subkey] = _parse_value(value)
+
+                elif section == 'hero_power_passive_value':
+                    data.hero_power_passive_values[key] = float(value)
 
     except Exception as e:
         print(f"Error loading user data: {e}")
@@ -695,6 +720,17 @@ def export_user_data_csv(data: UserData) -> str:
     for stat, value in data.guild_skills.items():
         writer.writerow(['guild_skill', stat, '', str(value)])
 
+    # Equipment scrolls
+    equipment_scrolls = getattr(data, 'equipment_scrolls', {}) or {}
+    for slot, scroll_data in equipment_scrolls.items():
+        for key, value in scroll_data.items():
+            writer.writerow(['equipment_scroll', slot, key, str(value)])
+
+    # Hero Power passive values
+    hero_power_passive_values = getattr(data, 'hero_power_passive_values', {}) or {}
+    for stat_key, value in hero_power_passive_values.items():
+        writer.writerow(['hero_power_passive_value', stat_key, '', str(value)])
+
     return output.getvalue()
 
 
@@ -845,6 +881,14 @@ def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
 
             elif section == 'guild_skill':
                 data.guild_skills[key] = float(value)
+
+            elif section == 'equipment_scroll':
+                if key not in data.equipment_scrolls:
+                    data.equipment_scrolls[key] = {}
+                data.equipment_scrolls[key][subkey] = _parse_value(value)
+
+            elif section == 'hero_power_passive_value':
+                data.hero_power_passive_values[key] = float(value)
 
         return data
     except Exception as e:

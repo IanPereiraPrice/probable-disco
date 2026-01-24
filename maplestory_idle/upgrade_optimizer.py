@@ -24,7 +24,9 @@ from artifacts import (
     RECONFIGURE_COSTS as ARTIFACT_RECONFIGURE_COSTS,
     POTENTIAL_SLOT_UNLOCKS as ARTIFACT_POT_SLOT_UNLOCKS,
     PREMIUM_STATS as ARTIFACT_PREMIUM_STATS,
-    calculate_expected_rolls as calculate_artifact_expected_rolls
+    calculate_expected_rolls as calculate_artifact_expected_rolls,
+    calculate_resonance_upgrade_cost, calculate_resonance_main_stat,
+    calculate_resonance_hp, calculate_resonance_max_level,
 )
 
 # Starforce imports - use accurate Markov chain calculations
@@ -60,6 +62,7 @@ class UpgradeType(Enum):
     ARTIFACT = "artifact"
     ARTIFACT_POTENTIAL = "artifact_potential"
     HERO_POWER_POTENTIAL = "hero_power_potential"
+    ARTIFACT_RESONANCE = "artifact_resonance"
 
 
 @dataclass
@@ -357,7 +360,9 @@ class UpgradeOptimizer:
                  analyze_potential_func: Callable = None,
                  hero_power_level_config: Optional[HeroPowerLevelConfig] = None,
                  hero_power_presets: Optional[Dict[str, HeroPowerConfig]] = None,
-                 combat_mode: str = "stage"):
+                 combat_mode: str = "stage",
+                 resonance_level: int = 1,
+                 resonance_max_level: int = 705):
         """
         Initialize optimizer with callbacks to main app.
 
@@ -372,6 +377,8 @@ class UpgradeOptimizer:
         hero_power_level_config: HeroPowerLevelConfig for tier rates and costs
         hero_power_presets: Dict of preset_name -> HeroPowerConfig for multi-preset optimization
         combat_mode: Current combat mode ("stage", "boss", or "world_boss")
+        resonance_level: Current artifact resonance level
+        resonance_max_level: Maximum achievable resonance level (based on artifact stars)
         """
         self.calc_dps = calc_dps_func
         self.get_stats = get_stats_func
@@ -384,6 +391,8 @@ class UpgradeOptimizer:
         self.hero_power_level_config = hero_power_level_config or HeroPowerLevelConfig()
         self.hero_power_presets = hero_power_presets or {}
         self.combat_mode = combat_mode
+        self.resonance_level = resonance_level
+        self.resonance_max_level = resonance_max_level
 
         self.upgrade_options: List[UpgradeOption] = []
 
@@ -397,6 +406,7 @@ class UpgradeOptimizer:
         self._analyze_hero_power_presets()  # Multi-preset mode optimization
         self._analyze_hero_power_line_ranking()  # Simple line ranking by DPS
         self._analyze_artifact_upgrades()
+        self._analyze_resonance_upgrades()  # Artifact resonance leveling
         # Note: Artifact potential rerolling disabled - needs proper implementation
         # self._analyze_artifact_potential_upgrades()
         # Note: Hero power potential rerolling disabled for now
@@ -1082,6 +1092,91 @@ class UpgradeOptimizer:
                             "tier": tier_label,
                         }
                     ))
+
+    def _analyze_resonance_upgrades(self):
+        """
+        Analyze artifact resonance leveling options.
+
+        Cost: 10,000 artifact enhancers = 1,500 diamonds (0.15 diamonds/enhancer)
+        Benefit: Main stat (flat) and HP per level, following geometric series.
+
+        Evaluates upgrading in batches of 10 levels to find efficient upgrade points.
+        """
+        # Skip if already at max level
+        if self.resonance_level >= self.resonance_max_level:
+            return
+
+        # Cost constants
+        ENHANCER_TO_DIAMOND = 1500 / 10000  # 0.15 diamonds per enhancer
+
+        # Analyze multiple batch sizes to find most efficient upgrade path
+        batch_sizes = [10, 25, 50, 100]
+
+        for batch in batch_sizes:
+            target_level = min(self.resonance_level + batch, self.resonance_max_level)
+            actual_levels = target_level - self.resonance_level
+
+            if actual_levels <= 0:
+                continue
+
+            # Calculate stat gains
+            current_main = calculate_resonance_main_stat(self.resonance_level)
+            target_main = calculate_resonance_main_stat(target_level)
+            main_stat_gain = target_main - current_main
+
+            current_hp = calculate_resonance_hp(self.resonance_level)
+            target_hp = calculate_resonance_hp(target_level)
+            hp_gain = target_hp - current_hp
+
+            # Calculate total enhancer cost
+            total_enhancers = sum(
+                calculate_resonance_upgrade_cost(lvl)
+                for lvl in range(self.resonance_level, target_level)
+            )
+            diamond_cost = total_enhancers * ENHANCER_TO_DIAMOND
+
+            # Calculate DPS gain from main stat increase
+            # Main stat contributes to damage via attack formula
+            # Rough estimate: 1% DPS per ~100-200 main stat depending on current stats
+            current_stats = self.get_stats()
+            current_main_stat = current_stats.get('main_stat', 0) + current_stats.get('main_stat_flat', 0)
+
+            if current_main_stat > 0:
+                # DPS scales roughly linearly with main stat
+                # dps_gain_pct = (new_main / old_main - 1) * 100
+                # But main stat has diminishing returns, so use sqrt scaling
+                relative_gain = main_stat_gain / max(current_main_stat, 1)
+                dps_gain_pct = relative_gain * 100 * 0.5  # 50% scaling factor for main stat
+            else:
+                # Fallback: ~0.5% DPS per 100 main stat gained
+                dps_gain_pct = main_stat_gain * 0.005
+
+            # Cap at reasonable range
+            dps_gain_pct = max(0.01, min(dps_gain_pct, 10.0))
+
+            # Format description
+            if batch <= 10:
+                desc = f"Resonance +{actual_levels} levels (L{self.resonance_level}→L{target_level})"
+            else:
+                desc = f"Resonance +{actual_levels} (L{self.resonance_level}→L{target_level})"
+
+            self.upgrade_options.append(UpgradeOption(
+                upgrade_type=UpgradeType.ARTIFACT_RESONANCE,
+                description=desc,
+                target=f"resonance_{target_level}",
+                cost_diamonds=diamond_cost,
+                expected_dps_gain_pct=dps_gain_pct,
+                current_state=f"+{main_stat_gain} Main Stat, +{hp_gain} HP",
+                details={
+                    "current_level": self.resonance_level,
+                    "target_level": target_level,
+                    "max_level": self.resonance_max_level,
+                    "main_stat_gain": main_stat_gain,
+                    "hp_gain": hp_gain,
+                    "enhancer_cost": total_enhancers,
+                    "levels_gained": actual_levels,
+                }
+            ))
 
     def _analyze_artifact_potential_upgrades(self):
         """Analyze artifact potential reroll options."""

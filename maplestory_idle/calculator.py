@@ -90,7 +90,8 @@ class CharacterState:
     
     def calculate_damage(self, enemy_def: float = 0.752, vs_boss: bool = True) -> float:
         """Calculate total damage against an enemy."""
-        stat_prop = (self.get_total_dex() * 0.01) + (self.str_flat * 0.0025)
+        # stat_dmg_pct = DEX * 0.01 + STR * 0.0025, then multiplier needs /100
+        stat_prop = (self.get_total_dex() / 10000) + (self.str_flat / 40000)
         damage_type = self.boss_damage if vs_boss else self.normal_damage
         
         damage = self.base_attack

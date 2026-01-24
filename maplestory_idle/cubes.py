@@ -2004,6 +2004,34 @@ class ExactRollDistribution:
             "max": self._outcomes[-1].dps_gain_pct if self._outcomes else 0,
         }
 
+    def get_dps_at_percentile(self, percentile: float) -> float:
+        """
+        Get the DPS gain value at a specific percentile (0-100).
+
+        Args:
+            percentile: Target percentile (0-100), e.g., 99 for 99th percentile
+
+        Returns:
+            DPS gain % at that percentile
+        """
+        if not self._scored:
+            raise RuntimeError("Must call score_for_slot first")
+        if not self._outcomes:
+            return 0.0
+
+        target = percentile / 100.0  # Convert to 0-1 range
+        cumulative = 0.0
+
+        for outcome in self._outcomes:
+            prev_cumulative = cumulative
+            cumulative += outcome.probability
+
+            if prev_cumulative < target <= cumulative:
+                return outcome.dps_gain_pct
+
+        # If we didn't find it, return max
+        return self._outcomes[-1].dps_gain_pct
+
     def get_percentile_of_dps_gain(self, dps_gain: float) -> float:
         """Get percentile rank of a DPS gain (0-100)."""
         if not self._scored:
@@ -2181,8 +2209,10 @@ class ExpectedCubesMetrics:
     current_pity: int = 0               # Current pity counter
     pity_threshold: int = 999999        # Cubes until guaranteed tier-up
     cubes_to_tier_up: float = 0         # Expected cubes to tier up (accounting for pity)
-    tier_up_score_gain: float = 0       # Expected score improvement from tier-up
+    tier_up_score_gain: float = 0       # Expected score improvement from tier-up (legacy)
     tier_up_efficiency_bonus: float = 0 # Additional efficiency from tier-up potential
+    tier_up_dps_value: float = 0        # P99 DPS at next tier - current DPS (new)
+    next_tier_p99_dps: float = 0        # 99th percentile DPS at next tier
     # Median improvement for efficiency calculation
     median_dps_improvement: float = 0.0 # Median DPS gain when rolling better than current
 
@@ -2996,18 +3026,35 @@ def calculate_expected_cubes_fast(
     # Calculate expected cubes to tier up (accounting for current pity)
     cubes_to_tier_up = _calculate_cubes_to_tier_up(tier, current_pity, cube_type)
 
-    # Calculate expected score gain from tier-up
+    # Calculate tier-up value using P99 approach
+    # Tier-up value = 99th percentile DPS at next tier - current DPS gain
     tier_up_score_gain = 0.0
     tier_up_efficiency_bonus = 0.0
+    tier_up_dps_value = 0.0
+    next_tier_p99_dps = 0.0
     next_tier = tier.next_tier()
 
     if next_tier is not None and tier != PotentialTier.MYSTIC:
+        # Get exact distribution at next tier for P99 calculation
+        next_tier_dist = get_exact_roll_distribution(
+            next_tier, slot, dps_calc_func, current_dps, main_stat_type
+        )
+        next_tier_p99_dps = next_tier_dist.get_dps_at_percentile(99)
+
+        # Tier-up value = improvement over current (0 if current is already better)
+        tier_up_dps_value = max(0, next_tier_p99_dps - current_dps_gain)
+
+        # Legacy score gain calculation (for backwards compatibility)
         tier_up_score_gain = _estimate_tier_up_score_gain(
             slot, tier, next_tier, dps_calc_func, current_dps, main_stat_type
         )
 
-        if cubes_to_tier_up > 0 and cubes_to_tier_up < 200:
-            tier_up_efficiency_bonus = (tier_up_score_gain / cubes_to_tier_up) * 10
+        # Calculate tier-up probability per cube (pity-adjusted)
+        if cubes_to_tier_up > 0:
+            tier_up_prob_per_cube = 1.0 / cubes_to_tier_up
+            # Tier-up efficiency = (prob_per_cube * tier_up_value) / cost * 100k
+            # We store the raw bonus and let calculate_efficiency_score handle scaling
+            tier_up_efficiency_bonus = tier_up_prob_per_cube * tier_up_dps_value
 
     # Calculate median DPS improvement when rolling better than current
     median_dps_improvement = cache.get_expected_dps_gain_when_improving(current_dps_gain)
@@ -3027,6 +3074,8 @@ def calculate_expected_cubes_fast(
         cubes_to_tier_up=cubes_to_tier_up,
         tier_up_score_gain=tier_up_score_gain,
         tier_up_efficiency_bonus=tier_up_efficiency_bonus,
+        tier_up_dps_value=tier_up_dps_value,
+        next_tier_p99_dps=next_tier_p99_dps,
         median_dps_improvement=median_dps_improvement,
     )
 
@@ -3197,38 +3246,46 @@ def calculate_efficiency_score(
 
     Formula: Expected DPS% gain per 100k diamonds spent
 
-    This uses the actual median DPS improvement from the roll distribution,
-    making it directly comparable with starforce and other upgrade types.
+    This combines two sources of value:
+    1. Same-tier improvement: median_improvement / expected_cubes
+    2. Tier-up value: P99 DPS at next tier - current DPS, weighted by tier-up probability
 
-    For cubes: (median_improvement / expected_cubes) / cost_per_cube * 100000
+    The tier_up_efficiency_bonus is pre-calculated as:
+        tier_up_prob_per_cube * (P99_next_tier - current_dps)
+
+    For cubes: ((same_tier_gain + tier_up_gain) / cost_per_cube) * 100000
     For starforce: dps_gain / total_cost * 100000 (same formula, guaranteed outcome)
 
     Args:
         expected_cubes_to_improve: Expected cubes to get any improvement
         diamond_cost_per_cube: Cost per cube in diamonds
         median_dps_improvement: Median DPS% gain when rolling better than current
-        tier_up_efficiency_bonus: Pre-calculated bonus from tier-up potential
+        tier_up_efficiency_bonus: Pre-calculated = tier_up_prob * tier_up_dps_value
 
     Returns:
         Efficiency score: DPS% gain per 100k diamonds (higher = better)
     """
-    if expected_cubes_to_improve <= 0 or median_dps_improvement <= 0:
-        # No room to improve - just tier-up value
-        return tier_up_efficiency_bonus * 10
-
-    if expected_cubes_to_improve >= 500:
-        # Very hard to improve - use minimal efficiency
-        expected_dps_per_cube = median_dps_improvement * 0.002  # ~0.1% chance
+    # Same-tier improvement per cube
+    if expected_cubes_to_improve > 0 and median_dps_improvement > 0:
+        if expected_cubes_to_improve >= 500:
+            # Very hard to improve - use minimal efficiency
+            same_tier_per_cube = median_dps_improvement * 0.002  # ~0.1% chance
+        else:
+            same_tier_per_cube = median_dps_improvement / expected_cubes_to_improve
     else:
-        # Expected DPS gain per cube = median_improvement / expected_cubes
-        # This is probability-weighted: (1/expected_cubes) * median_improvement
-        expected_dps_per_cube = median_dps_improvement / expected_cubes_to_improve
+        same_tier_per_cube = 0
+
+    # Tier-up improvement per cube (already probability-weighted)
+    tier_up_per_cube = tier_up_efficiency_bonus
+
+    # Total expected DPS gain per cube
+    total_per_cube = same_tier_per_cube + tier_up_per_cube
+
+    if total_per_cube <= 0:
+        return 0.0
 
     # Efficiency = DPS% per 100k diamonds
-    efficiency = (expected_dps_per_cube / diamond_cost_per_cube) * 100_000
-
-    # Add tier-up bonus (items close to tier-up get extra value)
-    efficiency += tier_up_efficiency_bonus * 10
+    efficiency = (total_per_cube / diamond_cost_per_cube) * 100_000
 
     return efficiency
 

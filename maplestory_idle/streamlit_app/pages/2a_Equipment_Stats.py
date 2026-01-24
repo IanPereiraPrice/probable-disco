@@ -259,16 +259,18 @@ with col_editor:
         elif 'equip_stats_last_save' in st.session_state:
             st.caption(f"Saved: {st.session_state.equip_stats_last_save.strftime('%H:%M:%S')}")
 
-    # Basic info
+    # Basic info - use slot-specific keys so values update when switching slots
+    slot_key = selected_slot  # Include slot in key to make widgets slot-specific
+
     col1, col2 = st.columns(2)
     with col1:
-        new_name = st.text_input("Name", value=st.session_state.edit_equip_name, key="input_eq_name")
+        new_name = st.text_input("Name", value=st.session_state.edit_equip_name, key=f"input_eq_name_{slot_key}")
         if new_name != st.session_state.edit_equip_name:
             st.session_state.edit_equip_name = new_name
             st.session_state.equip_stats_has_unsaved = True
     with col2:
         rarity_idx = RARITY_OPTIONS.index(st.session_state.edit_equip_rarity) if st.session_state.edit_equip_rarity in RARITY_OPTIONS else 0
-        new_rarity = st.selectbox("Rarity", RARITY_OPTIONS, index=rarity_idx, key="input_eq_rarity")
+        new_rarity = st.selectbox("Rarity", RARITY_OPTIONS, index=rarity_idx, key=f"input_eq_rarity_{slot_key}")
         if new_rarity != st.session_state.edit_equip_rarity:
             st.session_state.edit_equip_rarity = new_rarity
             st.session_state.equip_stats_has_unsaved = True
@@ -277,12 +279,12 @@ with col_editor:
     with col1:
         tiers = [4, 3, 2, 1]
         tier_idx = tiers.index(st.session_state.edit_equip_tier) if st.session_state.edit_equip_tier in tiers else 0
-        new_tier = st.selectbox("Tier", tiers, index=tier_idx, key="input_eq_tier")
+        new_tier = st.selectbox("Tier", tiers, index=tier_idx, key=f"input_eq_tier_{slot_key}")
         if new_tier != st.session_state.edit_equip_tier:
             st.session_state.edit_equip_tier = new_tier
             st.session_state.equip_stats_has_unsaved = True
     with col2:
-        new_stars = st.slider("Stars", 0, 25, int(st.session_state.edit_equip_stars), key="input_eq_stars")
+        new_stars = st.slider("Stars", 0, 25, int(st.session_state.edit_equip_stars), key=f"input_eq_stars_{slot_key}")
         if new_stars != st.session_state.edit_equip_stars:
             st.session_state.edit_equip_stars = new_stars
             st.session_state.equip_stats_has_unsaved = True
@@ -296,7 +298,7 @@ with col_editor:
 
     col1, col2 = st.columns(2)
     with col1:
-        new_atk = st.number_input("Base Attack", 0, 999999, int(st.session_state.edit_equip_base_attack), key="input_eq_atk")
+        new_atk = st.number_input("Base Attack", 0, 999999, int(st.session_state.edit_equip_base_attack), key=f"input_eq_atk_{slot_key}")
         if new_atk != st.session_state.edit_equip_base_attack:
             st.session_state.edit_equip_base_attack = new_atk
             st.session_state.equip_stats_has_unsaved = True
@@ -305,7 +307,7 @@ with col_editor:
 
     col1, col2 = st.columns(2)
     with col1:
-        new_hp = st.number_input("Base Max HP", 0, 999999, int(st.session_state.edit_equip_base_max_hp), key="input_eq_hp")
+        new_hp = st.number_input("Base Max HP", 0, 999999, int(st.session_state.edit_equip_base_max_hp), key=f"input_eq_hp_{slot_key}")
         if new_hp != st.session_state.edit_equip_base_max_hp:
             st.session_state.edit_equip_base_max_hp = new_hp
             st.session_state.equip_stats_has_unsaved = True
@@ -315,7 +317,7 @@ with col_editor:
     third_label = SLOT_THIRD_STAT.get(selected_slot, "Third Stat")
     col1, col2 = st.columns(2)
     with col1:
-        new_third = st.number_input(f"Base {third_label}", 0, 999999, int(st.session_state.edit_equip_base_third_stat), key="input_eq_third")
+        new_third = st.number_input(f"Base {third_label}", 0, 999999, int(st.session_state.edit_equip_base_third_stat), key=f"input_eq_third_{slot_key}")
         if new_third != st.session_state.edit_equip_base_third_stat:
             st.session_state.edit_equip_base_third_stat = new_third
             st.session_state.equip_stats_has_unsaved = True
@@ -328,22 +330,22 @@ with col_editor:
     # Row 1: Boss, Normal, CR, CD
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        new_boss = st.number_input("Boss%", 0.0, 100.0, float(st.session_state.edit_equip_sub_boss), step=0.1, key="input_eq_boss")
+        new_boss = st.number_input("Boss%", 0.0, 100.0, float(st.session_state.edit_equip_sub_boss), step=0.1, key=f"input_eq_boss_{slot_key}")
         if new_boss != st.session_state.edit_equip_sub_boss:
             st.session_state.edit_equip_sub_boss = new_boss
             st.session_state.equip_stats_has_unsaved = True
     with col2:
-        new_normal = st.number_input("Normal%", 0.0, 100.0, float(st.session_state.edit_equip_sub_normal), step=0.1, key="input_eq_normal")
+        new_normal = st.number_input("Normal%", 0.0, 100.0, float(st.session_state.edit_equip_sub_normal), step=0.1, key=f"input_eq_normal_{slot_key}")
         if new_normal != st.session_state.edit_equip_sub_normal:
             st.session_state.edit_equip_sub_normal = new_normal
             st.session_state.equip_stats_has_unsaved = True
     with col3:
-        new_cr = st.number_input("CR%", 0.0, 100.0, float(st.session_state.edit_equip_sub_cr), step=0.1, key="input_eq_cr")
+        new_cr = st.number_input("CR%", 0.0, 100.0, float(st.session_state.edit_equip_sub_cr), step=0.1, key=f"input_eq_cr_{slot_key}")
         if new_cr != st.session_state.edit_equip_sub_cr:
             st.session_state.edit_equip_sub_cr = new_cr
             st.session_state.equip_stats_has_unsaved = True
     with col4:
-        new_cd = st.number_input("CD%", 0.0, 100.0, float(st.session_state.edit_equip_sub_cd), step=0.1, key="input_eq_cd")
+        new_cd = st.number_input("CD%", 0.0, 100.0, float(st.session_state.edit_equip_sub_cd), step=0.1, key=f"input_eq_cd_{slot_key}")
         if new_cd != st.session_state.edit_equip_sub_cd:
             st.session_state.edit_equip_sub_cd = new_cd
             st.session_state.equip_stats_has_unsaved = True
@@ -353,7 +355,7 @@ with col_editor:
     # Row 2: Attack Flat
     col1, col2 = st.columns(2)
     with col1:
-        new_atk_flat = st.number_input("Attack Flat", 0, 99999, int(st.session_state.edit_equip_sub_atk_flat), key="input_eq_atk_flat")
+        new_atk_flat = st.number_input("Attack Flat", 0, 99999, int(st.session_state.edit_equip_sub_atk_flat), key=f"input_eq_atk_flat_{slot_key}")
         if new_atk_flat != st.session_state.edit_equip_sub_atk_flat:
             st.session_state.edit_equip_sub_atk_flat = new_atk_flat
             st.session_state.equip_stats_has_unsaved = True
@@ -364,22 +366,22 @@ with col_editor:
     st.markdown("**Job Skill Bonuses** (Sub Amplify)")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        new_skill_1st = st.number_input("1st Job", 0, 100, int(st.session_state.edit_equip_sub_skill_1st), key="input_eq_skill_1st")
+        new_skill_1st = st.number_input("1st Job", 0, 100, int(st.session_state.edit_equip_sub_skill_1st), key=f"input_eq_skill_1st_{slot_key}")
         if new_skill_1st != st.session_state.edit_equip_sub_skill_1st:
             st.session_state.edit_equip_sub_skill_1st = new_skill_1st
             st.session_state.equip_stats_has_unsaved = True
     with col2:
-        new_skill_2nd = st.number_input("2nd Job", 0, 100, int(st.session_state.edit_equip_sub_skill_2nd), key="input_eq_skill_2nd")
+        new_skill_2nd = st.number_input("2nd Job", 0, 100, int(st.session_state.edit_equip_sub_skill_2nd), key=f"input_eq_skill_2nd_{slot_key}")
         if new_skill_2nd != st.session_state.edit_equip_sub_skill_2nd:
             st.session_state.edit_equip_sub_skill_2nd = new_skill_2nd
             st.session_state.equip_stats_has_unsaved = True
     with col3:
-        new_skill_3rd = st.number_input("3rd Job", 0, 100, int(st.session_state.edit_equip_sub_skill_3rd), key="input_eq_skill_3rd")
+        new_skill_3rd = st.number_input("3rd Job", 0, 100, int(st.session_state.edit_equip_sub_skill_3rd), key=f"input_eq_skill_3rd_{slot_key}")
         if new_skill_3rd != st.session_state.edit_equip_sub_skill_3rd:
             st.session_state.edit_equip_sub_skill_3rd = new_skill_3rd
             st.session_state.equip_stats_has_unsaved = True
     with col4:
-        new_skill_4th = st.number_input("4th Job", 0, 100, int(st.session_state.edit_equip_sub_skill_4th), key="input_eq_skill_4th")
+        new_skill_4th = st.number_input("4th Job", 0, 100, int(st.session_state.edit_equip_sub_skill_4th), key=f"input_eq_skill_4th_{slot_key}")
         if new_skill_4th != st.session_state.edit_equip_sub_skill_4th:
             st.session_state.edit_equip_sub_skill_4th = new_skill_4th
             st.session_state.equip_stats_has_unsaved = True
@@ -411,7 +413,7 @@ with col_editor:
 
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        new_is_special = st.checkbox("Is Special", value=st.session_state.edit_equip_is_special, key="input_eq_is_special")
+        new_is_special = st.checkbox("Is Special", value=st.session_state.edit_equip_is_special, key=f"input_eq_is_special_{slot_key}")
         if new_is_special != st.session_state.edit_equip_is_special:
             st.session_state.edit_equip_is_special = new_is_special
             st.session_state.equip_stats_has_unsaved = True
@@ -422,13 +424,13 @@ with col_editor:
             special_labels = list(SPECIAL_STAT_OPTIONS.values())
             current_type = st.session_state.edit_equip_special_type
             type_idx = special_types.index(current_type) if current_type in special_types else 0
-            new_special_type = st.selectbox("Special Stat", special_labels, index=type_idx, key="input_eq_special_type")
+            new_special_type = st.selectbox("Special Stat", special_labels, index=type_idx, key=f"input_eq_special_type_{slot_key}")
             new_special_type_key = special_types[special_labels.index(new_special_type)]
             if new_special_type_key != st.session_state.edit_equip_special_type:
                 st.session_state.edit_equip_special_type = new_special_type_key
                 st.session_state.equip_stats_has_unsaved = True
         with col3:
-            new_special_value = st.number_input("Value", 0.0, 100.0, float(st.session_state.edit_equip_special_value), step=0.1, key="input_eq_special_value")
+            new_special_value = st.number_input("Value", 0.0, 100.0, float(st.session_state.edit_equip_special_value), step=0.1, key=f"input_eq_special_value_{slot_key}")
             if new_special_value != st.session_state.edit_equip_special_value:
                 st.session_state.edit_equip_special_value = new_special_value
                 st.session_state.equip_stats_has_unsaved = True

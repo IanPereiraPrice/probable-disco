@@ -28,14 +28,16 @@ from core.damage import (
     calculate_total_dex,
     calculate_attack_speed,
 )
-from equipment import get_amplify_multiplier
+from equipment import get_amplify_multiplier, SLOT_THIRD_MAIN_STAT
 from artifacts import (
     calculate_book_of_ancient_bonus,
     calculate_hex_multiplier,
     calculate_hex_average_multiplier,
     ARTIFACTS,
+    ArtifactTier,
     CombatScenario,
     EffectType,
+    POTENTIAL_SLOT_UNLOCKS,
 )
 from companions import COMPANIONS
 from weapons import calculate_weapon_atk_str
@@ -356,7 +358,9 @@ def calculate_buff_duration_dps_value(level: int, all_skills_bonus: int, buff_du
 
         mb_skill = BOWMASTER_SKILLS["mortal_blow"]
         mb_level = char.get_effective_skill_level("mortal_blow")
-        mb_fd = mb_skill.base_stat_value + mb_skill.stat_per_level * (mb_level - 1)
+        # Use skill_bonuses format: {stat_name: (base, per_level)}
+        base, per_level = mb_skill.skill_bonuses.get("final_damage", (0, 0))
+        mb_fd = int((base + per_level * mb_level) * 10) / 10
 
         base_uptime = calc.calculate_mortal_blow_uptime()
 
@@ -511,6 +515,7 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
         'accuracy': 0,
         'ba_targets': 0,
         'basic_attack_damage': 0,
+        'damage_amp': 0,  # From equipment scrolls
         # Character info
         'character_level': user_data.character_level,
         # Multiplicative stats - stored as lists for stacking calculation
@@ -550,12 +555,9 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
         base_attack_total += item.get('sub_attack_flat', 0) * sub_mult
         crit_damage_base += item.get('sub_crit_damage', 0) * sub_mult
 
-    # Add crit damage from hero power
-    for line_key, line in user_data.hero_power_lines.items():
-        stat = line.get('stat', '')
-        value = float(line.get('value', 0))
-        if stat.lower() in ('crit_damage', 'cd', 'crit_dmg') and value > 0:
-            crit_damage_base += value
+    # Note: Hero Power doesn't have crit_damage as a stat type (see hero_power.py)
+    # Legacy code that read from hero_power_lines was removed - HP only has:
+    # damage_pct, boss_damage, normal_damage, def_pen, attack_speed, main_stat, etc.
 
     effective_base_attack = max(base_attack_total, 10000)
     effective_crit_damage = max(crit_damage_base, 150)
@@ -669,6 +671,26 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                 value = float(pots.get(f'{prefix}line{i}_value', 0))
                 _add_stat(stat, value, f'{slot}_{prefix}pot')
 
+    # Equipment scrolls - independent from starforce
+    equipment_scrolls = getattr(user_data, 'equipment_scrolls', {}) or {}
+    for slot in EQUIPMENT_SLOTS:
+        scroll_data = equipment_scrolls.get(slot, {})
+        if scroll_data:
+            # Damage Amp % - additive with other damage amp sources
+            damage_amp = float(scroll_data.get('damage_amp', 0))
+            if damage_amp > 0:
+                if 'damage_amp' not in stats:
+                    stats['damage_amp'] = 0
+                stats['damage_amp'] += damage_amp
+            # Flat Attack
+            flat_atk = float(scroll_data.get('flat_attack', 0))
+            if flat_atk > 0:
+                stats['attack_flat'] += flat_atk
+            # Flat Main Stat
+            flat_stat = float(scroll_data.get('flat_main_stat', 0))
+            if flat_stat > 0:
+                stats[main_flat_key] += flat_stat
+
     # Equipment base stats with starforce amplification
     for slot in EQUIPMENT_SLOTS:
         item = user_data.equipment_items.get(slot, {})
@@ -678,10 +700,18 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
 
         stats['attack_flat'] += item.get('base_attack', 0) * main_mult
         stats['attack_flat'] += item.get('sub_attack_flat', 0) * sub_mult
+
+        # Main stat from equipment - only certain slots have main_stat as 3rd stat
+        # weapon, ring, necklace, face have main_stat; others have defense/accuracy/etc
+        third_stat_type = SLOT_THIRD_MAIN_STAT.get(slot, 'main_stat')
+        if third_stat_type == 'main_stat':
+            stats[main_flat_key] += item.get('base_third_stat', 0) * main_mult
+
         stats['crit_damage'] += item.get('sub_crit_damage', 0) * sub_mult
         stats['crit_rate'] += item.get('sub_crit_rate', 0) * sub_mult
         stats['boss_damage'] += item.get('sub_boss_damage', 0) * sub_mult
         stats['normal_damage'] += item.get('sub_normal_damage', 0) * sub_mult
+        stats['damage_pct'] += item.get('sub_damage_pct', 0) * sub_mult
 
         # Handle special stats based on special_stat_type field
         if item.get('is_special', False):
@@ -705,35 +735,56 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
         stats['skill_3rd'] += item.get('sub_skill_3rd', 0) * sub_mult
         stats['skill_4th'] += item.get('sub_skill_4th', 0) * sub_mult
 
-    # Hero Power lines
-    for line_key, line in user_data.hero_power_lines.items():
+    # Hero Power lines - use active preset's lines, not hero_power_lines directly
+    # hero_power_lines may be stale if user hasn't visited Hero Power page recently
+    active_preset = getattr(user_data, 'active_hero_power_preset', '1')
+    hero_power_presets = getattr(user_data, 'hero_power_presets', {})
+
+    if active_preset and active_preset in hero_power_presets:
+        # Use lines from the active preset
+        preset_data = hero_power_presets[active_preset]
+        hp_lines = preset_data.get('lines', {})
+    else:
+        # Fallback to hero_power_lines if no preset system
+        hp_lines = user_data.hero_power_lines
+
+    for line_key, line in hp_lines.items():
         stat = line.get('stat', '')
         value = float(line.get('value', 0))
         _add_stat(stat, value, f'hero_power_{line_key}')
 
-    # Hero Power passives
-    passives = user_data.hero_power_passives
-    stats[main_flat_key] += passives.get('main_stat', 0) * 100
-    stats['damage_pct'] += passives.get('damage', 0) * 2
+    # Hero Power passives - direct values
+    passive_values = getattr(user_data, 'hero_power_passive_values', {}) or {}
+    stats[main_flat_key] += passive_values.get('main_stat', 0)
+    stats['damage_pct'] += passive_values.get('damage_percent', 0)
+    stats['attack_flat'] += passive_values.get('attack', 0)
 
-    # Maple Rank
+    # Maple Rank - use correct cumulative formula
+    from maple_rank import get_cumulative_main_stat, MAIN_STAT_SPECIAL
     mr = user_data.maple_rank
     stage = mr.get('current_stage', 1)
     ms_level = mr.get('main_stat_level', 0)
     special = mr.get('special_main_stat', 0)
-    stats[main_flat_key] += (stage - 1) * 100 + ms_level * 10 + special
+    # Regular main stat uses cumulative formula with varying per-point values
+    regular_ms = get_cumulative_main_stat(stage, ms_level)
+    # Special main stat has base value of 300 even at 0 points
+    special_ms = MAIN_STAT_SPECIAL["base_value"] + special * MAIN_STAT_SPECIAL["per_point"]
+    stats[main_flat_key] += regular_ms + special_ms
 
     stat_levels = mr.get('stat_levels', {})
     if isinstance(stat_levels, dict):
-        atk_spd = stat_levels.get('attack_speed', 0) * 0.5
+        # Use correct per_level values from MAPLE_RANK_STATS
+        atk_spd = stat_levels.get('attack_speed', 0) * 0.35  # 7% max / 20 levels
         if atk_spd > 0:
             stats['attack_speed_sources'].append(('MapleRank', atk_spd))
-        stats['crit_rate'] += stat_levels.get('crit_rate', 0) * 1
-        stats['damage_pct'] += stat_levels.get('damage', 0) * 2
-        stats['boss_damage'] += stat_levels.get('boss_damage', 0) * 2
-        stats['normal_damage'] += stat_levels.get('normal_damage', 0) * 2
-        stats['crit_damage'] += stat_levels.get('crit_damage', 0) * 2
-        stats['skill_damage'] += stat_levels.get('skill_damage', 0) * 2
+        stats['crit_rate'] += stat_levels.get('crit_rate', 0) * 1.0      # 10% max / 10 levels
+        stats['damage_pct'] += stat_levels.get('damage_percent', 0) * 0.7  # 35% max / 50 levels
+        stats['boss_damage'] += stat_levels.get('boss_damage', 0) * 0.667  # 20% max / 30 levels
+        stats['normal_damage'] += stat_levels.get('normal_damage', 0) * 0.667  # 20% max / 30 levels
+        stats['crit_damage'] += stat_levels.get('crit_damage', 0) * 0.667  # 20% max / 30 levels
+        stats['skill_damage'] += stat_levels.get('skill_damage', 0) * 0.833  # 25% max / 30 levels
+        stats['min_dmg_mult'] += stat_levels.get('min_dmg_mult', 0) * 0.55  # 11% max / 20 levels
+        stats['max_dmg_mult'] += stat_levels.get('max_dmg_mult', 0) * 0.55  # 11% max / 20 levels
 
     # Equipment sets
     stats[main_flat_key] += user_data.equipment_sets.get('medal', 0)
@@ -742,6 +793,23 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
     # Weapons (weapons_data dict with "rarity_tier" keys)
     weapons_data = getattr(user_data, 'weapons_data', {}) or {}
     equipped_weapon_key = getattr(user_data, 'equipped_weapon_key', '') or ''
+
+    # Auto-select best weapon if none equipped but weapons exist
+    if not equipped_weapon_key and weapons_data:
+        best_key = ""
+        best_atk = 0.0
+        for key, w_data in weapons_data.items():
+            lvl = w_data.get('level', 0)
+            if lvl <= 0:
+                continue
+            parts = key.rsplit('_', 1)
+            if len(parts) == 2:
+                rarity, tier = parts[0], int(parts[1])
+                w_stats = calculate_weapon_atk_str(rarity, tier, lvl)
+                if w_stats['on_equip_atk'] > best_atk:
+                    best_atk = w_stats['on_equip_atk']
+                    best_key = key
+        equipped_weapon_key = best_key
 
     total_weapon_atk_pct = 0.0
     for key, weapon_data in weapons_data.items():
@@ -887,14 +955,16 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
             if not isinstance(slot_data, dict):
                 continue
 
-            # Try to get artifact key directly first (new format), fallback to name lookup
-            artifact_key = slot_data.get('artifact', '')
-            if not artifact_key:
-                # Fallback: lookup by name
-                name = slot_data.get('name', '')
-                if not name or name == '(Empty)':
-                    continue
+            # Get artifact key - prefer name-based lookup for accuracy
+            # (artifact field may be stale if user changed equipment)
+            name = slot_data.get('name', '')
+            artifact_key = ''
+            if name and name != '(Empty)':
+                # Name lookup is source of truth
                 artifact_key = artifact_key_by_name.get(name, '')
+            if not artifact_key:
+                # Fallback to artifact field if name lookup failed
+                artifact_key = slot_data.get('artifact', '')
 
             if not artifact_key or artifact_key not in ARTIFACTS:
                 continue
@@ -991,6 +1061,26 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
 
     # Artifact inventory effects (passive bonuses from all owned artifacts)
     # Note: artifacts_inventory already loaded above for Book of Ancient stars
+    #
+    # IMPORTANT: Inventory stats apply to ALL owned artifacts (passive bonus from owning)
+    # but artifact POTENTIALS only apply from EQUIPPED artifacts!
+
+    # Build set of equipped artifact keys for potential filtering
+    equipped_artifact_keys = set()
+    if artifacts_equipped:
+        for slot_key in ['slot0', 'slot1', 'slot2']:
+            slot_data = artifacts_equipped.get(slot_key, {})
+            if not isinstance(slot_data, dict):
+                continue
+            # Try artifact key directly, fall back to name lookup
+            artifact_key = slot_data.get('artifact', '')
+            if not artifact_key:
+                name = slot_data.get('name', '')
+                if name and name != '(Empty)':
+                    artifact_key = artifact_key_by_name.get(name, '')
+            if artifact_key:
+                equipped_artifact_keys.add(artifact_key)
+
     if artifacts_inventory:
         for art_key, art_data in artifacts_inventory.items():
             if art_key not in ARTIFACTS:
@@ -1001,7 +1091,7 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
             defn = ARTIFACTS[art_key]
             stars = int(art_data.get('stars', 0))
 
-            # Inventory stat (passive effect from owning the artifact)
+            # Inventory stat (passive effect from owning the artifact) - applies to ALL
             inv_stat = defn.inventory_stat
             inv_value = defn.get_inventory_value(stars)
 
@@ -1028,20 +1118,36 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                 elif inv_stat == 'basic_attack_damage':
                     # Sayram's Necklace inventory: basic attack damage
                     stats['basic_attack_damage'] += inv_value * 100
+                elif inv_stat == 'skill_damage':
+                    # Soul Contract inventory: skill damage
+                    stats['skill_damage'] += inv_value * 100
                 # Note: Utility stats like defense, debuff_tolerance, evasion,
                 # damage_taken_decrease are not DPS stats and are skipped
 
-            # Artifact potentials
+            # Artifact potentials - ONLY from EQUIPPED artifacts!
+            if art_key not in equipped_artifact_keys:
+                continue  # Skip potentials for non-equipped artifacts
+
+            # Determine how many slots are unlocked based on stars
+            # Slot 0: unlocked at 1★, Slot 1: unlocked at 3★, Slot 2: unlocked at 5★
+            slots_unlocked = POTENTIAL_SLOT_UNLOCKS.get(stars, 0)
+            # For non-legendary artifacts, cap at 2 slots
+            if defn.tier != ArtifactTier.LEGENDARY and slots_unlocked > 2:
+                slots_unlocked = 2
+
             potentials = art_data.get('potentials', [])
             if isinstance(potentials, list):
-                for pot in potentials:
+                for idx, pot in enumerate(potentials):
+                    # Skip slots that aren't unlocked yet
+                    if idx >= slots_unlocked:
+                        continue
                     if isinstance(pot, dict):
                         pot_stat = pot.get('stat', '')
                         pot_value = float(pot.get('value', 0) or 0)
                         if pot_value > 0:
-                            if pot_stat == 'main_stat':
+                            if pot_stat == 'main_stat_pct':
                                 stats[main_pct_key] += pot_value
-                            elif pot_stat == 'damage':
+                            elif pot_stat == 'damage_pct':
                                 stats['damage_pct'] += pot_value
                             elif pot_stat == 'boss_damage':
                                 stats['boss_damage'] += pot_value
@@ -1053,8 +1159,9 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                                 stats['crit_damage'] += pot_value
                             elif pot_stat == 'def_pen':
                                 stats['def_pen_sources'].append(('Artifact Potential', pot_value / 100, 100))
-                            elif pot_stat == 'min_max_damage':
+                            elif pot_stat == 'min_dmg_mult':
                                 stats['min_dmg_mult'] += pot_value
+                            elif pot_stat == 'max_dmg_mult':
                                 stats['max_dmg_mult'] += pot_value
 
     # Artifact Resonance stats (flat main stat and max HP from resonance level)
@@ -1070,10 +1177,87 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
             # resonance_hp = calculate_resonance_hp(resonance_level)
 
     # =========================================================================
+    # Skill Passive Stats (from PASSIVE_STAT type skills and mastery nodes)
+    # =========================================================================
+    try:
+        from skills import DPSCalculator as SkillDPSCalculator, CharacterState, get_global_mastery_stats
+        # Use correct UserData attributes
+        char_level = getattr(user_data, 'character_level', 100)
+        all_skills_bonus = getattr(user_data, 'all_skills', 0)
+
+        # Calculate job-specific skill bonuses from equipment sub-stats
+        # These affect skills like Bow Mastery's min_dmg_mult calculation
+        skill_1st_total = 0
+        skill_2nd_total = 0
+        skill_3rd_total = 0
+        skill_4th_total = 0
+        for slot in EQUIPMENT_SLOTS:
+            item = user_data.equipment_items.get(slot, {})
+            stars = star_overrides.get(slot, int(item.get('stars', 0)))
+            sub_mult = get_amplify_multiplier(stars, is_sub=True)
+            skill_1st_total += int(item.get('sub_skill_1st', 0) * sub_mult)
+            skill_2nd_total += int(item.get('sub_skill_2nd', 0) * sub_mult)
+            skill_3rd_total += int(item.get('sub_skill_3rd', 0) * sub_mult)
+            skill_4th_total += int(item.get('sub_skill_4th', 0) * sub_mult)
+
+        char = CharacterState(
+            level=char_level,
+            all_skills_bonus=all_skills_bonus,
+            skill_1st_bonus=skill_1st_total,
+            skill_2nd_bonus=skill_2nd_total,
+            skill_3rd_bonus=skill_3rd_total,
+            skill_4th_bonus=skill_4th_total,
+        )
+        calc = SkillDPSCalculator(char)
+
+        # Get passive skill bonuses (None = permanent stats for char sheet)
+        skill_bonuses = calc.get_all_skill_stat_bonuses(is_boss_phase=None)
+
+        # Apply passive skill stats
+        if 'min_dmg_mult' in skill_bonuses:
+            stats['min_dmg_mult'] += sum(skill_bonuses['min_dmg_mult'])
+        if 'attack_speed' in skill_bonuses:
+            for value in skill_bonuses['attack_speed']:
+                stats['attack_speed_sources'].append(('Passive Skills', value))
+        if 'defense_pen' in skill_bonuses:
+            for value in skill_bonuses['defense_pen']:
+                stats['def_pen_sources'].append(('Passive Skills', value / 100, 50))
+        if 'final_damage' in skill_bonuses:
+            for value in skill_bonuses['final_damage']:
+                stats['final_damage_sources'].append(value / 100)
+        if 'crit_rate' in skill_bonuses:
+            stats['crit_rate'] += sum(skill_bonuses['crit_rate'])
+        if 'dex_flat' in skill_bonuses:
+            stats[main_flat_key] += sum(skill_bonuses['dex_flat'])
+        if 'basic_attack_damage' in skill_bonuses:
+            stats['basic_attack_damage'] += sum(skill_bonuses['basic_attack_damage'])
+
+        # Get global mastery stats
+        mastery_stats = get_global_mastery_stats(char_level)
+
+        if 'max_dmg_mult' in mastery_stats:
+            stats['max_dmg_mult'] += mastery_stats['max_dmg_mult']
+        if 'crit_rate' in mastery_stats:
+            stats['crit_rate'] += mastery_stats['crit_rate']
+        if 'attack_speed' in mastery_stats:
+            stats['attack_speed_sources'].append(('Mastery Nodes', mastery_stats['attack_speed']))
+        if 'main_stat_flat' in mastery_stats:
+            stats[main_flat_key] += mastery_stats['main_stat_flat']
+        if 'basic_attack_damage' in mastery_stats:
+            stats['basic_attack_damage'] += mastery_stats['basic_attack_damage']
+        if 'skill_damage' in mastery_stats:
+            stats['skill_damage'] += mastery_stats['skill_damage']
+
+    except Exception as e:
+        import traceback
+        print(f"Error in skill passive stats: {e}")
+        traceback.print_exc()
+
+    # =========================================================================
     # PASS 3: Apply Manual Adjustments (if enabled)
     # =========================================================================
     # Manual adjustments from Character Stats page help account for
-    # stats from sources we don't track (passive skills, buffs, etc.)
+    # any remaining stat differences (e.g., buffs, titles, etc.)
     if apply_adjustments:
         manual_adj = getattr(user_data, 'manual_adjustments', {}) or {}
         if manual_adj:
@@ -1112,10 +1296,15 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
             if atk_spd_adj != 0:
                 stats['attack_speed_sources'].append(('Manual Adjustment', atk_spd_adj))
 
-            # final_damage adjustment - add as additional source
-            fd_adj = manual_adj.get('final_damage', 0)
-            if fd_adj != 0:
-                stats['final_damage_sources'].append(fd_adj / 100)
+            # final_damage adjustment - use multiplicative correction
+            # FD is multiplicative, so we use a correction multiplier:
+            # If calc FD mult is 4.0 (300%) but actual is 2.0 (100%), correction = 0.5
+            # This correction is applied to the final FD multiplier in calculate_dps()
+            fd_correction = manual_adj.get('final_damage_correction', 1.0)
+            if fd_correction != 1.0:
+                stats['final_damage_correction'] = fd_correction
+            # Legacy: ignore old additive FD adjustments (they don't work correctly)
+            # fd_adj = manual_adj.get('final_damage', 0) - intentionally not used
 
             # total_main_stat and total_attack adjustments need special handling
             # They are derived stats, so we track adjustment separately
@@ -1162,9 +1351,179 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
     return stats
 
 
+def calculate_basic_attack_damage(stats: Dict[str, Any], enemy_def: float = 0.752,
+                                   job_class: JobClass = None, vs_boss: bool = False) -> Dict[str, Any]:
+    """
+    Calculate single damage line for basic attack skill.
+
+    This returns the damage of ONE hit (one damage number you see in-game).
+    For Arrow Stream at level 100+: 5 hits per attack × 6 targets = 30 damage lines.
+    This calculates what ONE of those 30 lines should be.
+
+    Args:
+        stats: Aggregated character stats dictionary
+        enemy_def: Enemy defense value
+        job_class: Character's job class
+        vs_boss: If True, use boss damage; if False, use normal damage
+
+    Returns:
+        Dict with single-line damage values and formula breakdown
+    """
+    from skills import create_character_at_level, DPSCalculator, BOWMASTER_SKILLS
+
+    # Get job class for stat key lookup
+    if job_class is None:
+        job_class = JobClass.BOWMASTER
+    main_stat_type = get_main_stat_name(job_class)
+    main_flat_key = f'{main_stat_type}_flat'
+    main_pct_key = f'{main_stat_type}_pct'
+    secondary_stat_type = get_secondary_stat_name(job_class)
+    secondary_flat_key = f'{secondary_stat_type}_flat'
+    secondary_pct_key = f'{secondary_stat_type}_pct'
+
+    # Calculate multiplicative stats
+    total_defense_pen, _ = calculate_effective_defense_pen_with_sources(
+        stats.get('def_pen_sources', [])
+    )
+    fd_mult = calculate_final_damage_mult(stats.get('final_damage_sources', []))
+
+    # Apply FD correction if set
+    fd_correction = stats.get('final_damage_correction', 1.0)
+    if fd_correction != 1.0:
+        fd_mult *= fd_correction
+
+    # Main stat (1% per point) and secondary stat (0.25% per point)
+    main_stat_flat = stats.get(main_flat_key, 0)
+    main_stat_pct = stats.get(main_pct_key, 0)
+    total_main_stat = calculate_total_dex(main_stat_flat, main_stat_pct)
+
+    secondary_stat_flat = stats.get(secondary_flat_key, 0)
+    secondary_stat_pct = stats.get(secondary_pct_key, 0)
+    total_secondary_stat = secondary_stat_flat * (1 + secondary_stat_pct / 100)
+
+    # Total attack
+    attack_flat = max(stats.get('attack_flat', 0), 10000)
+    attack_pct = stats.get('attack_pct', 0)
+    total_attack = attack_flat * (1 + attack_pct / 100)
+
+    # Damage multipliers
+    damage_pct = stats.get('damage_pct', 0)
+    boss_damage = stats.get('boss_damage', 0)
+    normal_damage = stats.get('normal_damage', 0)
+    damage_amp = stats.get('damage_amp', 0)
+    basic_attack_damage = stats.get('basic_attack_damage', 0)
+    hex_mult = stats.get('hex_multiplier', 1.0)
+
+    # Damage multipliers - these are SEPARATE multipliers, not additive
+    damage_mult = 1 + (damage_pct / 100)  # Base damage %
+
+    # Boss/Normal damage is a separate multiplier
+    if vs_boss:
+        target_dmg_mult = 1 + (boss_damage / 100)
+    else:
+        target_dmg_mult = 1 + (normal_damage / 100)
+
+    amp_mult = 1 + (damage_amp / 100)
+    ba_dmg_mult = 1 + (basic_attack_damage / 100)  # Basic Attack Damage %
+    # Stat multiplier: main stat gives 1% per point, secondary gives 0.25% per point
+    # stat_dmg_pct = main_stat * 0.01 + secondary_stat * 0.0025
+    # multiplier = 1 + (stat_dmg_pct / 100)
+    # Combined: stat_mult = 1 + (main_stat / 10000) + (secondary_stat / 40000)
+    stat_mult = 1 + (total_main_stat / 10000) + (total_secondary_stat / 40000)
+    def_mult = 1 / (1 + enemy_def * (1 - total_defense_pen))
+
+    # Crit stats
+    crit_rate = stats.get('crit_rate', 0)
+    crit_damage = stats.get('crit_damage', 0) + BASE_CRIT_DMG
+    crit_mult = 1 + (crit_damage / 100)
+
+    # Damage range
+    min_dmg = BASE_MIN_DMG + stats.get('min_dmg_mult', 0)
+    max_dmg = BASE_MAX_DMG + stats.get('max_dmg_mult', 0)
+
+    # Create character for skill calculations
+    level = stats.get('character_level', 140)
+    all_skills = int(stats.get('all_skills', 0))
+    char = create_character_at_level(level, all_skills)
+    char.attack = total_attack
+
+    # Determine basic attack skill based on level
+    if level >= 100:
+        ba_skill_name = "arrow_stream"
+    elif level >= 60:
+        ba_skill_name = "wind_arrow_2"
+    elif level >= 30:
+        ba_skill_name = "wind_arrow"
+    else:
+        ba_skill_name = "double_shot"
+
+    ba_skill = BOWMASTER_SKILLS.get(ba_skill_name)
+    ba_display_name = ba_skill.name if ba_skill else ba_skill_name.replace('_', ' ').title()
+
+    # Get skill damage % (the % shown on the skill tooltip)
+    calc = DPSCalculator(char, enemy_def=enemy_def)
+    skill_dmg_pct = calc.get_skill_damage_pct(ba_skill_name)
+    skill_mult = skill_dmg_pct / 100
+
+    # Get hits and targets for reference
+    hits = calc.get_skill_hits(ba_skill_name)
+    targets = calc.get_skill_targets(ba_skill_name)
+
+    # Single line damage = ATK × Stat × Damage% × Boss/Normal% × Amp × FD × Defense × Skill% × BA% × Hex
+    base_line = total_attack * stat_mult * damage_mult * target_dmg_mult * amp_mult * fd_mult * def_mult * skill_mult * ba_dmg_mult * hex_mult
+
+    # Apply damage range for min/max
+    line_min = base_line * (min_dmg / 100)
+    line_max = base_line * (max_dmg / 100)
+
+    # Crit versions
+    crit_min = line_min * crit_mult
+    crit_max = line_max * crit_mult
+
+    return {
+        'skill_name': ba_skill_name,
+        'skill_display_name': ba_display_name,
+        'skill_damage_pct': skill_dmg_pct,
+        'hits': hits,
+        'targets': targets,
+        # Single line damage values
+        'min': line_min,
+        'max': line_max,
+        'crit_min': crit_min,
+        'crit_max': crit_max,
+        # Formula components for breakdown
+        'total_attack': total_attack,
+        'total_main_stat': total_main_stat,
+        'total_secondary_stat': total_secondary_stat,
+        'stat_mult': stat_mult,
+        'damage_mult': damage_mult,
+        'target_dmg_mult': target_dmg_mult,  # Boss% or Normal% (separate multiplier)
+        'damage_pct': damage_pct,
+        'boss_damage': boss_damage,
+        'normal_damage': normal_damage,
+        'amp_mult': amp_mult,
+        'damage_amp': damage_amp,
+        'fd_mult': fd_mult,
+        'def_mult': def_mult,
+        'skill_mult': skill_mult,
+        'crit_mult': crit_mult,
+        'crit_damage': crit_damage,
+        'min_dmg_range': min_dmg,
+        'max_dmg_range': max_dmg,
+        'defense_pen': total_defense_pen,
+        'enemy_def': enemy_def,
+        'vs_boss': vs_boss,
+        # BA-specific multipliers
+        'ba_dmg_mult': ba_dmg_mult,
+        'basic_attack_damage': basic_attack_damage,
+        'hex_mult': hex_mult,
+    }
+
+
 def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: float = 0.752,
                    job_class: JobClass = None, use_realistic_dps: bool = False,
-                   boss_importance: float = 0.7, log_actions: bool = False) -> Dict[str, Any]:
+                   boss_importance: float = 0.7, log_actions: bool = False,
+                   boss_damage_multiplier: float = 1.0) -> Dict[str, Any]:
     """
     Calculate DPS using the full skill rotation model.
 
@@ -1183,6 +1542,9 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
             - Applies boss damage only during boss phase
             - Applies normal damage only during mob phase
             - Schedules skills optimally per phase (e.g., saves Hurricane for boss)
+        boss_importance: Weight for boss vs mob damage (0.0-1.0)
+        log_actions: If True, include detailed fight log
+        boss_damage_multiplier: Multiplier for boss phase DPS display (for comparison)
 
     Returns:
         Dict with 'total' DPS and component multipliers
@@ -1204,6 +1566,12 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
         stats.get('attack_speed_sources', [])
     )
     fd_mult = calculate_final_damage_mult(stats.get('final_damage_sources', []))
+
+    # Apply FD correction multiplier if set (for when actual FD differs from calculated)
+    # e.g., if calculated FD mult is 4.0 but actual is 2.0, correction = 0.5
+    fd_correction = stats.get('final_damage_correction', 1.0)
+    if fd_correction != 1.0:
+        fd_mult *= fd_correction
 
     # Main stat calculation (with manual adjustment if present)
     main_stat_flat = stats.get(main_flat_key, 0)
@@ -1246,6 +1614,13 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     char.main_stat_flat = main_stat_flat
     char.main_stat_pct = main_stat_pct
 
+    # Secondary stat (0.25% per point vs main stat's 1% per point)
+    secondary_stat_type = get_secondary_stat_name(job_class)
+    secondary_flat_key = f'{secondary_stat_type}_flat'
+    secondary_pct_key = f'{secondary_stat_type}_pct'
+    char.secondary_stat_flat = stats.get(secondary_flat_key, 0)
+    char.secondary_stat_pct = stats.get(secondary_pct_key, 0)
+
     if use_realistic_dps:
         # Realistic DPS: pass raw stats, simulation handles phase weighting
         char.damage_pct = stats['damage_pct']
@@ -1285,6 +1660,7 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
             num_enemies=num_enemies,
             mob_time_fraction=mob_time_fraction,
             boss_importance=boss_importance,
+            boss_damage_multiplier=boss_damage_multiplier,
             log_actions=log_actions,
         )
     else:
@@ -1320,6 +1696,12 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
 
     atk_spd_mult = 1 + (total_attack_speed / 100)
 
+    # Phase DPS (only meaningful for realistic DPS mode)
+    # Apply display multiplier to boss phase for easier comparison
+    mob_phase_dps = dps_result.mob_phase_dps * dmg_range_mult * hex_mult
+    boss_phase_dps = dps_result.boss_phase_dps * dmg_range_mult * hex_mult
+    boss_phase_dps_display = boss_phase_dps * boss_damage_multiplier
+
     return {
         'total': final_total,
         'defense_pen': total_defense_pen,
@@ -1342,6 +1724,11 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
         'active_skill_dps': dps_result.active_skill_dps * dmg_range_mult * hex_mult,
         'summon_dps': dps_result.summon_dps * dmg_range_mult * hex_mult,
         'proc_dps': dps_result.proc_dps * dmg_range_mult * hex_mult,
+        # Phase breakdown (realistic DPS only)
+        'mob_phase_dps': mob_phase_dps,
+        'boss_phase_dps': boss_phase_dps,
+        'boss_phase_dps_display': boss_phase_dps_display,  # With user's display multiplier
+        'boss_damage_multiplier': boss_damage_multiplier,
         # Fight simulation log (only populated when log_actions=True)
         'fight_log': dps_result.fight_log,
     }

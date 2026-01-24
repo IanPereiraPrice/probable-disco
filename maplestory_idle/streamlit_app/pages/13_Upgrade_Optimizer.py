@@ -101,9 +101,15 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     # Check if user has enabled realistic DPS calculation
     use_realistic_dps = getattr(data, 'use_realistic_dps', False)
     boss_importance = getattr(data, 'boss_importance', 70) / 100.0
+    boss_damage_multiplier = getattr(data, 'boss_damage_multiplier', 1.0)
 
     # book_of_ancient_stars=None means use value from stats (from user's artifact inventory)
-    return shared_calculate_dps(stats, combat_mode, enemy_def, use_realistic_dps=use_realistic_dps, boss_importance=boss_importance)
+    return shared_calculate_dps(
+        stats, combat_mode, enemy_def,
+        use_realistic_dps=use_realistic_dps,
+        boss_importance=boss_importance,
+        boss_damage_multiplier=boss_damage_multiplier,
+    )
 
 
 st.set_page_config(page_title="Upgrade Optimizer", page_icon="📈", layout="wide")
@@ -513,9 +519,36 @@ def analyze_hero_power_detailed() -> Dict:
 st.title("📈 Upgrade Path Optimizer")
 st.markdown("Detailed upgrade recommendations with specific targets and DPS impact analysis.")
 
-# Current DPS display
-current_stats = aggregate_stats()
-current_dps = calculate_dps(current_stats, data.combat_mode)['total']
+# Current DPS display - use cached stats if available and not stale
+# We cache in session_state to avoid recalculating on every page rerender
+
+# Create a cache key from data that affects stats (simplified version)
+def _get_stats_cache_key():
+    """Generate a cache key based on relevant user data."""
+    # Use a hash of key attributes that affect DPS
+    key_parts = [
+        getattr(data, 'character_level', 100),
+        getattr(data, 'combat_mode', 'stage'),
+        getattr(data, 'all_skills', 0),
+        # Equipment stars (summarized)
+        sum(data.equipment_items.get(s, {}).get('stars', 0) for s in EQUIPMENT_SLOTS[:5]),
+    ]
+    return tuple(key_parts)
+
+cache_key = _get_stats_cache_key()
+cached_key = st.session_state.get('optimizer_stats_cache_key', None)
+
+if cached_key == cache_key and 'optimizer_current_stats' in st.session_state:
+    # Use cached values
+    current_stats = st.session_state.optimizer_current_stats
+    current_dps = st.session_state.optimizer_current_dps
+else:
+    # Calculate fresh and cache
+    current_stats = aggregate_stats()
+    current_dps = calculate_dps(current_stats, data.combat_mode)['total']
+    st.session_state.optimizer_current_stats = current_stats
+    st.session_state.optimizer_current_dps = current_dps
+    st.session_state.optimizer_stats_cache_key = cache_key
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
@@ -525,17 +558,8 @@ with col2:
 with col3:
     budget = st.number_input("Diamond Budget", min_value=0, max_value=10000000, value=100000, step=10000)
 with col4:
-    summoning_level = st.number_input(
-        "Summoning Level",
-        min_value=1,
-        max_value=17,
-        value=getattr(data, 'summoning_level', 15),
-        help="Your weapon summoning level (affects drop rates)"
-    )
-    # Save to user data if changed
-    if summoning_level != getattr(data, 'summoning_level', 15):
-        data.summoning_level = summoning_level
-        save_user_data(data.username, data)
+    summoning_level = getattr(data, 'summoning_level', 15)
+    st.metric("Summoning Level", summoning_level, help="Set in Weapons tab → Stats Summary")
 
 # Warning if DPS is too low for meaningful analysis
 if current_dps < 10000:

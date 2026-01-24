@@ -20,8 +20,8 @@ import copy
 from stat_names import (
     get_display_name,
     DAMAGE_PCT, BOSS_DAMAGE, NORMAL_DAMAGE, DEF_PEN,
-    MAX_DMG_MULT, MIN_DMG_MULT, CRIT_RATE, CRIT_DAMAGE,
-    MAIN_STAT_FLAT, ATTACK_FLAT, ATTACK_PCT, DEFENSE, MAX_HP, ACCURACY
+    MAX_DMG_MULT, MIN_DMG_MULT, CRIT_RATE,
+    MAIN_STAT_FLAT, ATTACK_FLAT, ATTACK_SPEED, MAX_HP, ACCURACY
 )
 
 
@@ -50,7 +50,11 @@ class HeroPowerTier(Enum):
 
 
 class HeroPowerStatType(Enum):
-    """Available stats for Hero Power lines."""
+    """Available stats for Hero Power ability lines.
+
+    From https://idle.maplestorywiki.net/w/Ability
+    Note: Crit Damage and Defense are NOT available as ability stats.
+    """
     DAMAGE = "damage"
     BOSS_DAMAGE = "boss_damage"
     NORMAL_DAMAGE = "normal_damage"
@@ -58,10 +62,8 @@ class HeroPowerStatType(Enum):
     MAX_DMG_MULT = "max_dmg_mult"
     MIN_DMG_MULT = "min_dmg_mult"
     CRIT_RATE = "crit_rate"
-    CRIT_DAMAGE = "crit_damage"
     MAIN_STAT_FLAT = "main_stat_flat"  # Flat main stat (e.g., +2000 DEX) - NOT percentage
-    ATTACK_PCT = "attack_pct"
-    DEFENSE = "defense"
+    ATTACK_SPEED = "attack_speed"  # Attack Speed %
     MAX_HP = "max_hp"
 
 
@@ -74,10 +76,8 @@ STAT_DISPLAY_NAMES: Dict[HeroPowerStatType, str] = {
     HeroPowerStatType.MAX_DMG_MULT: get_display_name("max_dmg_mult"),
     HeroPowerStatType.MIN_DMG_MULT: get_display_name("min_dmg_mult"),
     HeroPowerStatType.CRIT_RATE: get_display_name("crit_rate"),
-    HeroPowerStatType.CRIT_DAMAGE: get_display_name("crit_damage"),
     HeroPowerStatType.MAIN_STAT_FLAT: get_display_name("main_stat_flat"),
-    HeroPowerStatType.ATTACK_PCT: get_display_name("attack_pct"),
-    HeroPowerStatType.DEFENSE: get_display_name("defense"),
+    HeroPowerStatType.ATTACK_SPEED: get_display_name("attack_speed"),
     HeroPowerStatType.MAX_HP: get_display_name("max_hp"),
 }
 
@@ -166,31 +166,18 @@ HERO_POWER_TIER_RATES: Dict[HeroPowerTier, float] = {
     HeroPowerTier.COMMON: 0.4834,      # remainder
 }
 
-# Valuable stats - these are the stats worth targeting
+# Valuable stats - these are the stats worth targeting for DPS
+# Note: Best offensive stats (Boss Dmg 28-40%, Def Pen 14-20%) are only at Rare tier!
 VALUABLE_STATS: List[HeroPowerStatType] = [
-    HeroPowerStatType.DAMAGE,
-    HeroPowerStatType.BOSS_DAMAGE,
-    HeroPowerStatType.DEF_PEN,
-    HeroPowerStatType.MAX_DMG_MULT,
-    HeroPowerStatType.CRIT_DAMAGE,
+    HeroPowerStatType.BOSS_DAMAGE,      # Rare: 28-40%, Epic: 18-25%
+    HeroPowerStatType.DEF_PEN,          # Rare: 14-20%, Epic: 8-12%
+    HeroPowerStatType.NORMAL_DAMAGE,    # Rare: 28-40%, Epic: 18-25%
+    HeroPowerStatType.DAMAGE,           # Legendary: 28-40%, Unique: 18-25%, Epic: 12-15%
+    HeroPowerStatType.MAX_DMG_MULT,     # Unique: 28-40%, Epic: 18-25%
+    HeroPowerStatType.MIN_DMG_MULT,     # Unique: 28-40%, Epic: 18-25%
+    HeroPowerStatType.CRIT_RATE,        # Unique: 15-20%, Epic: 10-14%
+    HeroPowerStatType.ATTACK_SPEED,     # Epic: 15-20%, Rare: 10-14%
 ]
-
-# LEGACY: Arbitrary DPS weights - kept for fallback when calc_dps_func not available
-# These are used when we can't calculate actual DPS impact
-STAT_DPS_WEIGHTS: Dict[HeroPowerStatType, float] = {
-    HeroPowerStatType.DEF_PEN: 2.5,         # Defense Penetration is very strong
-    HeroPowerStatType.BOSS_DAMAGE: 2.0,     # Boss Damage is highly valuable
-    HeroPowerStatType.DAMAGE: 1.8,          # Damage % is great
-    HeroPowerStatType.MAX_DMG_MULT: 1.5,    # Max Damage Mult is good
-    HeroPowerStatType.CRIT_DAMAGE: 1.5,     # Crit Damage is good
-    HeroPowerStatType.MAIN_STAT_FLAT: 1.4,   # Flat main stat applied before DEX% - valuable!
-    HeroPowerStatType.CRIT_RATE: 1.2,       # Crit Rate is decent
-    HeroPowerStatType.ATTACK_PCT: 1.0,      # Attack % is okay
-    HeroPowerStatType.MIN_DMG_MULT: 0.6,    # Min Damage is less valuable
-    HeroPowerStatType.NORMAL_DAMAGE: 0.5,   # Normal Damage is situational
-    HeroPowerStatType.DEFENSE: 0.1,         # Defensive stats low value
-    HeroPowerStatType.MAX_HP: 0.1,          # Defensive stats low value
-}
 
 # Mapping from HeroPowerStatType to the stats dict key used in DPS calculation
 STAT_TO_STATS_KEY: Dict[HeroPowerStatType, str] = {
@@ -201,21 +188,45 @@ STAT_TO_STATS_KEY: Dict[HeroPowerStatType, str] = {
     HeroPowerStatType.MAX_DMG_MULT: MAX_DMG_MULT,
     HeroPowerStatType.MIN_DMG_MULT: MIN_DMG_MULT,
     HeroPowerStatType.CRIT_RATE: CRIT_RATE,
-    HeroPowerStatType.CRIT_DAMAGE: CRIT_DAMAGE,
     HeroPowerStatType.MAIN_STAT_FLAT: MAIN_STAT_FLAT,  # Generic - resolved by job class in DPS calc
-    HeroPowerStatType.ATTACK_PCT: ATTACK_PCT,
-    HeroPowerStatType.DEFENSE: None,  # Defensive, no DPS impact
+    HeroPowerStatType.ATTACK_SPEED: ATTACK_SPEED,
     HeroPowerStatType.MAX_HP: None,   # Defensive, no DPS impact
 }
 
-# Tier multiplier for scoring (higher tier = better)
+# Tier multiplier for scoring
+# Note: This is DEPRECATED - tier doesn't correlate with DPS value!
+# Best offensive stats (Boss Dmg 28-40%, Def Pen 14-20%) are at RARE tier
+# Mystic only has Main Stat and HP - no offensive stats
+# Use DPS-based scoring instead of tier-based scoring
 TIER_SCORE_MULTIPLIERS: Dict[HeroPowerTier, float] = {
-    HeroPowerTier.MYSTIC: 1.0,
-    HeroPowerTier.LEGENDARY: 0.75,
-    HeroPowerTier.UNIQUE: 0.5,
-    HeroPowerTier.EPIC: 0.3,
-    HeroPowerTier.RARE: 0.15,
-    HeroPowerTier.COMMON: 0.05,
+    HeroPowerTier.RARE: 1.0,      # Best offensive stats (Boss/Def Pen/Normal)
+    HeroPowerTier.EPIC: 0.8,      # Good offensive stats
+    HeroPowerTier.UNIQUE: 0.6,    # Dmg%, Min/Max Dmg, Crit Rate
+    HeroPowerTier.LEGENDARY: 0.4, # Dmg%, Main Stat, HP
+    HeroPowerTier.MYSTIC: 0.3,    # Only Main Stat and HP
+    HeroPowerTier.COMMON: 0.1,    # Low values
+}
+
+# DEPRECATED: Fallback DPS weights for when actual DPS calc is not available
+# These are rough estimates - use actual DPS calculation instead when possible
+# Note: The actual DPS value varies greatly depending on current stats
+#
+# IMPORTANT: Attack speed has a breakpoint system (0%, 33%, 66%, 100%, 133%)
+# AS value is HIGHLY context-dependent:
+#   - 0% DPS if no breakpoint is crossed
+#   - 20-30% DPS if a breakpoint IS crossed
+# The weight below is meaningless without knowing current AS - always use DPS calc!
+STAT_DPS_WEIGHTS: Dict[HeroPowerStatType, float] = {
+    HeroPowerStatType.DEF_PEN: 2.0,        # Very valuable, multiplicative with other stats
+    HeroPowerStatType.BOSS_DAMAGE: 1.5,    # Strong in boss modes
+    HeroPowerStatType.NORMAL_DAMAGE: 1.2,  # Strong in stage mode
+    HeroPowerStatType.DAMAGE: 1.0,         # Always useful
+    HeroPowerStatType.MAX_DMG_MULT: 1.0,   # Helps with damage variance
+    HeroPowerStatType.MIN_DMG_MULT: 0.8,   # Less impactful than max
+    HeroPowerStatType.CRIT_RATE: 0.7,      # Depends on current crit rate
+    HeroPowerStatType.ATTACK_SPEED: 0.0,   # CONTEXT-DEPENDENT: use DPS calc (see breakpoint note above)
+    HeroPowerStatType.MAIN_STAT_FLAT: 0.3, # Small impact (flat stat)
+    HeroPowerStatType.MAX_HP: 0.0,         # No DPS impact
 }
 
 # Mode-specific stat weight adjustments
@@ -315,130 +326,146 @@ def create_default_level_config() -> HeroPowerLevelConfig:
     return HeroPowerLevelConfig()
 
 
-# Stat probabilities when rolling (simplified - valuable stats more likely at higher tiers)
+# Stat probabilities when rolling - based on available stats at each tier
+# From https://idle.maplestorywiki.net/w/Ability
+# Probabilities are estimates - wiki doesn't provide exact stat weights
 STAT_PROBABILITIES: Dict[HeroPowerTier, Dict[HeroPowerStatType, float]] = {
+    # Mystic: Only Main Stat and Max HP (+ utility stats we don't track)
     HeroPowerTier.MYSTIC: {
-        HeroPowerStatType.DAMAGE: 0.20,
-        HeroPowerStatType.BOSS_DAMAGE: 0.20,
-        HeroPowerStatType.DEF_PEN: 0.15,
-        HeroPowerStatType.MAX_DMG_MULT: 0.15,
-        HeroPowerStatType.CRIT_DAMAGE: 0.10,
-        HeroPowerStatType.MIN_DMG_MULT: 0.05,
-        HeroPowerStatType.MAIN_STAT_FLAT: 0.05,
-        HeroPowerStatType.CRIT_RATE: 0.05,
-        HeroPowerStatType.ATTACK_PCT: 0.03,
-        HeroPowerStatType.NORMAL_DAMAGE: 0.02,
+        HeroPowerStatType.MAIN_STAT_FLAT: 0.50,
+        HeroPowerStatType.MAX_HP: 0.50,
+        # Other stats (Accuracy, Evasion, MP Recovery, Max MP) not tracked for DPS
     },
+    # Legendary: Main Stat, Max HP, Damage%
     HeroPowerTier.LEGENDARY: {
-        HeroPowerStatType.DAMAGE: 0.18,
-        HeroPowerStatType.BOSS_DAMAGE: 0.18,
-        HeroPowerStatType.DEF_PEN: 0.12,
-        HeroPowerStatType.MAX_DMG_MULT: 0.12,
-        HeroPowerStatType.CRIT_DAMAGE: 0.08,
-        HeroPowerStatType.MIN_DMG_MULT: 0.08,
-        HeroPowerStatType.MAIN_STAT_FLAT: 0.08,
-        HeroPowerStatType.CRIT_RATE: 0.06,
-        HeroPowerStatType.ATTACK_PCT: 0.05,
-        HeroPowerStatType.NORMAL_DAMAGE: 0.05,
+        HeroPowerStatType.MAIN_STAT_FLAT: 0.35,
+        HeroPowerStatType.MAX_HP: 0.35,
+        HeroPowerStatType.DAMAGE: 0.30,
+    },
+    # Unique: Main Stat, Max HP, Damage%, Min/Max Dmg Mult, Crit Rate
+    HeroPowerTier.UNIQUE: {
+        HeroPowerStatType.MAIN_STAT_FLAT: 0.20,
+        HeroPowerStatType.MAX_HP: 0.20,
+        HeroPowerStatType.DAMAGE: 0.20,
+        HeroPowerStatType.MAX_DMG_MULT: 0.15,
+        HeroPowerStatType.MIN_DMG_MULT: 0.15,
+        HeroPowerStatType.CRIT_RATE: 0.10,
+    },
+    # Epic: Many offensive stats available
+    HeroPowerTier.EPIC: {
+        HeroPowerStatType.MAIN_STAT_FLAT: 0.12,
+        HeroPowerStatType.MAX_HP: 0.12,
+        HeroPowerStatType.DAMAGE: 0.12,
+        HeroPowerStatType.MAX_DMG_MULT: 0.10,
+        HeroPowerStatType.MIN_DMG_MULT: 0.10,
+        HeroPowerStatType.CRIT_RATE: 0.10,
+        HeroPowerStatType.ATTACK_SPEED: 0.10,
+        HeroPowerStatType.DEF_PEN: 0.08,
+        HeroPowerStatType.BOSS_DAMAGE: 0.08,
+        HeroPowerStatType.NORMAL_DAMAGE: 0.08,
+    },
+    # Rare: BEST offensive stats (Def Pen 14-20%, Boss/Normal 28-40%)
+    HeroPowerTier.RARE: {
+        HeroPowerStatType.MAIN_STAT_FLAT: 0.10,
+        HeroPowerStatType.MAX_HP: 0.10,
+        HeroPowerStatType.DAMAGE: 0.10,
+        HeroPowerStatType.MAX_DMG_MULT: 0.10,
+        HeroPowerStatType.MIN_DMG_MULT: 0.10,
+        HeroPowerStatType.CRIT_RATE: 0.10,
+        HeroPowerStatType.ATTACK_SPEED: 0.10,
+        HeroPowerStatType.DEF_PEN: 0.10,
+        HeroPowerStatType.BOSS_DAMAGE: 0.10,
+        HeroPowerStatType.NORMAL_DAMAGE: 0.10,
+    },
+    # Common: Basic stats
+    HeroPowerTier.COMMON: {
+        HeroPowerStatType.MAIN_STAT_FLAT: 0.15,
+        HeroPowerStatType.MAX_HP: 0.15,
+        HeroPowerStatType.DAMAGE: 0.15,
+        HeroPowerStatType.MAX_DMG_MULT: 0.15,
+        HeroPowerStatType.MIN_DMG_MULT: 0.15,
+        HeroPowerStatType.CRIT_RATE: 0.15,
+        HeroPowerStatType.ATTACK_SPEED: 0.10,
     },
 }
 
-# Default stat probabilities for lower tiers (more junk stats)
+# Default stat probabilities (fallback if tier not in STAT_PROBABILITIES)
 DEFAULT_STAT_PROBS: Dict[HeroPowerStatType, float] = {
-    HeroPowerStatType.DAMAGE: 0.10,
-    HeroPowerStatType.BOSS_DAMAGE: 0.08,
-    HeroPowerStatType.DEF_PEN: 0.06,
-    HeroPowerStatType.MAX_DMG_MULT: 0.08,
-    HeroPowerStatType.CRIT_DAMAGE: 0.05,
+    HeroPowerStatType.MAIN_STAT_FLAT: 0.15,
+    HeroPowerStatType.MAX_HP: 0.15,
+    HeroPowerStatType.DAMAGE: 0.15,
+    HeroPowerStatType.MAX_DMG_MULT: 0.10,
     HeroPowerStatType.MIN_DMG_MULT: 0.10,
-    HeroPowerStatType.MAIN_STAT_FLAT: 0.12,
-    HeroPowerStatType.CRIT_RATE: 0.08,
-    HeroPowerStatType.ATTACK_PCT: 0.08,
-    HeroPowerStatType.NORMAL_DAMAGE: 0.10,
-    HeroPowerStatType.DEFENSE: 0.08,
-    HeroPowerStatType.MAX_HP: 0.07,
+    HeroPowerStatType.CRIT_RATE: 0.10,
+    HeroPowerStatType.ATTACK_SPEED: 0.10,
+    HeroPowerStatType.DEF_PEN: 0.05,
+    HeroPowerStatType.BOSS_DAMAGE: 0.05,
+    HeroPowerStatType.NORMAL_DAMAGE: 0.05,
 }
 
-# Stat value ranges by tier (min, max) - percentages
-# From knowledge base: Mystic has Damage 28-40%, DEF_PEN 14-20%, etc.
+# Stat value ranges by tier (min, max)
+# From https://idle.maplestorywiki.net/w/Ability
+# Note: Not all stats are available at all tiers - N/A means stat cannot roll at that tier
+# Key insight: Best offensive stats (Boss Dmg, Def Pen) are only at LOWER tiers (Rare/Epic)!
 HERO_POWER_STAT_RANGES: Dict[HeroPowerTier, Dict[HeroPowerStatType, Tuple[float, float]]] = {
+    # Mystic: Only defensive/utility stats - NO offensive stats!
     HeroPowerTier.MYSTIC: {
+        HeroPowerStatType.MAIN_STAT_FLAT: (1500, 2500),
+        HeroPowerStatType.MAX_HP: (70000, 115000),
+        # No offensive stats available at Mystic tier
+    },
+    # Legendary: Main stat, HP, Damage%, but NO def pen/boss dmg/crit rate/attack speed
+    HeroPowerTier.LEGENDARY: {
+        HeroPowerStatType.MAIN_STAT_FLAT: (800, 1200),
+        HeroPowerStatType.MAX_HP: (35000, 65000),
         HeroPowerStatType.DAMAGE: (28.0, 40.0),
-        HeroPowerStatType.BOSS_DAMAGE: (28.0, 40.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (28.0, 40.0),  # Same as Boss Damage
-        HeroPowerStatType.DEF_PEN: (14.0, 20.0),
+        # No def pen, boss dmg, normal dmg, crit rate, attack speed at this tier
+    },
+    # Unique: Damage%, Min/Max Dmg Mult, Crit Rate
+    HeroPowerTier.UNIQUE: {
+        HeroPowerStatType.MAIN_STAT_FLAT: (400, 700),
+        HeroPowerStatType.MAX_HP: (15000, 30000),
+        HeroPowerStatType.DAMAGE: (18.0, 25.0),
         HeroPowerStatType.MAX_DMG_MULT: (28.0, 40.0),
         HeroPowerStatType.MIN_DMG_MULT: (28.0, 40.0),
-        HeroPowerStatType.CRIT_DAMAGE: (20.0, 30.0),
-        HeroPowerStatType.MAIN_STAT_FLAT: (1500, 2500),  # Flat main stat (e.g., +2000 DEX)
-        HeroPowerStatType.CRIT_RATE: (8.0, 12.0),
-        HeroPowerStatType.ATTACK_PCT: (12.0, 18.0),
+        HeroPowerStatType.CRIT_RATE: (15.0, 20.0),
+        # No def pen, boss dmg, normal dmg, attack speed at this tier
     },
-    HeroPowerTier.LEGENDARY: {
-        HeroPowerStatType.DAMAGE: (18.0, 25.0),
-        HeroPowerStatType.BOSS_DAMAGE: (18.0, 25.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (18.0, 25.0),  # Same as Boss Damage
-        HeroPowerStatType.DEF_PEN: (10.0, 14.0),
+    # Epic: Attack Speed, Crit Rate, Def Pen, Boss/Normal Dmg become available here
+    HeroPowerTier.EPIC: {
+        HeroPowerStatType.MAIN_STAT_FLAT: (200, 300),
+        HeroPowerStatType.MAX_HP: (4500, 9000),
+        HeroPowerStatType.DAMAGE: (12.0, 15.0),
         HeroPowerStatType.MAX_DMG_MULT: (18.0, 25.0),
         HeroPowerStatType.MIN_DMG_MULT: (18.0, 25.0),
-        HeroPowerStatType.CRIT_DAMAGE: (14.0, 20.0),
-        HeroPowerStatType.MAIN_STAT_FLAT: (800, 1200),  # Flat main stat
-        HeroPowerStatType.CRIT_RATE: (5.0, 8.0),
-        HeroPowerStatType.ATTACK_PCT: (8.0, 12.0),
+        HeroPowerStatType.CRIT_RATE: (10.0, 14.0),
+        HeroPowerStatType.ATTACK_SPEED: (15.0, 20.0),
+        HeroPowerStatType.DEF_PEN: (8.0, 12.0),
+        HeroPowerStatType.BOSS_DAMAGE: (18.0, 25.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (18.0, 25.0),
     },
-    HeroPowerTier.UNIQUE: {
-        HeroPowerStatType.DAMAGE: (12.0, 18.0),
-        HeroPowerStatType.BOSS_DAMAGE: (12.0, 18.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (12.0, 18.0),  # Same as Boss Damage
-        HeroPowerStatType.DEF_PEN: (6.0, 10.0),
-        HeroPowerStatType.MAX_DMG_MULT: (12.0, 18.0),
-        HeroPowerStatType.MIN_DMG_MULT: (12.0, 18.0),
-        HeroPowerStatType.CRIT_DAMAGE: (10.0, 14.0),
-        HeroPowerStatType.MAIN_STAT_FLAT: (400, 700),  # Flat main stat
-        HeroPowerStatType.CRIT_RATE: (3.0, 5.0),
-        HeroPowerStatType.ATTACK_PCT: (5.0, 8.0),
-    },
-    HeroPowerTier.EPIC: {
-        HeroPowerStatType.DAMAGE: (8.0, 12.0),
-        HeroPowerStatType.BOSS_DAMAGE: (8.0, 12.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (8.0, 12.0),  # Same as Boss Damage
-        HeroPowerStatType.DEF_PEN: (4.0, 6.0),
-        HeroPowerStatType.MAX_DMG_MULT: (8.0, 12.0),
-        HeroPowerStatType.MIN_DMG_MULT: (8.0, 12.0),
-        HeroPowerStatType.CRIT_DAMAGE: (6.0, 10.0),
-        HeroPowerStatType.MAIN_STAT_FLAT: (200, 300),  # Flat main stat
-        HeroPowerStatType.CRIT_RATE: (2.0, 3.0),
-        HeroPowerStatType.ATTACK_PCT: (3.0, 5.0),
-        HeroPowerStatType.DEFENSE: (100, 200),
-        HeroPowerStatType.MAX_HP: (500, 1000),
-    },
+    # Rare: BEST tier for Def Pen (14-20%) and Boss/Normal Dmg (28-40%)!
     HeroPowerTier.RARE: {
-        HeroPowerStatType.DAMAGE: (4.0, 8.0),
-        HeroPowerStatType.BOSS_DAMAGE: (4.0, 8.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (4.0, 8.0),  # Same as Boss Damage
-        HeroPowerStatType.DEF_PEN: (2.0, 4.0),
-        HeroPowerStatType.MAX_DMG_MULT: (4.0, 8.0),
-        HeroPowerStatType.MIN_DMG_MULT: (4.0, 8.0),
-        HeroPowerStatType.CRIT_DAMAGE: (3.0, 6.0),
-        HeroPowerStatType.MAIN_STAT_FLAT: (100, 150),  # Flat main stat
-        HeroPowerStatType.CRIT_RATE: (1.0, 2.0),
-        HeroPowerStatType.ATTACK_PCT: (2.0, 3.0),
-        HeroPowerStatType.DEFENSE: (50, 100),
-        HeroPowerStatType.MAX_HP: (200, 500),
+        HeroPowerStatType.MAIN_STAT_FLAT: (100, 150),
+        HeroPowerStatType.MAX_HP: (1800, 3000),
+        HeroPowerStatType.DAMAGE: (7.0, 10.0),
+        HeroPowerStatType.MAX_DMG_MULT: (12.0, 15.0),
+        HeroPowerStatType.MIN_DMG_MULT: (12.0, 15.0),
+        HeroPowerStatType.CRIT_RATE: (7.0, 9.0),
+        HeroPowerStatType.ATTACK_SPEED: (10.0, 14.0),
+        HeroPowerStatType.DEF_PEN: (14.0, 20.0),  # BEST def pen is at Rare!
+        HeroPowerStatType.BOSS_DAMAGE: (28.0, 40.0),  # BEST boss dmg is at Rare!
+        HeroPowerStatType.NORMAL_DAMAGE: (28.0, 40.0),  # BEST normal dmg is at Rare!
     },
+    # Common (Normal): Lowest tier
     HeroPowerTier.COMMON: {
-        HeroPowerStatType.DAMAGE: (1.0, 4.0),
-        HeroPowerStatType.BOSS_DAMAGE: (1.0, 4.0),
-        HeroPowerStatType.NORMAL_DAMAGE: (1.0, 4.0),  # Same as Boss Damage
-        HeroPowerStatType.DEF_PEN: (1.0, 2.0),
-        HeroPowerStatType.MAX_DMG_MULT: (1.0, 4.0),
-        HeroPowerStatType.MIN_DMG_MULT: (1.0, 4.0),
-        HeroPowerStatType.CRIT_DAMAGE: (1.0, 3.0),
-        HeroPowerStatType.MAIN_STAT_FLAT: (40, 60),  # Flat main stat
-        HeroPowerStatType.CRIT_RATE: (0.5, 1.0),
-        HeroPowerStatType.ATTACK_PCT: (1.0, 2.0),
-        HeroPowerStatType.DEFENSE: (20, 50),
-        HeroPowerStatType.MAX_HP: (100, 200),
+        HeroPowerStatType.MAIN_STAT_FLAT: (40, 60),
+        HeroPowerStatType.MAX_HP: (1200, 1500),
+        HeroPowerStatType.DAMAGE: (3.0, 5.0),
+        HeroPowerStatType.MAX_DMG_MULT: (7.0, 10.0),
+        HeroPowerStatType.MIN_DMG_MULT: (7.0, 10.0),
+        HeroPowerStatType.CRIT_RATE: (3.0, 6.0),
+        HeroPowerStatType.ATTACK_SPEED: (7.0, 9.0),
     },
 }
 
@@ -551,9 +578,8 @@ class HeroPowerLine:
     def format_display(self) -> str:
         """Format the line for display."""
         stat_name = STAT_DISPLAY_NAMES.get(self.stat_type, self.stat_type.value)
-        # Flat stats (no % sign): Defense, Max HP, Main Stat
-        if self.stat_type in (HeroPowerStatType.DEFENSE, HeroPowerStatType.MAX_HP,
-                              HeroPowerStatType.MAIN_STAT_FLAT):
+        # Flat stats (no % sign): Max HP, Main Stat
+        if self.stat_type in (HeroPowerStatType.MAX_HP, HeroPowerStatType.MAIN_STAT_FLAT):
             return f"{stat_name}: {self.value:.0f} ({self.tier.value.capitalize()})"
         return f"{stat_name}: {self.value:.1f}% ({self.tier.value.capitalize()})"
 
@@ -583,18 +609,18 @@ def calculate_line_dps_value(
         float: DPS % contribution of this line (e.g., 2.5 means this line adds 2.5% DPS)
     """
     if not calc_dps_func or not get_stats_func:
-        # Fallback to arbitrary weight * value
-        weight = STAT_DPS_WEIGHTS.get(line.stat_type, 0.5)
-        # For flat stats (Main Stat, Defense, Max HP), use different scaling
+        # Fallback: estimate DPS value based on stat type
+        # For flat stats (Main Stat, Max HP), use different scaling
         if line.stat_type == HeroPowerStatType.MAIN_STAT_FLAT:
             # Flat main stat: ~1000 DEX ≈ 1% DPS gain (rough estimate)
-            return line.value / 1000.0 * weight
-        elif line.stat_type in (HeroPowerStatType.DEFENSE, HeroPowerStatType.MAX_HP):
-            # Defensive stats: minimal DPS impact
+            return line.value / 1000.0
+        elif line.stat_type == HeroPowerStatType.MAX_HP:
+            # Defensive stat: minimal DPS impact
             return 0.0
         else:
-            # Percentage stats: weight * value * 0.01 to get DPS %
-            return line.value * weight * 0.01
+            # Percentage stats: value * 0.05 to estimate DPS %
+            # (rough estimate - actual value depends on current stats)
+            return line.value * 0.05
 
     # Get the stats key for this stat type
     stats_key = STAT_TO_STATS_KEY.get(line.stat_type)
@@ -602,24 +628,58 @@ def calculate_line_dps_value(
         # Defensive stat, no DPS impact
         return 0.0
 
+    # Stats stored as source lists (multiplicative stats) need special handling
+    # These are stored as lists of tuples, not scalar values
+    SOURCE_LIST_STATS = {
+        'def_pen': 'def_pen_sources',      # List of (source, value/100, priority)
+        'attack_speed': 'attack_speed_sources',  # List of (source, value)
+    }
+
     try:
         # Get current stats
         current_stats = get_stats_func()
         if not current_stats:
             return 0.0
 
-        # Make a copy and remove this line's contribution
-        baseline_stats = dict(current_stats)
-        current_value = baseline_stats.get(stats_key, 0)
-        baseline_stats[stats_key] = current_value - line.value
+        # Calculate current DPS first
+        current_dps = calc_dps_func(current_stats)
+        if current_dps <= 0:
+            return 0.0
+
+        # Make a deep copy for baseline calculation
+        baseline_stats = copy.deepcopy(current_stats)
+
+        # Handle stats stored in source lists vs scalar values
+        if stats_key in SOURCE_LIST_STATS:
+            # Multiplicative stat stored as source list
+            source_list_key = SOURCE_LIST_STATS[stats_key]
+            if source_list_key in baseline_stats:
+                # Filter out this specific hero_power line from the source list
+                # Source names are like 'hero_power_line1', 'hero_power_line2', etc. (no underscore before number)
+                original_sources = baseline_stats[source_list_key]
+                line_source_name = f'hero_power_line{line.slot}'
+                filtered_sources = [
+                    entry for entry in original_sources
+                    if entry[0].lower() != line_source_name
+                ]
+                baseline_stats[source_list_key] = filtered_sources
+        else:
+            # Scalar stat - subtract line value
+            # Handle main_stat_flat specially - it gets resolved to job-specific keys (dex_flat, str_flat, etc.)
+            if stats_key == 'main_stat_flat':
+                # The stats dict includes 'main_stat_type' which tells us the job's main stat
+                # e.g., 'dex' for Bowmaster, 'str' for Warrior, etc.
+                main_stat_type = baseline_stats.get('main_stat_type', 'dex')
+                actual_key = f'{main_stat_type}_flat'
+                baseline_stats[actual_key] = baseline_stats.get(actual_key, 0) - line.value
+            else:
+                current_value = baseline_stats.get(stats_key, 0)
+                baseline_stats[stats_key] = current_value - line.value
 
         # Calculate baseline DPS (without this line)
         baseline_dps = calc_dps_func(baseline_stats)
         if baseline_dps <= 0:
             return 0.0
-
-        # Calculate DPS with this line (current state)
-        current_dps = calc_dps_func(current_stats)
 
         # Return % DPS gain from this line
         dps_gain_pct = ((current_dps / baseline_dps) - 1) * 100
@@ -834,20 +894,27 @@ def rank_all_possible_lines_by_dps(
     combat_modes = ["stage", "boss", "world_boss"]
     results: Dict[str, List[Dict]] = {mode: [] for mode in combat_modes}
 
-    # Iterate through all tiers (only valuable ones: Mystic, Legendary, Unique)
-    valuable_tiers = [HeroPowerTier.MYSTIC, HeroPowerTier.LEGENDARY, HeroPowerTier.UNIQUE]
+    # Iterate through tiers with offensive stats
+    # Note: Rare has the BEST offensive stats (Boss Dmg 28-40%, Def Pen 14-20%)
+    # Mystic only has Main Stat and HP - no offensive stats!
+    valuable_tiers = [
+        HeroPowerTier.RARE,       # Best: Boss/Normal 28-40%, Def Pen 14-20%
+        HeroPowerTier.EPIC,       # Good: Boss/Normal 18-25%, Def Pen 8-12%, AS 15-20%
+        HeroPowerTier.UNIQUE,     # Dmg 18-25%, Min/Max 28-40%, CR 15-20%
+        HeroPowerTier.LEGENDARY,  # Dmg 28-40%, Main Stat, HP
+    ]
 
-    # Stats to evaluate (skip defensive stats)
+    # Stats to evaluate for DPS ranking
+    # Note: Crit Damage is NOT available as an ability stat
     offensive_stats = [
         HeroPowerStatType.DEF_PEN,
         HeroPowerStatType.BOSS_DAMAGE,
         HeroPowerStatType.DAMAGE,
-        HeroPowerStatType.CRIT_DAMAGE,
         HeroPowerStatType.MAX_DMG_MULT,
         HeroPowerStatType.NORMAL_DAMAGE,
         HeroPowerStatType.MAIN_STAT_FLAT,
         HeroPowerStatType.CRIT_RATE,
-        HeroPowerStatType.ATTACK_PCT,
+        HeroPowerStatType.ATTACK_SPEED,
         HeroPowerStatType.MIN_DMG_MULT,
     ]
 
@@ -1115,16 +1182,16 @@ class HeroPowerConfig:
         return create_stat_block_for_job(
             job_class=job_class,
             main_stat_flat=all_stats.get(HeroPowerStatType.MAIN_STAT_FLAT, 0),
-            attack_pct=all_stats.get(HeroPowerStatType.ATTACK_PCT, 0),
+            attack_speed=all_stats.get(HeroPowerStatType.ATTACK_SPEED, 0),
             damage_pct=all_stats.get(HeroPowerStatType.DAMAGE, 0),
             boss_damage=all_stats.get(HeroPowerStatType.BOSS_DAMAGE, 0),
             normal_damage=all_stats.get(HeroPowerStatType.NORMAL_DAMAGE, 0),
             crit_rate=all_stats.get(HeroPowerStatType.CRIT_RATE, 0),
-            crit_damage=all_stats.get(HeroPowerStatType.CRIT_DAMAGE, 0),
+            # Note: Crit Damage is NOT available as an ability stat
             min_dmg_mult=all_stats.get(HeroPowerStatType.MIN_DMG_MULT, 0),
             max_dmg_mult=all_stats.get(HeroPowerStatType.MAX_DMG_MULT, 0),
             max_hp=all_stats.get(HeroPowerStatType.MAX_HP, 0),
-            defense=all_stats.get(HeroPowerStatType.DEFENSE, 0),
+            # Note: Defense is NOT available as an ability stat
             # Note: def_pen excluded - needs multiplicative handling
         )
 
@@ -1620,6 +1687,469 @@ def analyze_lock_strategy(
         'cost_per_reroll': final_cost_per_reroll,
         'p_any_improvement': p_any_improvement if reroll_slots else 0,
     }
+
+
+# =============================================================================
+# DPS OPTIMIZER - Strategy-Based Optimization
+# =============================================================================
+
+class OptimizationStrategy(Enum):
+    """Optimization strategies for Hero Power rerolling."""
+    CONSERVATIVE = "conservative"     # Lock early, minimize medal spend
+    BALANCED = "balanced"             # Default - balance cost vs improvement
+    AGGRESSIVE = "aggressive"         # Keep rerolling for near-perfect lines
+    EFFICIENCY = "efficiency"         # Pure DPS/1000 medals optimization
+    LINE_COUNT = "line_count"         # Target X/6 good lines
+
+
+# Strategy parameters
+STRATEGY_PARAMS: Dict[OptimizationStrategy, Dict] = {
+    OptimizationStrategy.CONSERVATIVE: {
+        'lock_threshold_score': 50,      # Lock lines scoring 50+
+        'stop_at_good_lines': 4,         # Stop when 4/6 lines are good
+        'max_rerolls': 500,              # Cap at 500 rerolls
+        'description': "Lock early, minimize medal spend",
+    },
+    OptimizationStrategy.BALANCED: {
+        'lock_threshold_score': 60,      # Lock lines scoring 60+
+        'stop_at_good_lines': 5,         # Stop when 5/6 lines are good
+        'max_rerolls': 2000,
+        'description': "Balance between cost and improvement",
+    },
+    OptimizationStrategy.AGGRESSIVE: {
+        'lock_threshold_score': 75,      # Only lock excellent lines
+        'stop_at_good_lines': 6,         # Want all 6 good
+        'max_rerolls': 10000,
+        'description': "Keep rerolling for near-perfect lines",
+    },
+    OptimizationStrategy.EFFICIENCY: {
+        'min_efficiency': 0.01,          # Stop when < 0.01% DPS per 1000 medals
+        'dynamic_threshold': True,       # Use calculate_reroll_efficiency()
+        'description': "Pure DPS per medal efficiency",
+    },
+    OptimizationStrategy.LINE_COUNT: {
+        'target_good_lines': 5,          # Default 5/6
+        'good_line_threshold': 60,       # Score >= 60 is "good"
+        'description': "Target specific number of good lines",
+    },
+}
+
+
+# DPS Reference Table - Shows estimated DPS gain for each tier/stat combo
+# Based on typical endgame stats: ~40k main stat, ~200% damage, ~50% def pen
+DPS_REFERENCE_TABLE: Dict[str, List[Dict]] = {
+    'mystic': [
+        {'stat': 'Main Stat', 'low': 1500, 'mid': 2000, 'high': 2500,
+         'dps_low': 0.5, 'dps_mid': 0.7, 'dps_high': 0.8, 'note': ''},
+        {'stat': 'Max HP', 'low': 70000, 'mid': 92500, 'high': 115000,
+         'dps_low': 0, 'dps_mid': 0, 'dps_high': 0, 'note': 'defensive only'},
+    ],
+    'legendary': [
+        {'stat': 'Main Stat', 'low': 800, 'mid': 1000, 'high': 1200,
+         'dps_low': 0.25, 'dps_mid': 0.35, 'dps_high': 0.4, 'note': ''},
+        {'stat': 'Damage %', 'low': 28, 'mid': 34, 'high': 40,
+         'dps_low': 1.4, 'dps_mid': 1.7, 'dps_high': 2.0, 'note': ''},
+        {'stat': 'Max HP', 'low': 35000, 'mid': 50000, 'high': 65000,
+         'dps_low': 0, 'dps_mid': 0, 'dps_high': 0, 'note': 'defensive only'},
+    ],
+    'unique': [
+        {'stat': 'Main Stat', 'low': 400, 'mid': 550, 'high': 700,
+         'dps_low': 0.1, 'dps_mid': 0.14, 'dps_high': 0.18, 'note': ''},
+        {'stat': 'Damage %', 'low': 18, 'mid': 21.5, 'high': 25,
+         'dps_low': 0.9, 'dps_mid': 1.1, 'dps_high': 1.25, 'note': ''},
+        {'stat': 'Max Dmg Mult', 'low': 28, 'mid': 34, 'high': 40,
+         'dps_low': 0.9, 'dps_mid': 1.1, 'dps_high': 1.3, 'note': ''},
+        {'stat': 'Min Dmg Mult', 'low': 28, 'mid': 34, 'high': 40,
+         'dps_low': 0.5, 'dps_mid': 0.6, 'dps_high': 0.7, 'note': ''},
+        {'stat': 'Crit Rate', 'low': 15, 'mid': 17.5, 'high': 20,
+         'dps_low': 0.6, 'dps_mid': 0.7, 'dps_high': 0.8, 'note': ''},
+    ],
+    'epic': [
+        {'stat': 'Def Pen', 'low': 8, 'mid': 10, 'high': 12,
+         'dps_low': 1.6, 'dps_mid': 2.0, 'dps_high': 2.4, 'note': ''},
+        {'stat': 'Boss Dmg', 'low': 18, 'mid': 21.5, 'high': 25,
+         'dps_low': 0.7, 'dps_mid': 0.9, 'dps_high': 1.0, 'note': 'boss only'},
+        {'stat': 'Normal Dmg', 'low': 18, 'mid': 21.5, 'high': 25,
+         'dps_low': 0.7, 'dps_mid': 0.9, 'dps_high': 1.0, 'note': 'mob only'},
+        {'stat': 'Damage %', 'low': 12, 'mid': 13.5, 'high': 15,
+         'dps_low': 0.6, 'dps_mid': 0.68, 'dps_high': 0.75, 'note': ''},
+        {'stat': 'Attack Speed', 'low': 15, 'mid': 17.5, 'high': 20,
+         'dps_low': 0.75, 'dps_mid': 0.9, 'dps_high': 1.0, 'note': ''},
+        {'stat': 'Crit Rate', 'low': 10, 'mid': 12, 'high': 14,
+         'dps_low': 0.4, 'dps_mid': 0.5, 'dps_high': 0.6, 'note': ''},
+    ],
+    'rare': [
+        {'stat': 'Def Pen', 'low': 14, 'mid': 17, 'high': 20,
+         'dps_low': 2.8, 'dps_mid': 3.4, 'dps_high': 4.0, 'note': 'BEST'},
+        {'stat': 'Boss Dmg', 'low': 28, 'mid': 34, 'high': 40,
+         'dps_low': 1.1, 'dps_mid': 1.4, 'dps_high': 1.6, 'note': 'boss only'},
+        {'stat': 'Normal Dmg', 'low': 28, 'mid': 34, 'high': 40,
+         'dps_low': 1.1, 'dps_mid': 1.4, 'dps_high': 1.6, 'note': 'mob only'},
+        {'stat': 'Attack Speed', 'low': 10, 'mid': 12, 'high': 14,
+         'dps_low': 0.5, 'dps_mid': 0.6, 'dps_high': 0.7, 'note': ''},
+        {'stat': 'Damage %', 'low': 7, 'mid': 8.5, 'high': 10,
+         'dps_low': 0.35, 'dps_mid': 0.42, 'dps_high': 0.5, 'note': ''},
+    ],
+}
+
+
+# Best lines ranking - sorted by max DPS gain
+BEST_LINES_RANKING: List[Dict] = [
+    {'rank': 1, 'tier': 'Rare', 'stat': 'Def Pen', 'max_value': '20%', 'max_dps': 4.0, 'probability': '3%'},
+    {'rank': 2, 'tier': 'Epic', 'stat': 'Def Pen', 'max_value': '12%', 'max_dps': 2.4, 'probability': '1.2%'},
+    {'rank': 3, 'tier': 'Legendary', 'stat': 'Damage %', 'max_value': '40%', 'max_dps': 2.0, 'probability': '0.46%'},
+    {'rank': 4, 'tier': 'Rare', 'stat': 'Boss Dmg', 'max_value': '40%', 'max_dps': 1.6, 'probability': '3%'},
+    {'rank': 5, 'tier': 'Rare', 'stat': 'Normal Dmg', 'max_value': '40%', 'max_dps': 1.6, 'probability': '3%'},
+    {'rank': 6, 'tier': 'Unique', 'stat': 'Max Dmg', 'max_value': '40%', 'max_dps': 1.3, 'probability': '0.75%'},
+    {'rank': 7, 'tier': 'Unique', 'stat': 'Damage %', 'max_value': '25%', 'max_dps': 1.25, 'probability': '1%'},
+    {'rank': 8, 'tier': 'Epic', 'stat': 'Boss Dmg', 'max_value': '25%', 'max_dps': 1.0, 'probability': '1.2%'},
+    {'rank': 9, 'tier': 'Epic', 'stat': 'Attack Speed', 'max_value': '20%', 'max_dps': 1.0, 'probability': '1.5%'},
+    {'rank': 10, 'tier': 'Mystic', 'stat': 'Main Stat', 'max_value': '2500', 'max_dps': 0.8, 'probability': '0.06%'},
+]
+
+
+def auto_detect_goal(
+    config: HeroPowerConfig,
+    level_config: HeroPowerLevelConfig,
+    calc_dps_func: Optional[Callable] = None,
+    get_stats_func: Optional[Callable] = None,
+) -> Dict:
+    """
+    Analyze current config and suggest realistic improvement goals.
+
+    Args:
+        config: Current HeroPowerConfig with 6 lines
+        level_config: Level config for tier rates and costs
+        calc_dps_func: Optional callback for actual DPS calculation
+        get_stats_func: Optional callback to get current stats
+
+    Returns:
+        Dict with current state and suggested goals
+    """
+    # Calculate current line scores
+    line_scores = []
+    for line in config.lines:
+        score = score_hero_power_line(line, calc_dps_func, get_stats_func)
+        dps_value = calculate_line_dps_value(line, calc_dps_func, get_stats_func)
+        line_scores.append({
+            'slot': line.slot,
+            'score': score,
+            'dps_value': dps_value,
+            'tier': line.tier.value,
+            'stat': STAT_DISPLAY_NAMES.get(line.stat_type, line.stat_type.value),
+        })
+
+    # Sort by score descending to find best/worst lines
+    sorted_scores = sorted(line_scores, key=lambda x: x['score'], reverse=True)
+
+    # Count "good" lines (score >= 60)
+    good_lines = sum(1 for ls in line_scores if ls['score'] >= 60)
+    excellent_lines = sum(1 for ls in line_scores if ls['score'] >= 75)
+
+    # Calculate total DPS contribution
+    total_dps = sum(ls['dps_value'] for ls in line_scores)
+
+    # Find best and worst lines
+    best_line = sorted_scores[0] if sorted_scores else None
+    worst_line = sorted_scores[-1] if sorted_scores else None
+
+    # Calculate average score
+    avg_score = sum(ls['score'] for ls in line_scores) / len(line_scores) if line_scores else 0
+
+    # Generate suggested goals
+    goals = []
+
+    # Goal 1: +1 good line (if not all good)
+    if good_lines < 6:
+        goals.append({
+            'name': f'{good_lines + 1}/6 Good Lines',
+            'type': 'line_count',
+            'target_good_lines': good_lines + 1,
+            'description': f'Improve from {good_lines} to {good_lines + 1} lines with score >= 60',
+            'difficulty': 'Easy' if good_lines < 3 else 'Medium',
+        })
+
+    # Goal 2: +2% total DPS
+    if total_dps < 15:  # If total DPS contribution is under 15%
+        goals.append({
+            'name': f'+2% Total DPS',
+            'type': 'dps_improvement',
+            'target_dps': total_dps + 2.0,
+            'description': f'Increase total DPS contribution from {total_dps:.1f}% to {total_dps + 2:.1f}%',
+            'difficulty': 'Medium',
+        })
+
+    # Goal 3: Replace worst line
+    if worst_line and worst_line['score'] < 40:
+        goals.append({
+            'name': f'Replace Worst Line (Slot {worst_line["slot"]})',
+            'type': 'replace_worst',
+            'target_slot': worst_line['slot'],
+            'current_score': worst_line['score'],
+            'description': f'Replace {worst_line["stat"]} ({worst_line["tier"]}) with better stat',
+            'difficulty': 'Easy',
+        })
+
+    # Goal 4: All good lines (ambitious)
+    if good_lines < 6:
+        goals.append({
+            'name': '6/6 Good Lines',
+            'type': 'line_count',
+            'target_good_lines': 6,
+            'description': 'Achieve 6 lines with score >= 60 (may take many rerolls)',
+            'difficulty': 'Hard',
+        })
+
+    # Goal 5: Maximum efficiency (keep going while worthwhile)
+    goals.append({
+        'name': 'Maximum Efficiency',
+        'type': 'efficiency',
+        'min_efficiency': 0.01,
+        'description': 'Keep rerolling while DPS gain per 1000 medals > 0.01%',
+        'difficulty': 'Variable',
+    })
+
+    return {
+        'current_state': {
+            'total_dps': total_dps,
+            'good_lines': good_lines,
+            'excellent_lines': excellent_lines,
+            'avg_score': avg_score,
+            'best_line': best_line,
+            'worst_line': worst_line,
+        },
+        'line_scores': line_scores,
+        'suggested_goals': goals,
+    }
+
+
+def estimate_cost_to_goal(
+    current_config: HeroPowerConfig,
+    goal: Dict,
+    level_config: HeroPowerLevelConfig,
+    strategy: OptimizationStrategy = OptimizationStrategy.BALANCED,
+    iterations: int = 1000,
+    max_rerolls: int = 10000,
+    calc_dps_func: Optional[Callable] = None,
+    get_stats_func: Optional[Callable] = None,
+) -> Dict:
+    """
+    Monte Carlo simulation to estimate cost to reach a goal.
+
+    Args:
+        current_config: Starting HeroPowerConfig
+        goal: Goal dict from auto_detect_goal()
+        level_config: Level config for tier rates and costs
+        strategy: Optimization strategy to use
+        iterations: Number of simulation runs
+        max_rerolls: Max rerolls per simulation
+        calc_dps_func: Optional DPS calculation callback
+        get_stats_func: Optional stats callback
+
+    Returns:
+        Dict with cost estimates and statistics
+    """
+    goal_type = goal.get('type', 'line_count')
+    strategy_params = STRATEGY_PARAMS.get(strategy, STRATEGY_PARAMS[OptimizationStrategy.BALANCED])
+
+    reroll_counts = []
+    medal_costs = []
+    successes = 0
+    capped = 0
+
+    for _ in range(iterations):
+        # Make a copy of the config
+        config = copy.deepcopy(current_config)
+
+        # Calculate which lines to lock based on strategy
+        lock_threshold = strategy_params.get('lock_threshold_score', 60)
+        for line in config.lines:
+            score = score_hero_power_line(line, calc_dps_func, get_stats_func)
+            line.is_locked = score >= lock_threshold
+
+        rerolls = 0
+        total_medals = 0
+
+        while rerolls < max_rerolls:
+            # Check if goal achieved
+            goal_achieved = False
+
+            if goal_type == 'line_count':
+                target = goal.get('target_good_lines', 5)
+                good_count = sum(
+                    1 for line in config.lines
+                    if score_hero_power_line(line, calc_dps_func, get_stats_func) >= 60
+                )
+                goal_achieved = good_count >= target
+
+            elif goal_type == 'dps_improvement':
+                target_dps = goal.get('target_dps', 10)
+                current_dps = sum(
+                    calculate_line_dps_value(line, calc_dps_func, get_stats_func)
+                    for line in config.lines
+                )
+                goal_achieved = current_dps >= target_dps
+
+            elif goal_type == 'efficiency':
+                # For efficiency mode, check if any line is worth rerolling
+                min_efficiency = goal.get('min_efficiency', 0.01)
+                worth_rerolling = False
+                for line in config.lines:
+                    if line.is_locked:
+                        continue
+                    line_dps = calculate_line_dps_value(line, calc_dps_func, get_stats_func)
+                    eff = calculate_reroll_efficiency(
+                        line_dps, config.get_locked_count(), level_config,
+                        calc_dps_func, get_stats_func
+                    )
+                    if eff['efficiency'] >= min_efficiency:
+                        worth_rerolling = True
+                        break
+                goal_achieved = not worth_rerolling
+
+            elif goal_type == 'replace_worst':
+                target_slot = goal.get('target_slot', 1)
+                target_line = next((l for l in config.lines if l.slot == target_slot), None)
+                if target_line:
+                    new_score = score_hero_power_line(target_line, calc_dps_func, get_stats_func)
+                    goal_achieved = new_score >= 60
+
+            if goal_achieved:
+                successes += 1
+                break
+
+            # Reroll unlocked lines
+            cost = level_config.get_reroll_cost(config.get_locked_count())
+            config = simulate_hero_power_reroll(config, level_config)
+            rerolls += 1
+            total_medals += cost
+
+            # Re-evaluate locks after reroll
+            for line in config.lines:
+                if not line.is_locked:
+                    score = score_hero_power_line(line, calc_dps_func, get_stats_func)
+                    if score >= lock_threshold:
+                        line.is_locked = True
+        else:
+            capped += 1
+
+        reroll_counts.append(rerolls)
+        medal_costs.append(total_medals)
+
+    # Calculate statistics
+    if not reroll_counts:
+        return {
+            'expected_rerolls': 0,
+            'expected_medals': 0,
+            'median_rerolls': 0,
+            'median_medals': 0,
+            'p90_rerolls': 0,
+            'p90_medals': 0,
+            'success_rate': 0,
+            'capped_simulations': 0,
+        }
+
+    sorted_rerolls = sorted(reroll_counts)
+    sorted_medals = sorted(medal_costs)
+    median_idx = len(sorted_rerolls) // 2
+    p90_idx = int(len(sorted_rerolls) * 0.9)
+
+    return {
+        'expected_rerolls': sum(reroll_counts) / len(reroll_counts),
+        'expected_medals': sum(medal_costs) / len(medal_costs),
+        'median_rerolls': sorted_rerolls[median_idx],
+        'median_medals': sorted_medals[median_idx],
+        'p90_rerolls': sorted_rerolls[p90_idx],
+        'p90_medals': sorted_medals[p90_idx],
+        'success_rate': successes / iterations,
+        'capped_simulations': capped,
+        'iterations': iterations,
+    }
+
+
+def analyze_with_strategy(
+    config: HeroPowerConfig,
+    level_config: HeroPowerLevelConfig,
+    strategy: OptimizationStrategy = OptimizationStrategy.BALANCED,
+    calc_dps_func: Optional[Callable] = None,
+    get_stats_func: Optional[Callable] = None,
+) -> Dict:
+    """
+    Analyze a config using a specific strategy to determine lock/reroll decisions.
+
+    Args:
+        config: HeroPowerConfig to analyze
+        level_config: Level config for costs and rates
+        strategy: Which strategy to use
+        calc_dps_func: Optional DPS callback
+        get_stats_func: Optional stats callback
+
+    Returns:
+        Dict with lock/reroll recommendations and reasoning
+    """
+    strategy_params = STRATEGY_PARAMS.get(strategy, STRATEGY_PARAMS[OptimizationStrategy.BALANCED])
+
+    # Analyze each line
+    line_analysis = []
+    for line in config.lines:
+        score = score_hero_power_line(line, calc_dps_func, get_stats_func)
+        dps_value = calculate_line_dps_value(line, calc_dps_func, get_stats_func)
+
+        # Determine lock recommendation based on strategy
+        if strategy == OptimizationStrategy.EFFICIENCY:
+            # Use efficiency calculation
+            num_locked = sum(1 for la in line_analysis if la.get('recommendation') == 'LOCK')
+            eff_result = calculate_reroll_efficiency(
+                dps_value, num_locked, level_config, calc_dps_func, get_stats_func
+            )
+            recommendation = eff_result['recommendation']
+            reasoning = eff_result['reasoning']
+        else:
+            # Use score threshold
+            lock_threshold = strategy_params.get('lock_threshold_score', 60)
+            recommendation = 'LOCK' if score >= lock_threshold else 'REROLL'
+            reasoning = f"Score {score:.0f} {'≥' if score >= lock_threshold else '<'} threshold {lock_threshold}"
+
+        line_analysis.append({
+            'slot': line.slot,
+            'stat': STAT_DISPLAY_NAMES.get(line.stat_type, line.stat_type.value),
+            'tier': line.tier.value.capitalize(),
+            'value': line.value,
+            'score': score,
+            'dps_value': dps_value,
+            'recommendation': recommendation,
+            'reasoning': reasoning,
+        })
+
+    # Sort by score for display
+    line_analysis.sort(key=lambda x: x['score'], reverse=True)
+
+    # Calculate summary stats
+    lines_to_lock = [la['slot'] for la in line_analysis if la['recommendation'] == 'LOCK']
+    lines_to_reroll = [la['slot'] for la in line_analysis if la['recommendation'] == 'REROLL']
+
+    cost_per_reroll = level_config.get_reroll_cost(len(lines_to_lock))
+
+    return {
+        'strategy': strategy.value,
+        'strategy_description': strategy_params.get('description', ''),
+        'line_analysis': line_analysis,
+        'lines_to_lock': lines_to_lock,
+        'lines_to_reroll': lines_to_reroll,
+        'cost_per_reroll': cost_per_reroll,
+        'total_dps': sum(la['dps_value'] for la in line_analysis),
+        'avg_score': sum(la['score'] for la in line_analysis) / len(line_analysis) if line_analysis else 0,
+    }
+
+
+def get_dps_reference_for_tier(tier: str) -> List[Dict]:
+    """Get DPS reference data for a specific tier."""
+    return DPS_REFERENCE_TABLE.get(tier.lower(), [])
+
+
+def get_best_lines_ranking() -> List[Dict]:
+    """Get the ranking of best possible lines by DPS gain."""
+    return BEST_LINES_RANKING
 
 
 # =============================================================================

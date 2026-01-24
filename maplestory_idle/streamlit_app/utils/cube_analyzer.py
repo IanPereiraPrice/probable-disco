@@ -117,6 +117,10 @@ class CubeRecommendation:
     cubes_to_tier_up: float
     tier_up_score_gain: float
 
+    # Tier-up value (P99 approach)
+    tier_up_dps_value: float         # P99 DPS at next tier - current DPS
+    next_tier_p99_dps: float         # 99th percentile DPS at next tier
+
     # Efficiency
     efficiency_score: float
     priority_rank: int
@@ -318,6 +322,8 @@ def analyze_slot_potentials(
         pity_threshold=expected_cubes.pity_threshold,
         cubes_to_tier_up=expected_cubes.cubes_to_tier_up,
         tier_up_score_gain=expected_cubes.tier_up_score_gain,
+        tier_up_dps_value=expected_cubes.tier_up_dps_value,
+        next_tier_p99_dps=expected_cubes.next_tier_p99_dps,
         efficiency_score=efficiency,
         priority_rank=0,  # Will be set after sorting
         top_stats=top_stats,

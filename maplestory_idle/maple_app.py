@@ -7605,7 +7605,7 @@ Regular Cubes:                          Bonus Cubes:
         for stat_type, value in stats.items():
             if value > 0:
                 name = STAT_DISPLAY_NAMES.get(stat_type, stat_type.value)
-                if stat_type in (HeroPowerStatType.DEFENSE, HeroPowerStatType.MAX_HP):
+                if stat_type in (HeroPowerStatType.MAX_HP, HeroPowerStatType.MAIN_STAT_FLAT):
                     lines.append(f"{name}: +{value:.0f}")
                 else:
                     lines.append(f"{name}: +{value:.1f}%")
@@ -7644,7 +7644,13 @@ Regular Cubes:                          Bonus Cubes:
             self.hero_power_dps_label.config(text="DPS Impact: ---", fg='#888')
 
     def get_hero_power_stats_total(self) -> Dict[str, float]:
-        """Calculate total stats from Hero Power ABILITY LINES for damage calculation."""
+        """Calculate total stats from Hero Power ABILITY LINES for damage calculation.
+
+        Note: Ability stats are different from what you might expect:
+        - Crit Damage is NOT available as an ability stat
+        - Best offensive stats (Boss Dmg 28-40%, Def Pen 14-20%) are at RARE tier
+        - Mystic tier only has Main Stat and Max HP
+        """
         stats = self.hero_power_config.get_all_stats()
 
         return {
@@ -7655,9 +7661,8 @@ Regular Cubes:                          Bonus Cubes:
             'max_dmg_mult': stats.get(HeroPowerStatType.MAX_DMG_MULT, 0),
             'min_dmg_mult': stats.get(HeroPowerStatType.MIN_DMG_MULT, 0),
             'crit_rate': stats.get(HeroPowerStatType.CRIT_RATE, 0),
-            'crit_damage': stats.get(HeroPowerStatType.CRIT_DAMAGE, 0),
-            'main_stat_pct': stats.get(HeroPowerStatType.MAIN_STAT_PCT, 0),
-            'attack_pct': stats.get(HeroPowerStatType.ATTACK_PCT, 0),
+            'main_stat_flat': stats.get(HeroPowerStatType.MAIN_STAT_FLAT, 0),
+            'attack_speed': stats.get(HeroPowerStatType.ATTACK_SPEED, 0),
         }
 
     def get_hero_power_passive_stats_total(self) -> Dict[str, float]:
@@ -7741,11 +7746,12 @@ Regular Cubes:                          Bonus Cubes:
             stat_type = la['stat_type']
 
             # Offensive stats worth keeping
+            # Note: Best stats (Boss Dmg, Def Pen) are at RARE tier, not higher!
             offensive_stats = {
                 HeroPowerStatType.DEF_PEN, HeroPowerStatType.BOSS_DAMAGE,
-                HeroPowerStatType.DAMAGE, HeroPowerStatType.CRIT_DAMAGE,
-                HeroPowerStatType.MAX_DMG_MULT, HeroPowerStatType.MAIN_STAT_PCT,
-                HeroPowerStatType.CRIT_RATE, HeroPowerStatType.ATTACK_PCT,
+                HeroPowerStatType.DAMAGE, HeroPowerStatType.NORMAL_DAMAGE,
+                HeroPowerStatType.MAX_DMG_MULT, HeroPowerStatType.MIN_DMG_MULT,
+                HeroPowerStatType.CRIT_RATE, HeroPowerStatType.ATTACK_SPEED,
             }
 
             is_offensive = stat_type in offensive_stats
@@ -7788,45 +7794,42 @@ Regular Cubes:                          Bonus Cubes:
             reroll_text = "None - all lines are good!"
 
         # Format TARGET stats to aim for (mode-specific)
+        # Note: Best offensive stats are at RARE tier, not Mystic!
+        # - Def Pen: Rare 14-20%, Epic 8-12%
+        # - Boss/Normal Dmg: Rare 28-40%, Epic 18-25%
+        # - Mystic only has Main Stat and Max HP
         mode_display = {"stage": "Stage", "boss": "Boss", "world_boss": "World Boss"}
         current_mode_name = mode_display.get(mode, "Stage")
 
-        # Get best stats for current mode
-        mode_adjustments = MODE_STAT_ADJUSTMENTS.get(mode, {})
-
-        # Calculate effective weight for each stat
-        stat_rankings = []
-        for stat_type in [
-            HeroPowerStatType.DEF_PEN, HeroPowerStatType.BOSS_DAMAGE,
-            HeroPowerStatType.DAMAGE, HeroPowerStatType.CRIT_DAMAGE,
-            HeroPowerStatType.MAX_DMG_MULT, HeroPowerStatType.NORMAL_DAMAGE,
-            HeroPowerStatType.MAIN_STAT_PCT, HeroPowerStatType.CRIT_RATE,
-        ]:
-            base_weight = STAT_DPS_WEIGHTS.get(stat_type, 0.5)
-            mode_mult = mode_adjustments.get(stat_type, 1.0)
-            effective_weight = base_weight * mode_mult
-
-            if effective_weight > 0:  # Skip useless stats (normal dmg in boss mode)
-                stat_name = HP_STAT_NAMES.get(stat_type, stat_type.value)
-                # Get mystic range
-                mystic_range = HERO_POWER_STAT_RANGES.get(HeroPowerTier.MYSTIC, {}).get(stat_type)
-                if mystic_range:
-                    range_str = f"{mystic_range[0]:.0f}-{mystic_range[1]:.0f}%"
-                else:
-                    range_str = "N/A"
-
-                stat_rankings.append({
-                    'stat': stat_name,
-                    'weight': effective_weight,
-                    'range': range_str,
-                })
-
-        # Sort by weight
-        stat_rankings.sort(key=lambda x: x['weight'], reverse=True)
+        # Best stats by mode (with their best tier)
+        if mode == "world_boss":
+            target_stats = [
+                ("Def Pen %", "Rare", "14-20%"),
+                ("Boss Damage %", "Rare", "28-40%"),
+                ("Damage %", "Legendary", "28-40%"),
+                ("Max Dmg Mult %", "Unique", "28-40%"),
+                ("Crit Rate %", "Unique", "15-20%"),
+            ]
+        elif mode == "boss":
+            target_stats = [
+                ("Boss Damage %", "Rare", "28-40%"),
+                ("Def Pen %", "Rare", "14-20%"),
+                ("Damage %", "Legendary", "28-40%"),
+                ("Max Dmg Mult %", "Unique", "28-40%"),
+                ("Crit Rate %", "Unique", "15-20%"),
+            ]
+        else:  # stage
+            target_stats = [
+                ("Normal Damage %", "Rare", "28-40%"),
+                ("Damage %", "Legendary", "28-40%"),
+                ("Boss Damage %", "Rare", "28-40%"),
+                ("Max Dmg Mult %", "Unique", "28-40%"),
+                ("Def Pen %", "Rare", "14-20%"),
+            ]
 
         target_text_lines = [f"Best stats for {current_mode_name}:"]
-        for i, sr in enumerate(stat_rankings[:5], 1):
-            target_text_lines.append(f"{i}. {sr['stat'][:18]} (Mystic: {sr['range']})")
+        for i, (stat_name, tier, range_str) in enumerate(target_stats, 1):
+            target_text_lines.append(f"{i}. {stat_name} ({tier}: {range_str})")
         target_text = "\n".join(target_text_lines)
 
         # Format THRESHOLD guide
@@ -7974,7 +7977,11 @@ Regular Cubes:                          Bonus Cubes:
                     test_stats['damage_percent'] = base_stats.get('damage_percent', 0) + hero_stats.get(HeroPowerStatType.DAMAGE, 0)
                     test_stats['boss_damage'] = base_stats.get('boss_damage', 0) + hero_stats.get(HeroPowerStatType.BOSS_DAMAGE, 0)
                     test_stats['defense_pen'] = base_stats.get('defense_pen', 0) + hero_stats.get(HeroPowerStatType.DEF_PEN, 0)
-                    test_stats['crit_damage'] = base_stats.get('crit_damage', 0) + hero_stats.get(HeroPowerStatType.CRIT_DAMAGE, 0)
+                    test_stats['normal_damage'] = base_stats.get('normal_damage', 0) + hero_stats.get(HeroPowerStatType.NORMAL_DAMAGE, 0)
+                    test_stats['max_dmg_mult'] = base_stats.get('max_dmg_mult', 0) + hero_stats.get(HeroPowerStatType.MAX_DMG_MULT, 0)
+                    test_stats['min_dmg_mult'] = base_stats.get('min_dmg_mult', 0) + hero_stats.get(HeroPowerStatType.MIN_DMG_MULT, 0)
+                    test_stats['crit_rate'] = base_stats.get('crit_rate', 0) + hero_stats.get(HeroPowerStatType.CRIT_RATE, 0)
+                    test_stats['attack_speed'] = base_stats.get('attack_speed', 0) + hero_stats.get(HeroPowerStatType.ATTACK_SPEED, 0)
 
                     new_dps = self._calc_damage(test_stats)
 
@@ -9356,19 +9363,16 @@ Regular Cubes:                          Bonus Cubes:
             stats[stat_key] = stats.get(stat_key, 0) + value
 
         # 2. PASSIVE_STAT skills (scale with skill levels = base 1 + All Skills bonus)
+        # Uses skill_bonuses dict format: {stat_name: (base, per_level)}
         for skill_name, skill in BOWMASTER_SKILLS.items():
             if skill.skill_type == SkillType.PASSIVE_STAT:
-                if level >= skill.unlock_level:
+                if level >= skill.unlock_level and skill.skill_bonuses:
                     # Effective level = base level 1 + All Skills bonus
                     effective_level = 1 + all_skills
-                    value = skill.base_stat_value + skill.stat_per_level * (effective_level - 1)
-                    stat_key = skill.stat_type
 
-                    # Special handling for armor_break which gives both def_pen AND final_damage
-                    if stat_key == "defense_pen_and_final_damage":
-                        stats["def_pen"] = stats.get("def_pen", 0) + value
-                        stats["final_damage"] = stats.get("final_damage", 0) + value
-                    else:
+                    for stat_key, (base, per_level) in skill.skill_bonuses.items():
+                        # Formula: floor((base + per_level * level) * 10) / 10
+                        value = int((base + per_level * effective_level) * 10) / 10
                         stats[stat_key] = stats.get(stat_key, 0) + value
 
         # Include total All Skills used for skill scaling (for display purposes)

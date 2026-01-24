@@ -200,6 +200,21 @@ def find_best_weapon_at_max_level(weapons_data: Dict[str, Dict]) -> Tuple[str, f
     return best_key, best_atk
 
 
+def find_best_potential_weapon(weapons_data: Dict[str, Dict]) -> str:
+    """
+    Find which owned weapon has the highest potential ATK% at its max level.
+
+    This determines which weapon should be treated as "equipped" for optimization
+    purposes - the weapon that could reach the highest ATK% given its current
+    awakening level cap.
+
+    Returns:
+        weapon_key of the best potential weapon, or empty string if no weapons owned
+    """
+    best_key, _ = find_best_weapon_at_max_level(weapons_data)
+    return best_key
+
+
 def find_crossover_level(
     weapon_key: str,
     weapon_data: Dict,
@@ -499,6 +514,169 @@ def get_weapon_upgrade_for_optimizer(
         })
 
     return upgrades
+
+
+# =============================================================================
+# ENHANCER BUDGET OPTIMIZER
+# =============================================================================
+
+@dataclass
+class EnhancerAllocationResult:
+    """Result of optimal enhancer allocation."""
+    weapon_key: str
+    display_name: str
+    from_level: int
+    to_level: int
+    cost: int  # Enhancers spent
+    atk_gain: float  # Effective ATK% gained
+
+
+def calculate_optimal_enhancer_allocation(
+    weapons_data: Dict[str, Dict],
+    available_enhancers: int,
+    equipped_weapon_key: Optional[str] = None,
+) -> Tuple[List[EnhancerAllocationResult], str]:
+    """
+    Find the optimal weapon upgrade allocation for a given enhancer budget.
+
+    Uses greedy algorithm: always upgrade the weapon with best ATK%/enhancer.
+    This is provably optimal because all weapons have diminishing returns
+    (cost increases but ATK gain per level stays constant within level ranges).
+
+    Args:
+        weapons_data: Dict mapping "rarity_tier" -> {level, awakening, duplicates}
+        available_enhancers: Number of weapon enhancers available to spend
+        equipped_weapon_key: Override for equipped weapon. If None, auto-detects
+                            the best potential weapon based on max ATK%.
+
+    Returns:
+        Tuple of (list of recommendations, equipped_weapon_key used)
+    """
+    if available_enhancers <= 0:
+        return [], equipped_weapon_key or ""
+
+    # Auto-detect best weapon to treat as equipped if not specified
+    if equipped_weapon_key is None:
+        equipped_weapon_key = find_best_potential_weapon(weapons_data)
+
+    # Build working copy of weapon data
+    owned_weapons: Dict[str, Dict] = {}
+
+    for weapon_key, weapon_data in weapons_data.items():
+        current_level = weapon_data.get('level', 0)
+        if current_level <= 0:
+            continue  # Not owned
+
+        awakening = weapon_data.get('awakening', 0)
+        max_level = get_max_level(awakening)
+
+        if current_level >= max_level:
+            continue  # Already at max
+
+        parts = weapon_key.rsplit('_', 1)
+        if len(parts) != 2:
+            continue
+
+        rarity, tier = parts[0], int(parts[1])
+        is_equipped = (weapon_key == equipped_weapon_key)
+        inv_ratio = get_inventory_ratio(rarity)
+
+        # Effective multiplier: equipped weapons get full ATK + inventory
+        # Non-equipped weapons only get inventory contribution
+        if is_equipped:
+            effective_mult = 1.0 + inv_ratio
+        else:
+            effective_mult = inv_ratio
+
+        owned_weapons[weapon_key] = {
+            'rarity': rarity,
+            'tier': tier,
+            'start_level': current_level,
+            'current_level': current_level,
+            'max_level': max_level,
+            'effective_mult': effective_mult,
+            'is_equipped': is_equipped,
+        }
+
+    if not owned_weapons:
+        return [], equipped_weapon_key
+
+    remaining = available_enhancers
+
+    # Greedy: repeatedly pick the weapon with best efficiency for next level
+    while remaining > 0:
+        best_key = None
+        best_efficiency = 0.0
+        best_cost = 0
+
+        for weapon_key, w in owned_weapons.items():
+            if w['current_level'] >= w['max_level']:
+                continue
+
+            # Cost for next single level
+            cost = calculate_level_cost(w['rarity'], w['tier'], w['current_level'])
+            if cost > remaining:
+                continue
+
+            # ATK gain for this level (adjusted for inventory/equipped)
+            atk_gain = calculate_atk_gain_for_level(w['rarity'], w['tier'], w['current_level'])
+            effective_gain = atk_gain * w['effective_mult']
+
+            efficiency = effective_gain / cost if cost > 0 else 0
+            if efficiency > best_efficiency:
+                best_efficiency = efficiency
+                best_key = weapon_key
+                best_cost = cost
+
+        if best_key is None:
+            break  # No affordable upgrades remaining
+
+        # Upgrade this weapon by 1 level
+        owned_weapons[best_key]['current_level'] += 1
+        remaining -= best_cost
+
+    # Build recommendations from upgrades made
+    recommendations: List[EnhancerAllocationResult] = []
+
+    for weapon_key, w in owned_weapons.items():
+        if w['current_level'] > w['start_level']:
+            # Calculate total cost and gain
+            total_cost = 0
+            for lvl in range(w['start_level'], w['current_level']):
+                total_cost += calculate_level_cost(w['rarity'], w['tier'], lvl)
+
+            atk_before = calculate_atk_at_level(w['rarity'], w['tier'], w['start_level'])
+            atk_after = calculate_atk_at_level(w['rarity'], w['tier'], w['current_level'])
+            raw_gain = atk_after - atk_before
+            effective_gain = raw_gain * w['effective_mult']
+
+            # Format display name
+            display_name = f"{w['rarity'].capitalize()} T{w['tier']}"
+            if w['is_equipped']:
+                display_name += " (Equipped)"
+
+            recommendations.append(EnhancerAllocationResult(
+                weapon_key=weapon_key,
+                display_name=display_name,
+                from_level=w['start_level'],
+                to_level=w['current_level'],
+                cost=total_cost,
+                atk_gain=effective_gain,
+            ))
+
+    # Sort by ATK gain (highest first)
+    recommendations.sort(key=lambda x: x.atk_gain, reverse=True)
+
+    return recommendations, equipped_weapon_key
+
+
+def format_weapon_name(weapon_key: str) -> str:
+    """Format weapon key into display name."""
+    parts = weapon_key.rsplit('_', 1)
+    if len(parts) != 2:
+        return weapon_key
+    rarity, tier = parts[0], parts[1]
+    return f"{rarity.capitalize()} T{tier}"
 
 
 # =============================================================================

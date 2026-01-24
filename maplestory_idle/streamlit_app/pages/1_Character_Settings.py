@@ -219,24 +219,47 @@ with col2:
         if not hasattr(data, 'boss_importance'):
             data.boss_importance = 70  # Default: boss has ~70% of total HP
 
-        boss_importance = st.slider(
-            "Boss Importance",
-            min_value=0,
-            max_value=100,
-            value=data.boss_importance,
-            step=5,
-            help="How much to weight boss damage vs normal damage. "
-                 "Higher = boss is your bottleneck (struggle to kill boss). "
-                 "Lower = mobs are your bottleneck (struggle to clear waves). "
-                 "Default 70% reflects boss having ~70% of total stage HP."
+        # TODO: Re-enable after testing boss_damage_multiplier
+        # boss_importance = st.slider(
+        #     "Boss Importance",
+        #     min_value=0,
+        #     max_value=100,
+        #     value=data.boss_importance,
+        #     step=5,
+        #     help="How much to weight boss damage vs normal damage. "
+        #          "Higher = boss is your bottleneck (struggle to kill boss). "
+        #          "Lower = mobs are your bottleneck (struggle to clear waves). "
+        #          "Default 70% reflects boss having ~70% of total stage HP."
+        # )
+        # if boss_importance != data.boss_importance:
+        #     data.boss_importance = boss_importance
+        #     auto_save()
+        #
+        # # Show what this means
+        # mob_weight = 100 - boss_importance
+        # st.caption(f"Mob damage valued at {mob_weight}%, Boss damage valued at {boss_importance}%")
+
+        # Boss damage display multiplier
+        if not hasattr(data, 'boss_damage_multiplier'):
+            data.boss_damage_multiplier = 1.0  # Default: no scaling
+
+        boss_multiplier = st.number_input(
+            "Boss Damage Display Multiplier",
+            min_value=0.1,
+            max_value=20.0,
+            value=float(data.boss_damage_multiplier),
+            step=0.5,
+            format="%.1f",
+            help="Scales boss phase damage for display purposes. "
+                 "Set to ~5 (number of mobs) to make boss/mob damage numbers comparable. "
+                 "This doesn't affect the actual DPS weighting, just how the numbers are displayed."
         )
-        if boss_importance != data.boss_importance:
-            data.boss_importance = boss_importance
+        if boss_multiplier != data.boss_damage_multiplier:
+            data.boss_damage_multiplier = boss_multiplier
             auto_save()
 
-        # Show what this means
-        mob_weight = 100 - boss_importance
-        st.caption(f"Mob damage valued at {mob_weight}%, Boss damage valued at {boss_importance}%")
+        if boss_multiplier != 1.0:
+            st.caption(f"Boss damage display scaled by {boss_multiplier}x (for comparison only)")
 
     st.divider()
 

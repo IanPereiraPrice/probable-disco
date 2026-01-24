@@ -15,12 +15,13 @@ from artifacts import (
     ARTIFACTS, ArtifactTier, PotentialTier, CombatScenario,
     ArtifactDefinition, ArtifactInstance, ArtifactConfig, ArtifactPotentialLine,
     POTENTIAL_SLOT_UNLOCKS, ARTIFACT_DROP_RATES, ARTIFACT_CHEST_COSTS,
-    MAX_POTENTIAL_SLOTS_BY_TIER, POTENTIAL_VALUES,
+    MAX_POTENTIAL_SLOTS_BY_TIER, POTENTIAL_VALUES, POTENTIAL_STAT_RATES,
     calculate_hex_multiplier, calculate_book_of_ancient_bonus,
     calculate_artifact_upgrade_efficiency, calculate_specific_legendary_cost,
     TOTAL_DUPLICATES_TO_STAR, TOTAL_DUPLICATES_BY_TIER,
     calculate_resonance_max_level, calculate_resonance_hp, calculate_resonance_main_stat,
 )
+from stat_names import get_display_name, STAT_DEFINITIONS
 from artifact_optimizer import (
     calculate_chest_expected_value,
     calculate_awakening_efficiency,
@@ -41,7 +42,13 @@ def calculate_dps(stats, mode='stage'):
     """Wrapper that respects user's realistic DPS setting."""
     use_realistic = getattr(st.session_state.user_data, 'use_realistic_dps', False)
     boss_importance = getattr(st.session_state.user_data, 'boss_importance', 70) / 100.0
-    return shared_calculate_dps(stats, mode, use_realistic_dps=use_realistic, boss_importance=boss_importance)
+    boss_damage_multiplier = getattr(st.session_state.user_data, 'boss_damage_multiplier', 1.0)
+    return shared_calculate_dps(
+        stats, mode,
+        use_realistic_dps=use_realistic,
+        boss_importance=boss_importance,
+        boss_damage_multiplier=boss_damage_multiplier,
+    )
 
 # Compact CSS styling
 st.markdown("""
@@ -104,30 +111,18 @@ TIER_COLORS = {
     ArtifactTier.EPIC: "#aa77ff",
 }
 
-POTENTIAL_STATS = ["---", "main_stat_pct", "damage", "boss_damage", "normal_damage",
-                   "def_pen", "crit_rate", "min_damage_mult", "max_damage_mult"]
+# Use standardized stat names from POTENTIAL_VALUES keys
+POTENTIAL_STATS = ["---"] + [k for k in POTENTIAL_VALUES.keys() if k not in ("damage_taken_decrease", "defense", "accuracy", "status_effect_damage")]
 # Tiers for display - mystic_high is the 25% chance higher roll
 POTENTIAL_TIERS = ["rare", "epic", "unique", "legendary", "mystic", "mystic_high"]
-
-# Map UI stat names to POTENTIAL_VALUES keys (most are 1:1 now)
-STAT_TO_POTENTIAL_KEY = {
-    "main_stat_pct": "main_stat_pct",
-    "damage": "damage",
-    "boss_damage": "boss_damage",
-    "normal_damage": "normal_damage",
-    "def_pen": "def_pen",
-    "crit_rate": "crit_rate",
-    "min_damage_mult": "min_damage_mult",
-    "max_damage_mult": "max_damage_mult",
-}
 
 def get_potential_value(stat: str, tier: str) -> float:
     """Get the fixed value for a potential stat + tier combo."""
     if not stat or stat == "---":
         return 0.0
 
-    pot_key = STAT_TO_POTENTIAL_KEY.get(stat, stat)
-    if pot_key not in POTENTIAL_VALUES:
+    # Stat names are now standardized - direct lookup
+    if stat not in POTENTIAL_VALUES:
         return 0.0
 
     # Handle mystic_high as the high roll of mystic
@@ -142,10 +137,10 @@ def get_potential_value(stat: str, tier: str) -> float:
         "mystic": PotentialTier.MYSTIC,
     }.get(actual_tier)
 
-    if not tier_enum or tier_enum not in POTENTIAL_VALUES[pot_key]:
+    if not tier_enum or tier_enum not in POTENTIAL_VALUES[stat]:
         return 0.0
 
-    low_val, high_val = POTENTIAL_VALUES[pot_key][tier_enum]
+    low_val, high_val = POTENTIAL_VALUES[stat][tier_enum]
     return high_val if is_high else low_val
 
 
@@ -640,7 +635,7 @@ with tab_config:
                         options=POTENTIAL_STATS,
                         index=stat_idx,
                         key=f"pot_stat_{selected_key}_{i}",
-                        format_func=lambda x: x.replace("_", " ").replace("pct", "%").title() if x != "---" else "---"
+                        format_func=lambda x: get_display_name(x) if x != "---" else "---"
                     )
                     if new_stat != current_stat:
                         pot['stat'] = new_stat if new_stat != "---" else ""
@@ -1245,6 +1240,10 @@ with tab_efficiency:
     }
     ranking_scenario_label = scenario_display_names.get(ranking_scenario, ranking_scenario.replace("_", " ").title())
     st.caption(f"Using combat mode: **{ranking_scenario_label}** (change in Character Settings)")
+
+    # Re-analyze button to force recalculation with current settings
+    if st.button("🔄 Re-analyze Rankings", help="Recalculate artifact rankings with current settings"):
+        st.rerun()
 
     if owned_artifacts:
         dps_rankings = get_artifact_ranking_for_equip(

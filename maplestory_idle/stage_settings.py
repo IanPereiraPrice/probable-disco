@@ -30,7 +30,6 @@ class CombatScenarioConfig:
     num_enemies: int          # Max enemies present during mob waves
     mob_time_fraction: float  # Fraction of fight spent on mobs (0.0-1.0)
     fight_duration: float     # Seconds (float('inf') for steady state)
-    boss_hp_weight: float = 0.5  # Fraction of total HP that comes from boss (0.0-1.0)
     description: str = ""
 
 
@@ -38,35 +37,29 @@ class CombatScenarioConfig:
 # - num_enemies: Max enemies present during mob waves (stage has 12 mobs)
 # - mob_time_fraction: Fraction of fight spent on mob waves (1.0 = 100% mobs, 0.0 = 100% boss)
 # - fight_duration: Seconds for fight duration (inf = steady state, used for chapter hunt)
-# - boss_hp_weight: Fraction of total HP from boss (used to weight boss vs normal damage value)
-#   For stage mode, boss has ~70% of total HP despite only 40% of time
 COMBAT_SCENARIO_PARAMS: Dict[CombatMode, CombatScenarioConfig] = {
     CombatMode.STAGE: CombatScenarioConfig(
         num_enemies=12,
         mob_time_fraction=0.6,
-        fight_duration=60.0,
-        boss_hp_weight=0.7,  # Boss has ~70% of total HP
+        fight_duration=35.0,
         description="Stage farming (60% mobs, 40% boss)",
     ),
     CombatMode.CHAPTER_HUNT: CombatScenarioConfig(
         num_enemies=10,
         mob_time_fraction=1.0,
         fight_duration=float('inf'),
-        boss_hp_weight=0.0,  # No boss
         description="Chapter Hunt (infinite, 100% mobs)",
     ),
     CombatMode.BOSS: CombatScenarioConfig(
         num_enemies=1,
         mob_time_fraction=0.0,
         fight_duration=60.0,
-        boss_hp_weight=1.0,  # 100% boss
         description="Boss stage (100% boss)",
     ),
     CombatMode.WORLD_BOSS: CombatScenarioConfig(
         num_enemies=1,
         mob_time_fraction=0.0,
         fight_duration=75.0,
-        boss_hp_weight=1.0,  # 100% boss
         description="World Boss (100% boss, longer fight)",
     ),
 }

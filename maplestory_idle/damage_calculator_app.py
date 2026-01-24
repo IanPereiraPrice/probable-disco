@@ -30,12 +30,17 @@ def calculate_damage(
     defense_pen: float,
     enemy_def: float,
     boss_damage: float,
+    str_flat: float = 0,
+    str_percent: float = 0,
 ) -> Dict[str, float]:
     """Calculate damage with full breakdown."""
 
-    # DEX calculation
+    # Main stat (1% per point) and secondary stat (0.25% per point)
     total_dex = dex_flat * (1 + dex_percent / 100)
-    stat_multiplier = 1 + (total_dex * 0.01)
+    total_str = str_flat * (1 + str_percent / 100)
+    # stat_dmg_pct = main_stat * 0.01 + secondary_stat * 0.0025
+    # multiplier = 1 + (stat_dmg_pct / 100)
+    stat_multiplier = 1 + (total_dex / 10000) + (total_str / 40000)
 
     # Damage % with Hex stacks
     hex_mult = HEX_MULTIPLIER ** min(hex_stacks, 3)

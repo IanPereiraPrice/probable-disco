@@ -577,6 +577,193 @@ class StatAggregator:
         return min(current, cap)
 
 
+# =============================================================================
+# ATTACK SPEED BREAKPOINT SYSTEM
+# =============================================================================
+# Attack speed uses a step function with breakpoints every ~33.33%.
+# This is frame-based: animations have a fixed number of frames at 30 FPS.
+# Crossing a breakpoint reduces animation frames, increasing attack rate.
+
+# Frame counts at each breakpoint (descending thresholds)
+# Format: (min_attack_speed_pct, animation_frames, attacks_per_10s)
+ATTACK_SPEED_BREAKPOINTS = [
+    (133, 11, 27),   # 133-150% AS → 11 frames → ~27 attacks/10s
+    (100, 14, 21),   # 100-132% AS → 14 frames → ~21 attacks/10s
+    (66, 17, 17),    # 66-99% AS → 17 frames → ~17 attacks/10s
+    (33, 21, 14),    # 33-65% AS → 21 frames → ~14 attacks/10s
+    (0, 27, 11),     # 0-32% AS → 27 frames → ~11 attacks/10s (base)
+]
+
+# Attack speed cap
+ATTACK_SPEED_CAP = 150.0
+
+
+def get_attack_speed_tier(attack_speed_pct: float) -> tuple:
+    """
+    Get the current attack speed tier info.
+
+    Args:
+        attack_speed_pct: Total attack speed as percentage (e.g., 58.0 for 58%)
+
+    Returns:
+        Tuple of (tier_index, threshold, frames, attacks_per_10s)
+        tier_index: 0 = highest tier (133%+), 4 = base tier (0-32%)
+    """
+    for i, (threshold, frames, attacks) in enumerate(ATTACK_SPEED_BREAKPOINTS):
+        if attack_speed_pct >= threshold:
+            return (i, threshold, frames, attacks)
+    return (len(ATTACK_SPEED_BREAKPOINTS) - 1, 0, 27, 11)
+
+
+def get_animation_frames(attack_speed_pct: float) -> int:
+    """
+    Get animation frame count based on attack speed breakpoint.
+
+    Args:
+        attack_speed_pct: Total attack speed as percentage (e.g., 58.0 for 58%)
+
+    Returns:
+        Number of animation frames for attacks
+    """
+    _, _, frames, _ = get_attack_speed_tier(attack_speed_pct)
+    return frames
+
+
+def get_next_breakpoint(attack_speed_pct: float) -> Optional[tuple]:
+    """
+    Get info about the next attack speed breakpoint.
+
+    Args:
+        attack_speed_pct: Current total attack speed as percentage
+
+    Returns:
+        Tuple of (next_threshold, as_needed, dps_gain_pct) or None if at max tier
+        - next_threshold: The AS% needed to reach next tier
+        - as_needed: How much more AS% is needed
+        - dps_gain_pct: DPS increase from reaching next tier
+    """
+    current_tier, _, current_frames, _ = get_attack_speed_tier(attack_speed_pct)
+
+    if current_tier == 0:
+        return None  # Already at max tier
+
+    # Get next tier info
+    next_threshold, next_frames, _ = ATTACK_SPEED_BREAKPOINTS[current_tier - 1]
+    as_needed = next_threshold - attack_speed_pct
+
+    # DPS gain = (old_frames / new_frames - 1) * 100
+    dps_gain_pct = (current_frames / next_frames - 1) * 100
+
+    return (next_threshold, as_needed, dps_gain_pct)
+
+
+def calculate_attack_speed_dps_value(current_as_pct: float, as_gain: float) -> float:
+    """
+    Calculate the DPS gain from an attack speed increase, accounting for breakpoints.
+
+    This is the key function for valuing attack speed lines on equipment,
+    hero power, artifacts, etc. The value depends entirely on whether
+    the gain crosses a breakpoint.
+
+    Args:
+        current_as_pct: Current total attack speed % (e.g., 58.0)
+        as_gain: Attack speed gain from this upgrade (e.g., 5.0)
+
+    Returns:
+        DPS gain as percentage (e.g., 21.0 for crossing 33→66 threshold)
+        Returns 0.0 if no breakpoint is crossed.
+
+    Examples:
+        >>> calculate_attack_speed_dps_value(31, 5)  # 31% → 36%, crosses 33%
+        27.27  # (27/21 - 1) * 100
+
+        >>> calculate_attack_speed_dps_value(40, 10)  # 40% → 50%, no breakpoint
+        0.0
+
+        >>> calculate_attack_speed_dps_value(95, 10)  # 95% → 105%, crosses 100%
+        21.43  # (17/14 - 1) * 100
+    """
+    new_as_pct = min(current_as_pct + as_gain, ATTACK_SPEED_CAP)
+
+    old_frames = get_animation_frames(current_as_pct)
+    new_frames = get_animation_frames(new_as_pct)
+
+    if new_frames >= old_frames:
+        return 0.0  # No breakpoint crossed (or went backwards somehow)
+
+    # DPS gain = (old_frames / new_frames - 1) * 100
+    # Fewer frames = more attacks = more DPS
+    dps_gain_pct = (old_frames / new_frames - 1) * 100
+    return dps_gain_pct
+
+
+def get_attack_speed_summary(attack_speed_pct: float) -> Dict[str, any]:
+    """
+    Get a complete summary of attack speed status for UI display.
+
+    Args:
+        attack_speed_pct: Current total attack speed as percentage
+
+    Returns:
+        Dict with:
+        - current_as: Current AS%
+        - tier_index: Current tier (0=max, 4=base)
+        - frames: Animation frames
+        - attacks_per_10s: Attacks in 10 seconds
+        - next_threshold: AS% needed for next tier (or None)
+        - as_to_next: How much more AS% needed (or None)
+        - dps_gain_at_next: DPS% gain if reaching next tier (or None)
+        - at_cap: Whether at 150% cap
+    """
+    tier_idx, threshold, frames, attacks = get_attack_speed_tier(attack_speed_pct)
+    next_info = get_next_breakpoint(attack_speed_pct)
+
+    result = {
+        'current_as': attack_speed_pct,
+        'tier_index': tier_idx,
+        'tier_threshold': threshold,
+        'frames': frames,
+        'attacks_per_10s': attacks,
+        'at_cap': attack_speed_pct >= ATTACK_SPEED_CAP,
+    }
+
+    if next_info:
+        result['next_threshold'] = next_info[0]
+        result['as_to_next'] = next_info[1]
+        result['dps_gain_at_next'] = next_info[2]
+    else:
+        result['next_threshold'] = None
+        result['as_to_next'] = None
+        result['dps_gain_at_next'] = None
+
+    return result
+
+
+def calculate_effective_attack_speed_with_sources(
+    attack_speed_sources: List[tuple],
+    cap: float = ATTACK_SPEED_CAP
+) -> tuple:
+    """
+    Calculate total attack speed from sources with diminishing returns.
+
+    Args:
+        attack_speed_sources: List of (source_name, value_pct) tuples
+        cap: Maximum attack speed (default 150%)
+
+    Returns:
+        Tuple of (total_as_pct, summary_dict)
+        summary_dict includes breakpoint info
+    """
+    # Simple additive for now (can add diminishing returns if needed)
+    total = sum(value for _, value in attack_speed_sources)
+    total = min(total, cap)
+
+    summary = get_attack_speed_summary(total)
+    summary['sources'] = attack_speed_sources
+
+    return (total, summary)
+
+
 # Export list
 __all__ = [
     'StatBlock',
@@ -586,4 +773,13 @@ __all__ = [
     'create_stat_block_for_job',
     'MultStatSource',
     'StatAggregator',
+    # Attack speed breakpoint functions
+    'ATTACK_SPEED_BREAKPOINTS',
+    'ATTACK_SPEED_CAP',
+    'get_attack_speed_tier',
+    'get_animation_frames',
+    'get_next_breakpoint',
+    'calculate_attack_speed_dps_value',
+    'get_attack_speed_summary',
+    'calculate_effective_attack_speed_with_sources',
 ]

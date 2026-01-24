@@ -13,7 +13,7 @@ This module models:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 import math
 
 from job_classes import JobClass
@@ -207,6 +207,11 @@ class MasteryNode:
     # Description for display
     description: str = ""
 
+    # Optional: For mastery effects that scale with another skill's level
+    # Formula: effect_value * (1 + scale_per_level * skill_level)
+    scale_with_skill: str = ""      # Skill name whose level scales this effect
+    scale_per_level: float = 0.0    # Scaling factor per skill level
+
 
 # =============================================================================
 # MASTERY CATEGORIES
@@ -330,7 +335,9 @@ BOWMASTER_MASTERIES: List[MasteryNode] = [
 
     # Skill-specific: Flash Mirage
     MasteryNode("Flash Mirage II - Reuse", 122, 13500, "skill_cooldown_reduction", "flash_mirage", 0.4, "Flash Mirage cooldown -40%"),
-    MasteryNode("Flash Mirage II - Enhance & Target", 138, 16500, "skill_final_damage_and_targets", "flash_mirage", 50, "Flash Mirage II Final Damage +50%, targets +3"),
+    # Split the combined mastery into two separate effects so each is applied correctly
+    MasteryNode("Flash Mirage II - Enhance", 138, 16500, "skill_final_damage", "flash_mirage", 50, "Flash Mirage II Final Damage +50%"),
+    MasteryNode("Flash Mirage II - Target", 138, 0, "skill_targets", "flash_mirage", 3, "Flash Mirage targets +3"),
 
     # Skill-specific: Sharp Eyes
     MasteryNode("Sharp Eyes - Persistence", 126, 14250, "skill_duration", "sharp_eyes", 0.5, "Sharp Eyes duration +50%"),
@@ -339,7 +346,13 @@ BOWMASTER_MASTERIES: List[MasteryNode] = [
     MasteryNode("Illusion Step - Enhance", 118, 12750, "skill_effect", "illusion_step", 2, "Attack increase effect doubled"),
 
     # Skill-specific: Enchanted Quiver
-    MasteryNode("Enchanted Quiver - Drain", 130, 15000, "skill_effect", "enchanted_quiver", 1, "Quiver heals 1% HP on hit"),
+    # Drain mastery adds 1050% * (1 + 0.004 * EQ_level) additional damage to Quiver Cartridge
+    MasteryNode(
+        "Enchanted Quiver - Drain", 130, 15000,
+        "skill_additional_damage", "quiver_cartridge", 1050,
+        "Quiver Cartridge deals 1050% additional damage (scales +0.4%/EQ level)",
+        scale_with_skill="enchanted_quiver", scale_per_level=0.004
+    ),
 ]
 
 
@@ -408,6 +421,49 @@ def get_global_mastery_stats(level: int) -> Dict[str, float]:
     """
     bonuses = get_mastery_bonuses(level)
     return bonuses.get("global", {})
+
+
+def get_level_breakpoints(
+    job_class: 'JobClass',
+    min_level: int = 10,
+    max_level: int = 200,
+) -> List[int]:
+    """
+    Get levels where skills or masteries unlock, causing potential rotation changes.
+
+    These "breakpoints" are the levels where DPS calculation might change significantly.
+    Between breakpoints, damage scales linearly with level (via passive stat gains),
+    so we can interpolate without running full simulation.
+
+    Args:
+        job_class: The job class to check
+        min_level: Minimum level to consider
+        max_level: Maximum level to consider
+
+    Returns:
+        Sorted list of breakpoint levels within [min_level, max_level]
+    """
+    breakpoints = set()
+
+    # Add boundary levels
+    breakpoints.add(min_level)
+    breakpoints.add(max_level)
+
+    # Get masteries and skills for this job
+    masteries = get_masteries_for_job(job_class)
+    skills = get_skills_for_job(job_class)
+
+    # Add mastery unlock levels
+    for mastery in masteries:
+        if min_level <= mastery.unlock_level <= max_level:
+            breakpoints.add(mastery.unlock_level)
+
+    # Add skill unlock levels
+    for skill in skills.values():
+        if min_level <= skill.unlock_level <= max_level:
+            breakpoints.add(skill.unlock_level)
+
+    return sorted(breakpoints)
 
 
 # =============================================================================
@@ -1450,6 +1506,495 @@ ICE_LIGHTNING_MASTERIES: List[MasteryNode] = [
 
 
 # =============================================================================
+# NIGHT LORD SKILLS
+# =============================================================================
+
+NIGHT_LORD_SKILLS: Dict[str, SkillData] = {
+    # =========================================================================
+    # Shared Beginner Skills
+    # =========================================================================
+    "nimble_feet": SkillData(
+        name="Nimble Feet",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.BASIC,
+        unlock_level=1,
+        cooldown=60.0,
+        duration=15.0,
+        skill_bonuses={
+            "attack_speed": (15.0, 0.0),
+        },
+    ),
+
+    # =========================================================================
+    # 1st Job Skills
+    # =========================================================================
+    "lucky_seven": SkillData(
+        name="Lucky Seven",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.FIRST,
+        unlock_level=10,
+        base_damage_pct=26.0,
+        base_hits=2,
+        base_targets=3,
+        damage_per_level=0,  # Replaced by Shuriken Burst at 2nd job
+    ),
+
+    "haste": SkillData(
+        name="Haste",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.FIRST,
+        unlock_level=15,
+        skill_bonuses={
+            "movement_speed": (10.0, 0.099),  # 10% base, Lv91 → 19%
+        },
+    ),
+
+    "dark_sight": SkillData(
+        name="Dark Sight",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.FIRST,
+        unlock_level=20,
+        cooldown=25.0,
+        duration=8.0,
+        skill_bonuses={
+            "crit_rate": (5.0, 0.034),    # Lv91 → 8.1%
+            "attack_pct": (10.0, 0.040),  # Lv91 → 13.6%
+        },
+    ),
+
+    "thief_mastery": SkillData(
+        name="Thief Mastery",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.FIRST,
+        unlock_level=10,
+        skill_bonuses={
+            "attack_speed": (5.0, 0.0146),  # Similar to Archer Mastery
+        },
+    ),
+
+    # =========================================================================
+    # 2nd Job Skills
+    # =========================================================================
+    "shuriken_burst": SkillData(
+        name="Shuriken Burst",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.SECOND,
+        unlock_level=30,
+        base_damage_pct=40.0,
+        base_hits=3,
+        base_targets=5,
+        damage_per_level=0,  # Replaced by Shuriken Challenge at 3rd job
+    ),
+
+    "gust_charm": SkillData(
+        name="Gust Charm",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=35,
+        base_damage_pct=400.0,
+        base_hits=1,
+        base_targets=6,
+        damage_per_level=2.0,  # Lv127 → 654%
+        cooldown=24.0,
+    ),
+
+    "agile_claws": SkillData(
+        name="Agile Claws",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=33,
+        skill_bonuses={
+            "attack_speed": (4.0, 0.023),  # 4% base, Lv127 → 6.9%
+        },
+    ),
+
+    "physical_training": SkillData(
+        name="Physical Training",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=38,
+        skill_bonuses={
+            "basic_attack_damage": (10.0, 0.030),  # 10% base, Lv127 → 13.8%
+        },
+    ),
+
+    "claw_mastery": SkillData(
+        name="Claw Mastery",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=40,
+        skill_bonuses={
+            "min_dmg_mult": (15.0, 0.045),  # 15% base, Lv127 → 20.7%
+        },
+    ),
+
+    "mark_of_assassin": SkillData(
+        name="Mark of Assassin",
+        skill_type=SkillType.PASSIVE_PROC,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=45,
+        base_damage_pct=300.0,
+        base_hits=1,
+        base_targets=5,
+        damage_per_level=1.20,  # Lv127 → 452.4%
+        proc_chance=1.0,  # 100% when hitting marked targets
+        attack_interval=5.0,  # Marks every 5 seconds
+    ),
+
+    "critical_throw": SkillData(
+        name="Critical Throw",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=48,
+        skill_bonuses={
+            "crit_rate": (5.0, 0.025),     # 5% base, Lv127 → 8.2%
+            "crit_damage": (10.0, 0.030),  # 10% base, Lv127 → 13.8%
+        },
+    ),
+
+    "shadow_surge": SkillData(
+        name="Shadow Surge",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=50,
+        cooldown=6.0,
+        duration=0,  # Instant dash
+    ),
+
+    # =========================================================================
+    # 3rd Job Skills
+    # =========================================================================
+    "shuriken_challenge": SkillData(
+        name="Shuriken Challenge",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.THIRD,
+        unlock_level=60,
+        base_damage_pct=80.0,
+        base_hits=5,
+        base_targets=6,
+        damage_per_level=0,  # Replaced by Showdown at 4th job
+    ),
+
+    "triple_throw": SkillData(
+        name="Triple Throw",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=60,
+        base_damage_pct=360.0,
+        base_hits=3,
+        base_targets=1,
+        damage_per_level=1.80,  # Lv186 → 694.8%
+        cooldown=13.0,
+    ),
+
+    "shadow_partner": SkillData(
+        name="Shadow Partner",
+        skill_type=SkillType.PASSIVE_PROC,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=60,
+        base_damage_pct=70.0,  # Deals X% additional damage
+        base_hits=1,
+        base_targets=1,
+        damage_per_level=0.186,  # Lv186 → 104.6%
+        proc_chance=0.25,  # 25% chance
+    ),
+
+    "dark_flare": SkillData(
+        name="Dark Flare",
+        skill_type=SkillType.SUMMON,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=65,
+        base_damage_pct=500.0,
+        base_hits=2,
+        base_targets=5,
+        damage_per_level=1.46,  # Lv186 → 772%
+        cooldown=45.0,
+        duration=20.0,
+        attack_interval=5.0,
+        scales_with_attack_speed=False,
+    ),
+
+    "enveloping_darkness": SkillData(
+        name="Enveloping Darkness",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=66,
+        skill_bonuses={
+            "boss_damage": (15.0, 0.070),  # 15% base, Lv186 → 28%
+        },
+        scenario="boss",
+    ),
+
+    "venom": SkillData(
+        name="Venom",
+        skill_type=SkillType.PASSIVE_PROC,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=70,
+        base_damage_pct=50.0,
+        base_hits=1,
+        base_targets=1,
+        damage_per_level=0.153,  # Lv186 → 78.4%
+        proc_chance=0.30,  # 30% chance to poison
+        duration=10.0,  # Poison lasts 10 seconds
+        attack_interval=1.0,  # DoT ticks every 1 second
+    ),
+
+    "alchemic_adrenaline": SkillData(
+        name="Alchemic Adrenaline",
+        skill_type=SkillType.PASSIVE_BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=72,
+        duration=10.0,  # Buff lasts 10 seconds
+        skill_bonuses={
+            "final_damage": (10.0, 0.030),    # 10% base, Lv186 → 15.5%
+            "attack_speed": (8.0, 0.024),     # 8% base, Lv186 → 12.4%
+        },
+    ),
+
+    "expert_throwing_star_handling": SkillData(
+        name="Expert Throwing Star Handling",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=75,
+        skill_bonuses={
+            "attack_pct": (20.0, 0.043),  # 20% base, Lv186 → 28%
+        },
+    ),
+
+    # =========================================================================
+    # 4th Job Skills
+    # =========================================================================
+    "showdown": SkillData(
+        name="Showdown",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.FOURTH,
+        unlock_level=100,
+        base_damage_pct=290.0,
+        base_hits=5,
+        base_targets=6,
+        damage_per_level=1.16,  # Lv56 → 354.9%
+    ),
+
+    "quad_star": SkillData(
+        name="Quad Star",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=100,
+        base_damage_pct=1150.0,
+        base_hits=4,
+        base_targets=1,
+        damage_per_level=5.75,  # Lv56 → 1472%
+        cooldown=13.0,
+    ),
+
+    "sudden_raid": SkillData(
+        name="Sudden Raid",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=103,
+        base_damage_pct=800.0,
+        base_hits=8,
+        base_targets=6,
+        damage_per_level=4.09,  # Similar to Hurricane scaling
+        cooldown=40.0,
+    ),
+
+    "shadow_shifter": SkillData(
+        name="Shadow Shifter",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=115,
+        cooldown=35.0,
+        duration=15.0,
+        skill_bonuses={
+            "crit_rate": (8.0, 0.032),     # 8% + 0.032%/level
+            "crit_damage": (40.0, 0.161),  # 40% + 0.161%/level
+        },
+    ),
+
+    "toxic_venom": SkillData(
+        name="Toxic Venom",
+        skill_type=SkillType.SKILL_ENHANCER,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=105,
+        skill_bonuses={
+            "venom": (500.0, 2.0),  # final_damage to Venom
+        },
+    ),
+
+    "night_lords_mark": SkillData(
+        name="Night Lord's Mark",
+        skill_type=SkillType.SKILL_ENHANCER,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=110,
+        skill_bonuses={
+            "mark_of_assassin": (400.0, 1.5),  # final_damage to Mark of Assassin
+        },
+    ),
+
+    "claw_expert": SkillData(
+        name="Claw Expert",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=120,
+        skill_bonuses={
+            "skill_damage": (15.0, 0.045),  # Similar to Bow Expert
+        },
+    ),
+
+    "dark_harmony": SkillData(
+        name="Dark Harmony",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=125,
+        skill_bonuses={
+            "defense_pen": (10.0, 0.030),
+            "final_damage": (10.0, 0.030),
+        },
+    ),
+
+    "maple_hero": SkillData(
+        name="Maple Hero",
+        skill_type=SkillType.SKILL_ENHANCER,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=100,
+        # Grants FD to Dark Flare, Venom, Shadow Partner, Gust Charm
+        # Values from Lv56 screenshot: DF 57%, Venom 190%, SP 190%, GC 494%
+        skill_bonuses={
+            "dark_flare": (25, 0.57),        # base 25%, at Lv56 → 57%
+            "venom": (75, 2.05),             # base 75%, at Lv56 → 190%
+            "shadow_partner": (75, 2.05),    # base 75%, at Lv56 → 190%
+            "gust_charm": (200, 5.25),       # base 200%, at Lv56 → 494%
+        },
+    ),
+
+    "frailty_curse": SkillData(
+        name="Frailty Curse",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=112,
+        cooldown=60.0,
+        duration=30.0,
+        # Reduces enemies' critical resistance in range
+        # Enhanced by mastery at level 113
+    ),
+}
+
+
+# =============================================================================
+# NIGHT LORD MASTERIES
+# =============================================================================
+# From wiki: https://idle.maplestorywiki.net/w/Night_Lord/Mastery
+
+NIGHT_LORD_MASTERIES: List[MasteryNode] = [
+    # =========================================================================
+    # 1st Job Masteries (Levels 12-28)
+    # =========================================================================
+    MasteryNode("Lucky Seven - Damage", 12, 0, "skill_damage_pct", "lucky_seven", 15, "Lucky Seven damage +15%"),
+    MasteryNode("Main Stat Enhancement", 14, 0, "main_stat_flat", "global", 30, "Main Stat +30"),
+    MasteryNode("Lucky Seven - Target", 15, 0, "skill_targets", "lucky_seven", 1, "Lucky Seven max targets +1"),
+    MasteryNode("Critical Rate Enhancement", 17, 0, "crit_rate", "global", 5, "Critical Rate +5%"),
+    MasteryNode("Lucky Seven - Damage 2", 19, 0, "skill_damage_pct", "lucky_seven", 20, "Lucky Seven damage +20%"),
+    MasteryNode("Haste - Speed", 21, 0, "movement_speed", "global", 5, "Haste Speed +5%p"),
+    MasteryNode("Lucky Seven - Target 2", 22, 0, "skill_targets", "lucky_seven", 1, "Lucky Seven max targets +1"),
+    MasteryNode("Dark Sight - Persistence", 24, 0, "skill_duration", "dark_sight", 0.5, "Dark Sight buff duration +50%"),
+    MasteryNode("Lucky Seven - Damage 3", 26, 0, "skill_damage_pct", "lucky_seven", 20, "Lucky Seven damage +20%"),
+    MasteryNode("Basic Attack Damage Enhancement", 28, 0, "basic_attack_damage", "global", 15, "Basic Attack Damage +15%"),
+
+    # =========================================================================
+    # 2nd Job Masteries (Levels 32-58)
+    # =========================================================================
+    MasteryNode("Shuriken Burst - Damage", 32, 0, "skill_damage_pct", "shuriken_burst", 15, "Shuriken Burst damage +15%"),
+    MasteryNode("Accuracy Enhancement", 34, 0, "accuracy", "global", 5, "Accuracy +5"),
+    MasteryNode("Shuriken Burst - Target", 37, 0, "skill_targets", "shuriken_burst", 1, "Shuriken Burst max targets +1"),
+    MasteryNode("Gust Charm - Stun", 39, 0, "skill_effect", "gust_charm", 0.5, "Gust Charm stun duration +50%"),
+    MasteryNode("Shuriken Burst - Damage 2", 42, 0, "skill_damage_pct", "shuriken_burst", 20, "Shuriken Burst damage +20%"),
+    MasteryNode("Mark of Assassin - Damage", 44, 0, "skill_damage_pct", "mark_of_assassin", 50, "Mark of Assassin damage +50%"),
+    MasteryNode("Shuriken Burst - Boss Damage", 47, 0, "skill_boss_damage", "shuriken_burst", 15, "Shuriken Burst Boss Damage +15%"),
+    MasteryNode("Critical Throw - Critical", 49, 0, "crit_rate", "global", 8, "Critical Rate +8%p"),
+    MasteryNode("Shuriken Burst - Damage 3", 52, 0, "skill_damage_pct", "shuriken_burst", 20, "Shuriken Burst damage +20%"),
+    MasteryNode("Shadow Surge - Accelerate", 54, 0, "skill_effect", "shadow_surge", 50, "After Shadow Surge, Speed +50% for 3 sec"),
+    MasteryNode("Shuriken Burst - Strike", 56, 0, "skill_hits", "shuriken_burst", 1, "Shuriken Burst hits +1"),
+    MasteryNode("Max Damage Multiplier Enhancement", 58, 0, "max_dmg_mult", "global", 10, "Max Damage Multiplier +10%"),
+
+    # =========================================================================
+    # 3rd Job Masteries (Levels 62-98)
+    # =========================================================================
+    MasteryNode("Shuriken Challenge - Damage", 62, 0, "skill_damage_pct", "shuriken_challenge", 10, "Shuriken Challenge damage +10%"),
+    MasteryNode("Basic Attack Target Enhancement", 64, 0, "basic_attack_targets", "global", 1, "Basic Attack Target +1"),
+    MasteryNode("Shuriken Challenge - Damage 2", 66, 0, "skill_damage_pct", "shuriken_challenge", 11, "Shuriken Challenge damage +11%"),
+    MasteryNode("Shadow Partner - Damage", 68, 0, "skill_damage_pct", "shadow_partner", 100, "Shadow Partner damage +100%"),
+    MasteryNode("Shuriken Challenge - Boss Damage", 71, 0, "skill_boss_damage", "shuriken_challenge", 10, "Shuriken Challenge Boss Damage +10%"),
+    MasteryNode("Triple Throw - Damage", 73, 0, "skill_damage_pct", "triple_throw", 100, "Triple Throw damage +100%"),
+    MasteryNode("Shuriken Challenge - Damage 3", 76, 0, "skill_damage_pct", "shuriken_challenge", 12, "Shuriken Challenge damage +12%"),
+    MasteryNode("Dark Flare - Strike", 78, 0, "skill_hits", "dark_flare", 1, "Dark Flare hits +1"),
+    MasteryNode("Shuriken Challenge - Damage 4", 80, 0, "skill_damage_pct", "shuriken_challenge", 13, "Shuriken Challenge damage +13%"),
+    MasteryNode("Venom - Weaken", 82, 0, "skill_effect", "venom", 12, "Venom target damage taken +12%"),
+    MasteryNode("Shuriken Challenge - Boss Damage 2", 84, 0, "skill_boss_damage", "shuriken_challenge", 10, "Shuriken Challenge Boss Damage +10%"),
+    MasteryNode("Skill Damage Enhancement", 86, 0, "skill_damage", "global", 15, "Skill Damage +15%"),
+    MasteryNode("Shuriken Challenge - Damage 5", 88, 0, "skill_damage_pct", "shuriken_challenge", 14, "Shuriken Challenge damage +14%"),
+    MasteryNode("Alchemic Adrenaline - Persistence", 90, 0, "skill_duration", "alchemic_adrenaline", 5, "Alchemic Adrenaline duration +5 sec"),
+    MasteryNode("Shuriken Challenge - Damage 6", 92, 0, "skill_damage_pct", "shuriken_challenge", 15, "Shuriken Challenge damage +15%"),
+    MasteryNode("Dark Flare - Reuse", 94, 0, "skill_cooldown_reduction", "dark_flare", 0.3, "Dark Flare cooldown -30%"),
+    MasteryNode("Shuriken Challenge - Strike", 96, 0, "skill_hits", "shuriken_challenge", 1, "Shuriken Challenge hits +1"),
+    MasteryNode("Venom - Chance", 98, 0, "skill_proc_chance", "venom", 10, "Venom activation chance +10%p"),
+
+    # =========================================================================
+    # 4th Job Masteries (Levels 102-138)
+    # =========================================================================
+    MasteryNode("Showdown - Damage", 102, 0, "skill_damage_pct", "showdown", 10, "Showdown damage +10%"),
+    MasteryNode("Dark Flare - Strike Interval", 104, 0, "skill_attack_interval", "dark_flare", -0.4, "Dark Flare strike interval -40%"),
+    MasteryNode("Showdown - Damage 2", 106, 0, "skill_damage_pct", "showdown", 11, "Showdown damage +11%"),
+    MasteryNode("Quad Star - Reuse", 108, 0, "skill_cooldown_reduction", "quad_star", 0.3, "Quad Star cooldown -30%"),
+    MasteryNode("Showdown - Boss Damage", 111, 0, "skill_boss_damage", "showdown", 10, "Showdown Boss Damage +10%"),
+    MasteryNode("Frailty Curse - Critical", 113, 0, "skill_effect", "frailty_curse", 10, "Frailty Curse decreases target Crit Resistance -10%"),
+    MasteryNode("Showdown - Damage 3", 116, 0, "skill_damage_pct", "showdown", 12, "Showdown damage +12%"),
+    MasteryNode("Shadow Shifter - Evasion", 118, 0, "skill_effect", "shadow_shifter", 100, "Shadow Shifter Attack boost +100%, Evasion +20 for 3 sec"),
+    MasteryNode("Showdown - Damage 4", 120, 0, "skill_damage_pct", "showdown", 13, "Showdown damage +13%"),
+    MasteryNode("Night Lord's Mark - Activation Interval", 122, 0, "skill_attack_interval", "mark_of_assassin", -1, "Mark of Assassin interval and duration -1 sec"),
+    MasteryNode("Showdown - Boss Damage 2", 124, 0, "skill_boss_damage", "showdown", 10, "Showdown Boss Damage +10%"),
+    MasteryNode("Sudden Raid - Damage", 126, 0, "skill_damage_pct", "sudden_raid", 50, "Sudden Raid damage +50%"),
+    MasteryNode("Showdown - Damage 5", 128, 0, "skill_damage_pct", "showdown", 14, "Showdown damage +14%"),
+    MasteryNode("Toxic Venom - Damage", 130, 0, "skill_damage_pct", "venom", 100, "Toxic Venom damage +100%"),
+    MasteryNode("Showdown - Damage 6", 132, 0, "skill_damage_pct", "showdown", 15, "Showdown damage +15%"),
+    MasteryNode("Quad Star - Damage", 134, 0, "skill_damage_pct", "quad_star", 50, "Quad Star damage +50%"),
+    MasteryNode("Showdown - Strike", 136, 0, "skill_hits", "showdown", 1, "Showdown hits +1"),
+    MasteryNode("Night Lord's Mark - Weaken", 138, 0, "skill_effect", "mark_of_assassin", 15, "Targets hit by Mark of Assassin take +15% damage for 4 sec"),
+]
+
+
+# =============================================================================
 # JOB CLASS SKILL/MASTERY REGISTRY
 # =============================================================================
 
@@ -1458,11 +2003,13 @@ ICE_LIGHTNING_MASTERIES: List[MasteryNode] = [
 SKILLS_BY_JOB: Dict[JobClass, Dict[str, 'SkillData']] = {
     JobClass.BOWMASTER: BOWMASTER_SKILLS,
     JobClass.ARCHMAGE_ICE_LIGHTNING: ICE_LIGHTNING_SKILLS,
+    JobClass.NIGHT_LORD: NIGHT_LORD_SKILLS,
 }
 
 MASTERIES_BY_JOB: Dict[JobClass, List['MasteryNode']] = {
     JobClass.BOWMASTER: BOWMASTER_MASTERIES,
     JobClass.ARCHMAGE_ICE_LIGHTNING: ICE_LIGHTNING_MASTERIES,
+    JobClass.NIGHT_LORD: NIGHT_LORD_MASTERIES,
 }
 
 
@@ -1648,6 +2195,56 @@ def create_character_at_level(
     return char
 
 
+def create_default_character(
+    level: int,
+    job_class: JobClass = JobClass.BOWMASTER,
+    all_skills_bonus: int = 0,
+    skill_1st_bonus: int = 0,
+    skill_2nd_bonus: int = 0,
+    skill_3rd_bonus: int = 0,
+    skill_4th_bonus: int = 0,
+) -> CharacterState:
+    """
+    Create a default character for skill analysis with standardized stats.
+
+    This provides a consistent baseline for comparing skill damage contributions
+    across different levels and job classes, independent of user-specific stats.
+
+    Args:
+        level: Character level
+        job_class: The job class for this character
+        all_skills_bonus: +All Skills bonus from equipment
+        skill_1st_bonus: +1st Job Skill bonus from equipment
+        skill_2nd_bonus: +2nd Job Skill bonus from equipment
+        skill_3rd_bonus: +3rd Job Skill bonus from equipment
+        skill_4th_bonus: +4th Job Skill bonus from equipment
+
+    Returns:
+        CharacterState with standardized stats for analysis
+    """
+    char = create_character_at_level(level, all_skills_bonus, job_class)
+
+    # Apply job-specific skill bonuses
+    char.skill_1st_bonus = skill_1st_bonus
+    char.skill_2nd_bonus = skill_2nd_bonus
+    char.skill_3rd_bonus = skill_3rd_bonus
+    char.skill_4th_bonus = skill_4th_bonus
+
+    # Standardized stats (not from user data) for consistent comparison
+    char.attack = 50000  # Baseline attack
+    char.main_stat_flat = 30000
+    char.main_stat_pct = 100
+    char.damage_pct = 150
+    char.boss_damage_pct = 100
+    char.normal_damage_pct = 50
+    char.crit_rate = 80
+    char.crit_damage = 150
+    char.final_damage_pct = 50
+    char.defense_pen = 30
+
+    return char
+
+
 # =============================================================================
 # DPS CALCULATOR (Updated with Masteries)
 # =============================================================================
@@ -1706,6 +2303,53 @@ class FightLogEntry:
     reason: str = ""             # Why this skill was chosen (e.g., "highest DPS value")
 
 
+@dataclass
+class CachedRotationResult:
+    """Cached simulation result enabling fast recalculation for Tier 1/2 stats.
+
+    This stores the results of a full fight simulation in a way that allows
+    fast recalculation when only linear multiplier stats change.
+
+    Tier 1 (Universal): main_stat, damage%, crit, FD%, def_pen
+        -> Just multiply total_dps by ratio of new/old universal multiplier
+
+    Tier 2 (Phase-weighted): boss_damage%, normal_damage%
+        -> Use skill_mob_dps and skill_boss_dps to recalculate phase weighting
+
+    Tier 3 (Rotation-affecting): attack_speed, skill_levels, cooldowns
+        -> Must run full simulation again
+    """
+    total_dps: float
+
+    # Per-skill breakdown (needed for Tier 2 phase recalc)
+    skill_mob_dps: Dict[str, float]   # DPS from each skill during mob phase
+    skill_boss_dps: Dict[str, float]  # DPS from each skill during boss phase
+
+    # Baseline multipliers used (needed for Tier 1 ratio calculation)
+    baseline_universal_mult: float    # Combined main_stat × dmg × crit × FD × def_pen
+    baseline_normal_mult: float       # 1 + normal_damage_pct / 100
+    baseline_boss_mult: float         # 1 + boss_damage_pct / 100
+
+    # Context for cache key / invalidation
+    rotation_key: Tuple               # (level, all_skills, skill_bonuses, attack_speed, ...)
+
+
+# Stat categorization for optimization
+TIER_1_UNIVERSAL_STATS = frozenset({
+    'main_stat_flat', 'main_stat_pct', 'damage_pct',
+    'crit_rate', 'crit_damage', 'final_damage_pct', 'defense_pen'
+})
+
+TIER_2_PHASE_STATS = frozenset({
+    'boss_damage_pct', 'normal_damage_pct'
+})
+
+TIER_3_ROTATION_STATS = frozenset({
+    'attack_speed_pct', 'all_skills_bonus', 'skill_1st_bonus', 'skill_2nd_bonus',
+    'skill_3rd_bonus', 'skill_4th_bonus', 'cooldown_reduction'
+})
+
+
 class DPSCalculator:
     """
     Calculates DPS for any job class given character state.
@@ -1725,6 +2369,12 @@ class DPSCalculator:
         self._masteries = char.masteries
         self.mastery_bonuses = get_mastery_bonuses(char.level, self._masteries)
 
+        # Instance-level caches for frequently-called methods
+        # These values are stable for a given character state
+        self._skill_damage_cache: Dict[str, float] = {}
+        self._skill_hits_cache: Dict[str, int] = {}
+        self._skill_targets_cache: Dict[str, int] = {}
+
     def get_skill(self, skill_name: str) -> Optional[SkillData]:
         """Get skill data by name for this character's job class."""
         return self._skills.get(skill_name)
@@ -1739,6 +2389,33 @@ class DPSCalculator:
 
         # Note: Global bonuses are applied separately via get_global_stat()
         # This method is for skill-specific mastery bonuses only
+
+        return total
+
+    def get_scaled_mastery_bonus(self, skill_name: str, effect_type: str) -> float:
+        """
+        Get mastery bonus that scales with another skill's level.
+
+        Some masteries (like Enchanted Quiver - Drain) have effects that scale
+        with a skill's level. This method computes the full scaled value.
+
+        Formula: base_value * (1 + scale_per_level * skill_level)
+        """
+        total = 0.0
+
+        for mastery in get_unlocked_masteries(self.char.level, self._masteries):
+            if mastery.effect_target != skill_name:
+                continue
+            if mastery.effect_type != effect_type:
+                continue
+            if not mastery.scale_with_skill:
+                # Non-scaled mastery - already handled by get_mastery_bonus
+                continue
+
+            # Get the skill level for scaling
+            skill_level = self.char.get_effective_skill_level(mastery.scale_with_skill)
+            scaled_value = mastery.effect_value * (1 + mastery.scale_per_level * skill_level)
+            total += scaled_value
 
         return total
 
@@ -2081,68 +2758,71 @@ class DPSCalculator:
         # Get cast time based on attack speed
         cast_time = self.get_cast_time(1.0, True, attack_speed_mult)
 
-        # Calculate hits per second from each source
+        # Calculate hits per second from each source dynamically
         hits_per_second = 0.0
 
-        # Basic attack (Arrow Stream at 100+, Wind Arrow II at 60+, etc.)
+        # Basic attack
         basic_skill_name = self.char.get_active_basic_attack()
         if basic_skill_name and self.char.is_skill_unlocked(basic_skill_name):
             basic_hits = self.get_skill_hits(basic_skill_name)
             attacks_per_second = 1 / cast_time
             hits_per_second += basic_hits * attacks_per_second
 
-        # Hurricane (20 hits base, 35 with mastery, 40s CD)
-        if self.char.is_skill_unlocked("hurricane"):
-            hurricane_hits = self.get_skill_hits("hurricane")
-            hurricane_cd = self.char.get_effective_skill_cooldown(
-                self._skills["hurricane"].cooldown, 0
-            )
-            hits_per_second += hurricane_hits / hurricane_cd
+        # Active skills (contribute hits based on cooldown)
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.ACTIVE:
+                continue
+            if not self.char.is_skill_unlocked(skill_name):
+                continue
+            skill_hits = self.get_skill_hits(skill_name)
+            skill_cd = self.char.get_effective_skill_cooldown(skill.cooldown, 0)
+            if skill_cd > 0:
+                hits_per_second += skill_hits / skill_cd
 
-        # Phoenix (attacks every 3 seconds, 1 hit, independent of AS)
-        if self.char.is_skill_unlocked("phoenix"):
-            phoenix_interval = 3.0
-            # Check for mastery reducing interval by 30%
-            if self.char.level >= 82:
-                phoenix_interval *= 0.7
-            # Phoenix uptime (20s duration, 60s CD, or 30s with mastery reduction)
-            phoenix_cd = 60.0
-            mastery_pct_reduction = 50.0 if self.char.level >= 104 else 0.0
-            phoenix_cd = self.char.get_effective_skill_cooldown(phoenix_cd, mastery_pct_reduction)
-            phoenix_uptime = min(20.0 / phoenix_cd, 1.0)
-            hits_per_second += (1 / phoenix_interval) * phoenix_uptime
+        # Summons (contribute hits based on interval and uptime)
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.SUMMON:
+                continue
+            if not self.char.is_skill_unlocked(skill_name):
+                continue
+            if skill.duration <= 0 or skill.attack_interval <= 0:
+                continue
+            interval = skill.attack_interval
+            interval_reduction = self.get_mastery_bonus(skill_name, "skill_attack_interval")
+            if interval_reduction != 0:
+                interval = max(1.0, interval + interval_reduction)  # Flat second reduction
+            # Calculate uptime
+            if skill.cooldown > 0:
+                mastery_pct_reduction = self.get_mastery_bonus(skill_name, "skill_cooldown_reduction") * 100
+                skill_cd = self.char.get_effective_skill_cooldown(skill.cooldown, mastery_pct_reduction)
+                uptime = min(skill.duration / skill_cd, 1.0)
+            else:
+                uptime = 1.0
+            hits_per_second += (1 / interval) * uptime
 
-        # Final Attack (25% proc chance per attack, 1 hit)
-        if self.char.is_skill_unlocked("final_attack"):
-            fa_skill = self._skills["final_attack"]
-            proc_chance = fa_skill.proc_chance  # 0.25
+        # Procs (contribute hits based on proc chance and possibly ICD)
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.PASSIVE_PROC:
+                continue
+            if not self.char.is_skill_unlocked(skill_name):
+                continue
+            proc_chance = skill.proc_chance
             attacks_per_second = 1 / cast_time
-            hits_per_second += proc_chance * attacks_per_second
-
-        # Flash Mirage (20% proc chance, 5s ICD, 1 hit)
-        if self.char.is_skill_unlocked("flash_mirage"):
-            fm_skill = self._skills["flash_mirage"]
-            # With ICD, max procs per second = 1 / cooldown
-            fm_cd = fm_skill.cooldown  # 5.0
-            mastery_pct_reduction = 40.0 if self.char.level >= 122 else 0.0
-            fm_cd = self.char.get_effective_skill_cooldown(fm_cd, mastery_pct_reduction)
-            hits_per_second += 1 / fm_cd
-
-        # Covering Fire (3 hits, 19s CD)
-        if self.char.is_skill_unlocked("covering_fire"):
-            cf_skill = self._skills["covering_fire"]
-            cf_hits = cf_skill.base_hits  # 3
-            cf_cd = self.char.get_effective_skill_cooldown(cf_skill.cooldown, 0)
-            hits_per_second += cf_hits / cf_cd
+            if skill.cooldown > 0:
+                # Has ICD - max procs limited
+                mastery_pct_reduction = self.get_mastery_bonus(skill_name, "skill_cooldown_reduction")
+                icd = skill.cooldown * (1 - mastery_pct_reduction)
+                hits_per_second += min(proc_chance * attacks_per_second, 1 / icd)
+            else:
+                hits_per_second += proc_chance * attacks_per_second
 
         # Calculate build time to reach 50 hits
         hits_to_activate = 50
         build_time = hits_to_activate / hits_per_second if hits_per_second > 0 else 999
 
-        # Duration: 5 sec base + 5 sec from mastery (level 90+) = 10 sec
+        # Duration: 5 sec base + mastery bonus (flat seconds)
         duration = 5.0
-        if self.char.level >= 90:
-            duration += 5.0
+        duration += self.get_mastery_bonus("mortal_blow", "skill_duration")
 
         # Uptime = duration / (duration + build_time)
         uptime = duration / (duration + build_time)
@@ -2151,6 +2831,10 @@ class DPSCalculator:
 
     def get_skill_damage_pct(self, skill_name: str) -> float:
         """Get total damage % for a skill including level scaling and masteries."""
+        # Check cache first
+        if skill_name in self._skill_damage_cache:
+            return self._skill_damage_cache[skill_name]
+
         if skill_name not in self._skills:
             return 0
 
@@ -2165,10 +2849,16 @@ class DPSCalculator:
         # Mastery bonuses are often percentage increases on top
         damage *= (1 + mastery_bonus / 100)
 
+        # Cache the result
+        self._skill_damage_cache[skill_name] = damage
         return damage
 
     def get_skill_hits(self, skill_name: str) -> int:
         """Get total hits for a skill including masteries."""
+        # Check cache first
+        if skill_name in self._skill_hits_cache:
+            return self._skill_hits_cache[skill_name]
+
         if skill_name not in self._skills:
             return 1
 
@@ -2182,10 +2872,16 @@ class DPSCalculator:
         if skill_name == "hurricane" and self.char.level >= 134:
             hits = 35  # Hurricane - Extend mastery
 
+        # Cache the result
+        self._skill_hits_cache[skill_name] = hits
         return hits
 
     def get_skill_targets(self, skill_name: str) -> int:
         """Get total targets for a skill including masteries and equipment bonuses."""
+        # Check cache first
+        if skill_name in self._skill_targets_cache:
+            return self._skill_targets_cache[skill_name]
+
         if skill_name not in self._skills:
             return 1
 
@@ -2205,6 +2901,8 @@ class DPSCalculator:
             # Bonus from equipment potentials (stored on character state)
             targets += getattr(self.char, 'ba_target_bonus', 0)
 
+        # Cache the result
+        self._skill_targets_cache[skill_name] = targets
         return targets
 
     def get_effective_targets(
@@ -2292,7 +2990,8 @@ class DPSCalculator:
         # Main stat (1% per point) and secondary stat (0.25% per point)
         # stat_dmg_pct = main_stat * 0.01 + secondary_stat * 0.0025
         # multiplier = 1 + (stat_dmg_pct / 100)
-        total_main_stat = self.char.main_stat_flat * (1 + (self.char.main_stat_pct + self.get_total_stat_bonus("main_stat_pct")) / 100)
+        base_main_stat = self.char.main_stat_flat + self.get_global_stat("main_stat_flat")
+        total_main_stat = base_main_stat * (1 + (self.char.main_stat_pct + self.get_total_stat_bonus("main_stat_pct")) / 100)
         total_secondary_stat = self.char.secondary_stat_flat * (1 + self.char.secondary_stat_pct / 100)
         main_stat_mult = 1 + (total_main_stat / 10000) + (total_secondary_stat / 40000)
 
@@ -2357,6 +3056,9 @@ class DPSCalculator:
                 final_mult *= (1 + fm2_fd / 100)
 
         if skill_name == "quiver_cartridge":
+            # Enchanted Quiver grants FD to Quiver Cartridge
+            # The Drain mastery additional damage is already added in get_skill_damage_pct
+            # so the EQ FD multiplies both base QC damage AND drain damage
             eq_fd = self.get_skill_bonus_value("enchanted_quiver", "quiver_cartridge")
             if eq_fd > 0:
                 final_mult *= (1 + eq_fd / 100)
@@ -2403,6 +3105,25 @@ class DPSCalculator:
 
         damage = base * main_stat_mult * damage_mult * phase_mult * type_mult
         damage *= final_mult * crit_mult * def_pen_mult
+
+        # Quiver Cartridge: Add Enchanted Quiver - Drain additional damage
+        # This is a separate damage instance that does NOT get Enchanted Quiver FD
+        # but does get all other multipliers (stats, crit, defense pen, etc.)
+        if skill_name == "quiver_cartridge":
+            drain_dmg_pct = self.get_scaled_mastery_bonus("quiver_cartridge", "skill_additional_damage")
+            if drain_dmg_pct > 0:
+                # Calculate drain damage with same multipliers but without EQ FD
+                drain_base = self.char.attack * (drain_dmg_pct / 100)
+                drain_damage = drain_base * main_stat_mult * damage_mult * phase_mult * type_mult
+                # Apply final_mult WITHOUT the EQ FD portion
+                # EQ FD is already in final_mult, so we need to remove it
+                eq_fd = self.get_skill_bonus_value("enchanted_quiver", "quiver_cartridge")
+                if eq_fd > 0:
+                    drain_final_mult = final_mult / (1 + eq_fd / 100)
+                else:
+                    drain_final_mult = final_mult
+                drain_damage *= drain_final_mult * crit_mult * def_pen_mult
+                damage += drain_damage
 
         return damage
 
@@ -2463,12 +3184,12 @@ class DPSCalculator:
                 dps_value_boss=damage_boss / cast_time,
             )
 
-        # Active skills (Hurricane, Covering Fire)
-        for skill_name in ["hurricane", "covering_fire"]:
+        # Active skills - find all ACTIVE type skills dynamically
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.ACTIVE:
+                continue
             if not self.char.is_skill_unlocked(skill_name):
                 continue
-
-            skill = self._skills[skill_name]
             hits = self.get_skill_hits(skill_name)
             targets_mob = min(self.get_skill_targets(skill_name), num_enemies)
 
@@ -2514,12 +3235,12 @@ class DPSCalculator:
                 dps_value_boss=damage_boss / skill_cast_time,
             )
 
-        # Summons (Phoenix, Arrow Platter) - calculate total damage over duration
-        for skill_name in ["phoenix", "arrow_platter"]:
+        # Summons - calculate total damage over duration for all SUMMON type skills
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.SUMMON:
+                continue
             if not self.char.is_skill_unlocked(skill_name):
                 continue
-
-            skill = self._skills[skill_name]
             if skill.duration <= 0 or skill.attack_interval <= 0:
                 continue
 
@@ -2540,11 +3261,11 @@ class DPSCalculator:
                 is_boss_phase=True,
             )
 
-            # Calculate attack interval (with mastery reduction for phoenix)
+            # Calculate attack interval (with mastery reduction if any)
             interval = skill.attack_interval
-            if skill_name == "phoenix" and self.char.level >= 82:
-                # Phoenix Strike Interval mastery: -30%
-                interval *= 0.7
+            interval_reduction = self.get_mastery_bonus(skill_name, "skill_attack_interval")
+            if interval_reduction != 0:
+                interval = max(1.0, interval + interval_reduction)  # Flat second reduction (min 1s)
 
             # Number of attacks over the summon's duration
             num_attacks = int(skill.duration / interval)
@@ -2555,11 +3276,9 @@ class DPSCalculator:
             total_dmg_mob = dmg_mob * num_attacks * targets_mob
             total_dmg_boss = dmg_boss * num_attacks * targets_boss
 
-            # Get effective cooldown
-            mastery_cd_reduction = 0.0
-            if skill_name == "phoenix" and self.char.level >= 104:
-                mastery_cd_reduction = 50.0  # Phoenix Reuse mastery
-            effective_cd = self.char.get_effective_skill_cooldown(skill.cooldown, mastery_cd_reduction)
+            # Get effective cooldown (with mastery reduction)
+            mastery_cd_reduction_pct = self.get_mastery_bonus(skill_name, "skill_cooldown_reduction") * 100
+            effective_cd = self.char.get_effective_skill_cooldown(skill.cooldown, mastery_cd_reduction_pct)
 
             values[skill_name] = SkillActionValue(
                 skill_name=skill_name,
@@ -2599,6 +3318,7 @@ class DPSCalculator:
         current_attack_speed_mult: float,
         num_enemies: int,
         is_boss: bool,
+        skill_values_getter: Optional[Callable[[float, Set[str]], Dict[str, 'SkillActionValue']]] = None,
     ) -> float:
         """
         Calculate the DPS value of casting a buff now.
@@ -2609,6 +3329,10 @@ class DPSCalculator:
 
         Returns an "equivalent DPS" value that can be compared with
         damage skill DPS to decide whether to cast the buff.
+
+        Args:
+            skill_values_getter: Optional cached function to get skill values.
+                                If provided, uses cache. Otherwise calls _precalculate_skill_values directly.
         """
         # Time buff would be active (capped by remaining fight time)
         active_time = min(buff_skill.duration, remaining_fight_time)
@@ -2630,7 +3354,13 @@ class DPSCalculator:
         # Calculate DPS with this buff active
         new_buffs = current_active_buffs | {buff_name}
         new_attack_speed_mult = self.calculate_attack_speed_mult(new_buffs)
-        new_skill_values = self._precalculate_skill_values(num_enemies, new_attack_speed_mult, new_buffs)
+
+        # Use cached getter if provided, otherwise call _precalculate_skill_values directly
+        if skill_values_getter is not None:
+            new_skill_values = skill_values_getter(new_attack_speed_mult, new_buffs)
+        else:
+            new_skill_values = self._precalculate_skill_values(num_enemies, new_attack_speed_mult, new_buffs)
+
         new_dps = new_skill_values[ba_name].dps_value_boss if is_boss else new_skill_values[ba_name].dps_value_mob
 
         # Option B: Cast buff (lose cast_time) then attack with buff
@@ -2689,8 +3419,19 @@ class DPSCalculator:
         current_active_buffs: Set[str] = set()
         current_attack_speed_mult = self.calculate_attack_speed_mult(current_active_buffs)
 
+        # Cache for precalculated skill values, keyed by (attack_speed_mult, frozenset(active_buffs))
+        # This avoids redundant recalculation when evaluating buff options
+        precalc_cache: Dict[Tuple[float, frozenset], Dict[str, SkillActionValue]] = {}
+
+        def get_cached_skill_values(as_mult: float, buffs: Set[str]) -> Dict[str, SkillActionValue]:
+            """Get skill values from cache or calculate if not present."""
+            cache_key = (round(as_mult, 4), frozenset(buffs))
+            if cache_key not in precalc_cache:
+                precalc_cache[cache_key] = self._precalculate_skill_values(num_enemies, as_mult, buffs)
+            return precalc_cache[cache_key]
+
         # Precalculate skill values with current attack speed and buffs
-        skill_values = self._precalculate_skill_values(num_enemies, current_attack_speed_mult, current_active_buffs)
+        skill_values = get_cached_skill_values(current_attack_speed_mult, current_active_buffs)
 
         if not skill_values:
             return 0.0, 0.0, 0.0, 0.0, 0.0, fight_log
@@ -2719,7 +3460,7 @@ class DPSCalculator:
             # Recalculate if buffs changed
             if buffs_changed:
                 current_attack_speed_mult = self.calculate_attack_speed_mult(current_active_buffs)
-                skill_values = self._precalculate_skill_values(num_enemies, current_attack_speed_mult, current_active_buffs)
+                skill_values = get_cached_skill_values(current_attack_speed_mult, current_active_buffs)
 
             # Find best available damage action
             best_action = None
@@ -2749,7 +3490,8 @@ class DPSCalculator:
                 buff_value = self._calculate_buff_dps_value(
                     buff_name, buff_skill, remaining_fight_time,
                     current_active_buffs, current_attack_speed_mult,
-                    num_enemies, is_boss
+                    num_enemies, is_boss,
+                    skill_values_getter=get_cached_skill_values
                 )
                 if buff_value > best_buff_value:
                     best_buff_value = buff_value
@@ -2758,7 +3500,7 @@ class DPSCalculator:
             # Decide: cast buff or use damage skill
             cast_buff = best_buff_name is not None and best_buff_value > best_dps_value
 
-            if cast_buff:
+            if cast_buff and best_buff_name is not None:
                 # Cast the buff
                 buff_skill = available_buffs[best_buff_name]
                 cast_time = self.get_cast_time(1.0, False, current_attack_speed_mult)
@@ -2769,20 +3511,23 @@ class DPSCalculator:
                 else:
                     time_used = cast_time
                     # Activate buff
-                    buff_timers[best_buff_name] = buff_skill.duration
+                    # Apply duration mastery bonus
+                    buff_duration = buff_skill.duration
+                    duration_bonus_pct = self.get_mastery_bonus(best_buff_name, "skill_duration")
+                    if duration_bonus_pct > 0:
+                        buff_duration = buff_duration * (1 + duration_bonus_pct)
+                    buff_timers[best_buff_name] = buff_duration
                     current_active_buffs.add(best_buff_name)
 
                     # Get effective cooldown (check for mastery reductions)
-                    mastery_cd_reduction = 0.0
-                    if best_buff_name == "sharp_eyes" and self.char.level >= 126:
-                        mastery_cd_reduction = 50.0
+                    mastery_cd_reduction = self.get_mastery_bonus(best_buff_name, "skill_cooldown_reduction") * 100
                     buff_cooldowns[best_buff_name] = self.char.get_effective_skill_cooldown(
                         buff_skill.cooldown, mastery_cd_reduction
                     )
 
                     # Recalculate attack speed and damage with new buff
                     current_attack_speed_mult = self.calculate_attack_speed_mult(current_active_buffs)
-                    skill_values = self._precalculate_skill_values(num_enemies, current_attack_speed_mult, current_active_buffs)
+                    skill_values = get_cached_skill_values(current_attack_speed_mult, current_active_buffs)
 
                 # Log the buff cast
                 if log_actions:
@@ -2896,12 +3641,12 @@ class DPSCalculator:
         total_mob_dps = 0.0
         total_boss_dps = 0.0
 
-        for skill_name in ["phoenix", "arrow_platter", "quiver_cartridge"]:
+        # Find all SUMMON type skills dynamically
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.SUMMON:
+                continue
             if not self.char.is_skill_unlocked(skill_name):
                 continue
-
-            skill = self._skills[skill_name]
-
             if skill.duration <= 0 or skill.attack_interval <= 0:
                 continue
 
@@ -2922,9 +3667,7 @@ class DPSCalculator:
             # Calculate uptime
             if skill.cooldown > 0:
                 cd = skill.cooldown
-                mastery_pct_reduction = 0.0
-                if skill_name == "phoenix" and self.char.level >= 104:
-                    mastery_pct_reduction = 50.0
+                mastery_pct_reduction = self.get_mastery_bonus(skill_name, "skill_cooldown_reduction") * 100
                 cd = self.char.get_effective_skill_cooldown(cd, mastery_pct_reduction)
                 uptime = calculate_buff_uptime(
                     cooldown=cd,
@@ -2934,11 +3677,16 @@ class DPSCalculator:
             else:
                 uptime = 1.0
 
-            # Attack interval (quiver scales with AS)
+            # Attack interval - apply mastery reduction and attack speed scaling
             interval = skill.attack_interval
-            if skill_name == "quiver_cartridge":
+            # Apply mastery interval reduction (negative values reduce interval)
+            interval_reduction = self.get_mastery_bonus(skill_name, "skill_attack_interval")
+            if interval_reduction != 0:
+                interval = max(1.0, interval + interval_reduction)  # Flat second reduction
+            # Some summons scale with attack speed (e.g., quiver_cartridge)
+            if skill.scales_with_attack_speed:
                 as_mult = min(attack_speed_mult, 2.0)
-                interval = skill.attack_interval / as_mult
+                interval = interval / as_mult
 
             attacks_per_second = 1 / interval
 
@@ -2982,11 +3730,12 @@ class DPSCalculator:
         total_boss_dps = 0.0
         cast_time = self.get_cast_time(1.0, True, attack_speed_mult)
 
-        for skill_name in ["final_attack", "flash_mirage"]:
+        # Find all PASSIVE_PROC type skills dynamically
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.PASSIVE_PROC:
+                continue
             if not self.char.is_skill_unlocked(skill_name):
                 continue
-
-            skill = self._skills[skill_name]
 
             # Calculate damage for each phase
             dmg_mob = self.calculate_hit_damage(
@@ -3002,28 +3751,44 @@ class DPSCalculator:
                 is_boss_phase=True,
             )
 
-            # Proc chance (may scale with AS)
-            proc_chance = skill.proc_chance
-            if skill.scales_with_attack_speed:
-                proc_chance = min(proc_chance * attack_speed_mult, proc_chance * 2)
-
-            # Account for internal cooldown
-            if skill.cooldown > 0:
-                mastery_pct_reduction = 0.0
-                if skill_name == "flash_mirage" and self.char.level >= 122:
-                    mastery_pct_reduction = 40.0
-                effective_cd = self.char.get_effective_skill_cooldown(skill.cooldown, mastery_pct_reduction)
-                procs_per_second = min(1 / cast_time * proc_chance, 1 / effective_cd)
-            else:
-                procs_per_second = 1 / cast_time * proc_chance
-
             # Calculate targets for each phase
             targets_mob = min(self.get_skill_targets(skill_name), num_enemies)
             targets_boss = 1
 
-            # Weight by phase duration
-            mob_dps = dmg_mob * targets_mob * procs_per_second * mob_time_fraction
-            boss_dps = dmg_boss * targets_boss * procs_per_second * (1 - mob_time_fraction)
+            # Check for marking-style procs (like Mark of Assassin)
+            if skill.attack_interval > 0:
+                # Apply mastery interval reduction
+                interval = skill.attack_interval
+                interval_reduction = self.get_mastery_bonus(skill_name, "skill_attack_interval")
+                if interval_reduction != 0:
+                    interval = max(1.0, interval + interval_reduction)  # Flat second reduction
+
+                # Marks don't stack - rate limited by marking interval
+                # Each mark = 1 hit on 1 target when consumed
+                marks_per_interval_mob = min(skill.base_targets, num_enemies)
+                procs_per_second_mob = marks_per_interval_mob / interval
+                procs_per_second_boss = 1 / interval  # Only 1 target for boss
+
+                # For marking procs, each proc is 1 hit - don't multiply by targets
+                mob_dps = dmg_mob * 1 * procs_per_second_mob * mob_time_fraction
+                boss_dps = dmg_boss * 1 * procs_per_second_boss * (1 - mob_time_fraction)
+            else:
+                # Standard proc calculation
+                proc_chance = skill.proc_chance
+                if skill.scales_with_attack_speed:
+                    proc_chance = min(proc_chance * attack_speed_mult, proc_chance * 2)
+
+                # Account for internal cooldown
+                if skill.cooldown > 0:
+                    mastery_pct_reduction = self.get_mastery_bonus(skill_name, "skill_cooldown_reduction") * 100
+                    effective_cd = self.char.get_effective_skill_cooldown(skill.cooldown, mastery_pct_reduction)
+                    procs_per_second = min(1 / cast_time * proc_chance, 1 / effective_cd)
+                else:
+                    procs_per_second = 1 / cast_time * proc_chance
+
+                # Standard procs can hit multiple targets
+                mob_dps = dmg_mob * targets_mob * procs_per_second * mob_time_fraction
+                boss_dps = dmg_boss * targets_boss * procs_per_second * (1 - mob_time_fraction)
 
             total_proc_dps += mob_dps + boss_dps
             total_mob_dps += mob_dps
@@ -3086,13 +3851,13 @@ class DPSCalculator:
             basic_dps = damage * hits * effective_targets * attacks_per_second
             skills_used.append(basic_skill_name)
 
-        # Active skills
+        # Active skills - find all ACTIVE type skills dynamically
         active_skill_time_used = 0
-        for skill_name in ["hurricane", "covering_fire"]:
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.ACTIVE:
+                continue
             if not self.char.is_skill_unlocked(skill_name):
                 continue
-
-            skill = self._skills[skill_name]
             hits = self.get_skill_hits(skill_name)
             effective_targets = self.get_effective_targets(skill_name, num_enemies, mob_time_fraction)
 
@@ -3149,12 +3914,12 @@ class DPSCalculator:
             basic_time_ratio = max(0, rotation_length - active_skill_time_used) / rotation_length
         basic_dps *= basic_time_ratio
 
-        # Summons
-        for skill_name in ["phoenix", "arrow_platter", "quiver_cartridge"]:
+        # Summons - find all SUMMON type skills dynamically
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.SUMMON:
+                continue
             if not self.char.is_skill_unlocked(skill_name):
                 continue
-
-            skill = self._skills[skill_name]
             damage = self.calculate_hit_damage(
                 self.get_skill_damage_pct(skill_name),
                 skill.damage_type,
@@ -3164,11 +3929,9 @@ class DPSCalculator:
             if skill.duration > 0 and skill.attack_interval > 0:
                 # Calculate uptime using unified module
                 if skill.cooldown > 0:
-                    # Phoenix cooldown reduction from mastery
+                    # Cooldown reduction from mastery
                     cd = skill.cooldown
-                    mastery_pct_reduction = 0.0
-                    if skill_name == "phoenix" and self.char.level >= 104:
-                        mastery_pct_reduction = 50.0  # 50% reduction from mastery
+                    mastery_pct_reduction = self.get_mastery_bonus(skill_name, "skill_cooldown_reduction") * 100
                     # Apply skill CD reduction from hat potential
                     cd = self.char.get_effective_skill_cooldown(cd, mastery_pct_reduction)
 
@@ -3181,50 +3944,68 @@ class DPSCalculator:
                 else:
                     uptime = 1.0
 
-                # Attack interval (may scale with AS for quiver)
+                # Attack interval (apply mastery reduction and AS scaling)
                 interval = skill.attack_interval
-                if skill_name == "quiver_cartridge":
-                    # Scales with AS up to 2x
+                interval_reduction = self.get_mastery_bonus(skill_name, "skill_attack_interval")
+                if interval_reduction != 0:
+                    interval = max(1.0, interval + interval_reduction)  # Flat second reduction
+                if skill.scales_with_attack_speed:
                     as_mult = min(attack_speed_mult, 2.0)
-                    interval = skill.attack_interval / as_mult
+                    interval = interval / as_mult
 
                 attacks_per_second = 1 / interval
                 effective_targets = self.get_effective_targets(skill_name, num_enemies, mob_time_fraction)
                 summon_dps += damage * effective_targets * attacks_per_second * uptime
                 skills_used.append(skill_name)
 
-        # Procs
-        for skill_name in ["final_attack", "flash_mirage"]:
+        # Procs - find all PASSIVE_PROC type skills dynamically
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.PASSIVE_PROC:
+                continue
             if not self.char.is_skill_unlocked(skill_name):
                 continue
-
-            skill = self._skills[skill_name]
             damage = self.calculate_hit_damage(
                 self.get_skill_damage_pct(skill_name),
                 skill.damage_type,
                 skill_name,
             )
-            effective_targets = self.get_effective_targets(skill_name, num_enemies, mob_time_fraction)
 
-            # Proc chance (may scale with AS)
-            proc_chance = skill.proc_chance
-            if skill.scales_with_attack_speed:
-                # Flash mirage proc chance scales with AS up to 2x
-                proc_chance = min(proc_chance * attack_speed_mult, proc_chance * 2)
+            # Check for marking-style procs (like Mark of Assassin)
+            if skill.attack_interval > 0:
+                # Apply mastery interval reduction
+                interval = skill.attack_interval
+                interval_reduction = self.get_mastery_bonus(skill_name, "skill_attack_interval")
+                if interval_reduction != 0:
+                    interval = max(1.0, interval + interval_reduction)  # Flat second reduction
 
-            # Account for internal cooldown
-            if skill.cooldown > 0:
-                # Can only proc once per cooldown
-                # Flash Mirage has 40% CD reduction from mastery at level 122+
-                mastery_pct_reduction = 0.0
-                if skill_name == "flash_mirage" and self.char.level >= 122:
-                    mastery_pct_reduction = 40.0
-                effective_cd = self.char.get_effective_skill_cooldown(skill.cooldown, mastery_pct_reduction)
-                procs_per_second = min(1 / cast_time * proc_chance, 1 / effective_cd)
+                # Marks don't stack - rate limited by marking interval
+                # Each mark = 1 hit on 1 target when consumed
+                marks_per_interval_mob = min(skill.base_targets, num_enemies)
+                procs_per_second_mob = marks_per_interval_mob / interval
+                procs_per_second_boss = 1 / interval  # Only 1 target for boss
+
+                # Weighted DPS across phases - don't multiply by targets (already in proc rate)
+                mob_dps = damage * 1 * procs_per_second_mob * mob_time_fraction
+                boss_dps = damage * 1 * procs_per_second_boss * (1 - mob_time_fraction)
+                proc_dps += mob_dps + boss_dps
             else:
-                procs_per_second = 1 / cast_time * proc_chance
+                # Standard proc calculation
+                effective_targets = self.get_effective_targets(skill_name, num_enemies, mob_time_fraction)
 
-            proc_dps += damage * effective_targets * procs_per_second
+                proc_chance = skill.proc_chance
+                if skill.scales_with_attack_speed:
+                    proc_chance = min(proc_chance * attack_speed_mult, proc_chance * 2)
+
+                # Account for internal cooldown
+                if skill.cooldown > 0:
+                    mastery_pct_reduction = self.get_mastery_bonus(skill_name, "skill_cooldown_reduction") * 100
+                    effective_cd = self.char.get_effective_skill_cooldown(skill.cooldown, mastery_pct_reduction)
+                    procs_per_second = min(1 / cast_time * proc_chance, 1 / effective_cd)
+                else:
+                    procs_per_second = 1 / cast_time * proc_chance
+
+                proc_dps += damage * effective_targets * procs_per_second
+
             skills_used.append(skill_name)
 
         total_dps = basic_dps + active_dps + summon_dps + proc_dps
@@ -3334,10 +4115,11 @@ class DPSCalculator:
         skill_values = self._precalculate_skill_values(num_enemies, attack_speed_mult, None)
         skills_used = list(skill_values.keys())
 
-        # Add summons and procs to skills list
-        for skill_name in ["phoenix", "arrow_platter", "quiver_cartridge", "final_attack", "flash_mirage"]:
-            if self.char.is_skill_unlocked(skill_name) and skill_name not in skills_used:
-                skills_used.append(skill_name)
+        # Add summons and procs to skills list dynamically
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type in (SkillType.SUMMON, SkillType.PASSIVE_PROC):
+                if self.char.is_skill_unlocked(skill_name) and skill_name not in skills_used:
+                    skills_used.append(skill_name)
 
         return DPSResult(
             total_dps=weighted_total_dps,
@@ -3354,6 +4136,539 @@ class DPSCalculator:
             boss_phase_dps=total_boss_dps,
             fight_log=fight_log,
         )
+
+    def get_skill_damage_breakdown(
+        self,
+        fight_duration: float = 60.0,
+        num_enemies: int = 12,
+        mob_time_fraction: float = 0.6,
+    ) -> Dict[str, Dict]:
+        """
+        Calculate per-skill damage contribution breakdown.
+
+        This provides detailed information about how much damage each skill
+        contributes to total DPS, useful for visualizing skill importance
+        across different levels and mastery configurations.
+
+        The breakdown uses the fight simulation which tracks all player actions
+        (basic attacks, active skills, summon casts) in a fight log. Summons
+        like Phoenix and Arrow Platter appear in the log when cast, and their
+        total damage includes all attacks over their duration.
+
+        Procs (Final Attack, Flash Mirage) are calculated separately as they
+        trigger independently of player actions.
+
+        Args:
+            fight_duration: Total fight duration in seconds
+            num_enemies: Number of enemies during mob phase
+            mob_time_fraction: Fraction of fight spent on mobs (0.0-1.0)
+
+        Returns:
+            Dict mapping skill_name -> {
+                'display_name': str,
+                'total_damage': float,
+                'dps': float,
+                'pct_of_total': float,
+                'mob_damage': float,
+                'boss_damage': float,
+                'skill_type': str,  # 'basic', 'active', 'summon', 'proc'
+            }
+        """
+        # Calculate attack speed multiplier
+        skill_bonuses = self.get_all_skill_stat_bonuses()
+        attack_speed_pct = self.char.attack_speed_pct
+        for as_value in skill_bonuses.get("attack_speed", []):
+            attack_speed_pct += as_value
+        attack_speed_pct += self.get_global_stat("attack_speed")
+        attack_speed_mult = min(1 + attack_speed_pct / 100, 2.5)
+
+        breakdown = {}
+        total_damage = 0.0
+
+        # Run fight simulation to get player action damage with detailed log
+        # This includes basic attacks, active skills, AND summon casts (Phoenix, Arrow Platter)
+        # The summon damage in the log is the total damage over the summon's duration
+        _, basic_dmg, active_dmg, mob_dmg, boss_dmg, fight_log = self._simulate_fight(
+            fight_duration, num_enemies, mob_time_fraction, attack_speed_mult, log_actions=True
+        )
+
+        # Aggregate damage by skill from fight log
+        skill_damage = {}
+        skill_mob_damage = {}
+        skill_boss_damage = {}
+
+        if fight_log:
+            for entry in fight_log:
+                name = entry.skill_name
+                if name not in skill_damage:
+                    skill_damage[name] = 0.0
+                    skill_mob_damage[name] = 0.0
+                    skill_boss_damage[name] = 0.0
+                skill_damage[name] += entry.damage
+                if entry.phase == 'mob':
+                    skill_mob_damage[name] += entry.damage
+                else:
+                    skill_boss_damage[name] += entry.damage
+
+        # Add player action skills to breakdown (skip 0-damage entries like buffs)
+        for skill_name, dmg in skill_damage.items():
+            if dmg <= 0:
+                continue  # Skip buffs and other non-damage skills
+
+            skill = self._skills.get(skill_name)
+            if not skill:
+                continue
+
+            # Determine skill type based on skill definition
+            if skill.skill_type == SkillType.BASIC_ATTACK:
+                skill_type = 'basic'
+            elif skill.skill_type == SkillType.ACTIVE:
+                skill_type = 'active'
+            elif skill.skill_type == SkillType.SUMMON:
+                skill_type = 'summon'
+            else:
+                skill_type = 'other'
+
+            breakdown[skill_name] = {
+                'display_name': skill.name,
+                'total_damage': dmg,
+                'dps': dmg / fight_duration,
+                'pct_of_total': 0.0,  # Calculated after total is known
+                'mob_damage': skill_mob_damage.get(skill_name, 0.0),
+                'boss_damage': skill_boss_damage.get(skill_name, 0.0),
+                'skill_type': skill_type,
+            }
+            total_damage += dmg
+
+        # Add permanent summons (not in fight simulation) - find dynamically based on job class
+        # Permanent summons have infinite duration (duration > 0) and attack_interval > 0
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.SUMMON:
+                continue
+            if not self.char.is_skill_unlocked(skill_name):
+                continue
+            # Skip summons already in breakdown from fight simulation
+            if skill_name in breakdown:
+                continue
+            # Permanent summons have duration and attack_interval set
+            if not (skill.duration > 0 and skill.attack_interval > 0):
+                continue
+
+            dmg_mob = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=False,
+            )
+            dmg_boss = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=True,
+            )
+
+            # Attack interval scales with AS up to 2x
+            as_mult = min(attack_speed_mult, 2.0)
+            interval = skill.attack_interval / as_mult
+            attacks_per_second = 1 / interval
+            targets_mob = min(self.get_skill_targets(skill_name), num_enemies)
+
+            # Calculate phase damage (permanent uptime)
+            mob_damage = dmg_mob * targets_mob * attacks_per_second * fight_duration * mob_time_fraction
+            boss_damage = dmg_boss * 1 * attacks_per_second * fight_duration * (1 - mob_time_fraction)
+            summon_dmg = mob_damage + boss_damage
+
+            breakdown[skill_name] = {
+                'display_name': skill.name,
+                'total_damage': summon_dmg,
+                'dps': summon_dmg / fight_duration,
+                'pct_of_total': 0.0,
+                'mob_damage': mob_damage,
+                'boss_damage': boss_damage,
+                'skill_type': 'summon',
+            }
+            total_damage += summon_dmg
+
+        # Calculate proc damage (procs run in parallel with player actions) - find dynamically
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.PASSIVE_PROC:
+                continue
+            if not self.char.is_skill_unlocked(skill_name):
+                continue
+
+            # Calculate proc's contribution
+            dmg_mob = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=False,
+            )
+            dmg_boss = self.calculate_hit_damage(
+                self.get_skill_damage_pct(skill_name),
+                skill.damage_type,
+                skill_name,
+                is_boss_phase=True,
+            )
+
+            targets_mob = min(self.get_skill_targets(skill_name), num_enemies)
+            targets_boss = 1
+
+            # Check for marking-style procs (like Mark of Assassin)
+            # attack_interval > 0 means marks are applied at fixed intervals, not per attack
+            if skill.attack_interval > 0:
+                # Apply mastery interval reduction
+                interval = skill.attack_interval
+                interval_reduction = self.get_mastery_bonus(skill_name, "skill_attack_interval")
+                if interval_reduction != 0:
+                    interval = max(1.0, interval + interval_reduction)  # Flat second reduction (min 1s)
+
+                # Marks don't stack - can only consume marks as fast as they're applied
+                # Each mark = 1 hit on 1 target when consumed
+                # Mob phase: mark up to (base_targets) enemies per interval
+                marks_per_interval_mob = min(skill.base_targets, num_enemies)
+                procs_per_second_mob = marks_per_interval_mob / interval
+
+                # Boss phase: only 1 target, so only 1 mark per interval
+                procs_per_second_boss = 1 / interval
+
+                # For marking procs, each proc is 1 hit - don't multiply by targets again
+                # (the proc rate already accounts for number of marks/targets)
+                mob_damage = dmg_mob * 1 * procs_per_second_mob * fight_duration * mob_time_fraction
+                boss_damage = dmg_boss * 1 * procs_per_second_boss * fight_duration * (1 - mob_time_fraction)
+            else:
+                # Standard proc calculation based on attack rate
+                ba_name = self.char.get_active_basic_attack()
+                if ba_name:
+                    cast_time = self.get_cast_time(1.0, True, attack_speed_mult)
+                    attacks_per_second = 1 / cast_time
+                else:
+                    attacks_per_second = 2.0
+
+                proc_chance = skill.proc_chance
+                if skill.scales_with_attack_speed:
+                    proc_chance = min(proc_chance * attack_speed_mult, proc_chance * 2)
+
+                # Effective procs per second (account for ICD if present)
+                if skill.cooldown > 0:
+                    # Has internal cooldown - max procs limited by ICD
+                    mastery_cd_reduction_pct = self.get_mastery_bonus(skill_name, "skill_cooldown_reduction")
+                    effective_cd = skill.cooldown * (1 - mastery_cd_reduction_pct)
+                    procs_per_second = min(attacks_per_second * proc_chance, 1 / effective_cd)
+                else:
+                    procs_per_second = attacks_per_second * proc_chance
+
+                # Standard procs hit multiple targets
+                mob_damage = dmg_mob * targets_mob * procs_per_second * fight_duration * mob_time_fraction
+                boss_damage = dmg_boss * targets_boss * procs_per_second * fight_duration * (1 - mob_time_fraction)
+            proc_dmg = mob_damage + boss_damage
+
+            breakdown[skill_name] = {
+                'display_name': skill.name,
+                'total_damage': proc_dmg,
+                'dps': proc_dmg / fight_duration,
+                'pct_of_total': 0.0,
+                'mob_damage': mob_damage,
+                'boss_damage': boss_damage,
+                'skill_type': 'proc',
+            }
+            total_damage += proc_dmg
+
+        # Calculate percentages
+        if total_damage > 0:
+            for skill_name in breakdown:
+                breakdown[skill_name]['pct_of_total'] = (
+                    breakdown[skill_name]['total_damage'] / total_damage * 100
+                )
+
+        return breakdown
+
+    def get_skill_damage_breakdown_with_cache(
+        self,
+        fight_duration: float = 60.0,
+        num_enemies: int = 12,
+        mob_time_fraction: float = 0.6,
+    ) -> Tuple[Dict[str, Dict], CachedRotationResult]:
+        """
+        Calculate skill damage breakdown and return both the breakdown and a cache
+        object for fast recalculation with Tier 1/2 stat changes.
+
+        Returns:
+            Tuple of (breakdown dict, CachedRotationResult)
+        """
+        breakdown = self.get_skill_damage_breakdown(
+            fight_duration, num_enemies, mob_time_fraction
+        )
+
+        # Calculate baseline multipliers for Tier 1/2 fast recalculation
+        # These are the current character's multipliers that were used in the simulation
+        baseline_universal_mult = self._calculate_baseline_universal_mult()
+        baseline_normal_mult = 1 + self.char.normal_damage_pct / 100
+        baseline_boss_mult = 1 + self.char.boss_damage_pct / 100
+
+        # Build per-skill mob/boss DPS breakdown
+        skill_mob_dps = {}
+        skill_boss_dps = {}
+        total_dps = 0.0
+
+        for skill_name, info in breakdown.items():
+            skill_mob_dps[skill_name] = info['mob_damage'] / fight_duration
+            skill_boss_dps[skill_name] = info['boss_damage'] / fight_duration
+            total_dps += info['dps']
+
+        # Create rotation key for cache invalidation
+        # This captures all Tier 3 stats that affect rotation
+        rotation_key = (
+            self.char.level,
+            self.char.all_skills_bonus,
+            self.char.skill_1st_bonus,
+            self.char.skill_2nd_bonus,
+            self.char.skill_3rd_bonus,
+            self.char.skill_4th_bonus,
+            self.char.attack_speed_pct,
+        )
+
+        cached = CachedRotationResult(
+            total_dps=total_dps,
+            skill_mob_dps=skill_mob_dps,
+            skill_boss_dps=skill_boss_dps,
+            baseline_universal_mult=baseline_universal_mult,
+            baseline_normal_mult=baseline_normal_mult,
+            baseline_boss_mult=baseline_boss_mult,
+            rotation_key=rotation_key,
+        )
+
+        return breakdown, cached
+
+    def _calculate_baseline_universal_mult(self) -> float:
+        """
+        Calculate the combined universal multiplier from Tier 1 stats.
+
+        This is the product of all multipliers that scale ALL damage identically:
+        main_stat × damage% × crit_expected × FD × def_pen
+
+        Used for fast Tier 1 recalculation: new_dps = cached_dps × (new_mult / old_mult)
+        """
+        # Main stat multiplier
+        base_main_stat = self.char.main_stat_flat + self.get_global_stat("main_stat_flat")
+        total_main_stat = base_main_stat * (1 + (self.char.main_stat_pct + self.get_total_stat_bonus("main_stat_pct")) / 100)
+        total_secondary_stat = self.char.secondary_stat_flat * (1 + self.char.secondary_stat_pct / 100)
+        main_stat_mult = 1 + (total_main_stat / 10000) + (total_secondary_stat / 40000)
+
+        # Damage %
+        damage_mult = 1 + (self.char.damage_pct + self.get_total_stat_bonus("damage_pct")) / 100
+
+        # Crit expected value multiplier
+        crit_rate_bonus = self.get_total_stat_bonus("crit_rate")
+        crit_rate = min((self.char.crit_rate + crit_rate_bonus) / 100, 1.0)
+
+        # Concentration crit damage (passive buff, ~100% uptime)
+        conc_per_stack = self.get_skill_bonus_value("concentration", "crit_damage")
+        crit_dmg_bonus = conc_per_stack * 7
+
+        crit_damage = self.char.crit_damage + crit_dmg_bonus
+        crit_mult = 1 + crit_rate * (crit_damage / 100)
+
+        # Defense penetration
+        def_pen = self.char.defense_pen
+        def_pen_decimal = min(def_pen / 100, 1.0)
+        def_pen_mult = 1 / (1 + self.enemy_def * (1 - def_pen_decimal))
+
+        # Note: We don't include FD here because it varies by skill
+        # The "universal" part is: main_stat × damage × crit × def_pen
+        return main_stat_mult * damage_mult * crit_mult * def_pen_mult
+
+    def recalculate_dps_tier1(
+        self,
+        cached: CachedRotationResult,
+        new_main_stat_flat: Optional[float] = None,
+        new_main_stat_pct: Optional[float] = None,
+        new_damage_pct: Optional[float] = None,
+        new_crit_rate: Optional[float] = None,
+        new_crit_damage: Optional[float] = None,
+        new_defense_pen: Optional[float] = None,
+    ) -> float:
+        """
+        Fast Tier 1 recalculation: scale cached DPS by ratio of universal multipliers.
+
+        This is O(1) - just a ratio calculation, no simulation needed.
+        Use when ONLY Tier 1 stats change (main_stat, damage%, crit, def_pen).
+
+        Args:
+            cached: CachedRotationResult from previous simulation
+            new_*: New stat values. If None, uses current character value.
+
+        Returns:
+            Estimated new total DPS
+        """
+        # Get values (use passed value or fall back to current character)
+        main_stat_flat = new_main_stat_flat if new_main_stat_flat is not None else self.char.main_stat_flat
+        main_stat_pct = new_main_stat_pct if new_main_stat_pct is not None else self.char.main_stat_pct
+        damage_pct = new_damage_pct if new_damage_pct is not None else self.char.damage_pct
+        crit_rate = new_crit_rate if new_crit_rate is not None else self.char.crit_rate
+        crit_damage = new_crit_damage if new_crit_damage is not None else self.char.crit_damage
+        defense_pen = new_defense_pen if new_defense_pen is not None else self.char.defense_pen
+
+        # Calculate new universal multiplier
+        base_main_stat = main_stat_flat + self.get_global_stat("main_stat_flat")
+        total_main_stat = base_main_stat * (1 + (main_stat_pct + self.get_total_stat_bonus("main_stat_pct")) / 100)
+        total_secondary_stat = self.char.secondary_stat_flat * (1 + self.char.secondary_stat_pct / 100)
+        new_main_stat_mult = 1 + (total_main_stat / 10000) + (total_secondary_stat / 40000)
+
+        new_damage_mult = 1 + (damage_pct + self.get_total_stat_bonus("damage_pct")) / 100
+
+        crit_rate_bonus = self.get_total_stat_bonus("crit_rate")
+        new_crit_rate_capped = min((crit_rate + crit_rate_bonus) / 100, 1.0)
+        conc_per_stack = self.get_skill_bonus_value("concentration", "crit_damage")
+        crit_dmg_bonus = conc_per_stack * 7
+        new_crit_mult = 1 + new_crit_rate_capped * ((crit_damage + crit_dmg_bonus) / 100)
+
+        def_pen_decimal = min(defense_pen / 100, 1.0)
+        new_def_pen_mult = 1 / (1 + self.enemy_def * (1 - def_pen_decimal))
+
+        new_universal_mult = new_main_stat_mult * new_damage_mult * new_crit_mult * new_def_pen_mult
+
+        # Scale by ratio
+        ratio = new_universal_mult / cached.baseline_universal_mult
+        return cached.total_dps * ratio
+
+    def recalculate_dps_tier2(
+        self,
+        cached: CachedRotationResult,
+        new_normal_damage_pct: Optional[float] = None,
+        new_boss_damage_pct: Optional[float] = None,
+    ) -> float:
+        """
+        Tier 2 recalculation: adjust phase weighting using cached per-skill breakdown.
+
+        This is O(n) where n = number of skills - iterates through skill breakdown
+        but doesn't run simulation. Use when boss_damage% or normal_damage% changes.
+
+        Note: This is an approximation because skill-specific boss/normal damage
+        masteries are baked into the cached mob/boss damage. For exact results
+        when skill levels change, use full simulation.
+
+        Args:
+            cached: CachedRotationResult from previous simulation
+            new_normal_damage_pct: New normal monster damage %. If None, uses current.
+            new_boss_damage_pct: New boss damage %. If None, uses current.
+
+        Returns:
+            Estimated new total DPS
+        """
+        new_normal = new_normal_damage_pct if new_normal_damage_pct is not None else self.char.normal_damage_pct
+        new_boss = new_boss_damage_pct if new_boss_damage_pct is not None else self.char.boss_damage_pct
+
+        new_normal_mult = 1 + new_normal / 100
+        new_boss_mult = 1 + new_boss / 100
+
+        total_dps = 0.0
+        for skill_name in cached.skill_mob_dps:
+            # Remove old phase multipliers and apply new ones
+            # mob_dps was calculated with baseline_normal_mult, boss_dps with baseline_boss_mult
+            if cached.baseline_normal_mult > 0:
+                adjusted_mob_dps = cached.skill_mob_dps[skill_name] / cached.baseline_normal_mult * new_normal_mult
+            else:
+                adjusted_mob_dps = cached.skill_mob_dps[skill_name]
+
+            if cached.baseline_boss_mult > 0:
+                adjusted_boss_dps = cached.skill_boss_dps[skill_name] / cached.baseline_boss_mult * new_boss_mult
+            else:
+                adjusted_boss_dps = cached.skill_boss_dps[skill_name]
+
+            total_dps += adjusted_mob_dps + adjusted_boss_dps
+
+        return total_dps
+
+    def get_active_passive_effects(self) -> Dict[str, List[Dict]]:
+        """
+        Get all active passive effects that modify other skills.
+
+        Returns:
+            Dict mapping target_skill_name -> [
+                {
+                    'source': str (skill providing the bonus),
+                    'effect_type': str (e.g., 'final_damage', 'targets'),
+                    'value': float (the bonus value),
+                },
+                ...
+            ]
+        """
+        effects = {}
+
+        # Check SKILL_ENHANCER skills (like Maple Hero)
+        for skill_name, skill in self._skills.items():
+            if skill.skill_type != SkillType.SKILL_ENHANCER:
+                continue
+            if not self.char.is_skill_unlocked(skill_name):
+                continue
+            if not skill.skill_bonuses:
+                continue
+
+            level = self.char.get_effective_skill_level(skill_name)
+
+            for target_skill, (base, per_level) in skill.skill_bonuses.items():
+                # Check if target skill exists
+                if target_skill not in self._skills:
+                    continue
+
+                value = int(base + per_level * level)
+
+                if target_skill not in effects:
+                    effects[target_skill] = []
+
+                effects[target_skill].append({
+                    'source': skill.name,
+                    'effect_type': 'final_damage',
+                    'value': value,
+                })
+
+        # Check mastery bonuses
+        for target_skill in self._skills:
+            # Skill damage % bonuses from masteries
+            skill_dmg = self.get_mastery_bonus(target_skill, "skill_damage_pct")
+            if skill_dmg > 0:
+                if target_skill not in effects:
+                    effects[target_skill] = []
+                effects[target_skill].append({
+                    'source': 'Mastery',
+                    'effect_type': 'skill_damage',
+                    'value': skill_dmg,
+                })
+
+            # Boss damage bonuses from masteries
+            boss_dmg = self.get_mastery_bonus(target_skill, "skill_boss_damage")
+            if boss_dmg > 0:
+                if target_skill not in effects:
+                    effects[target_skill] = []
+                effects[target_skill].append({
+                    'source': 'Mastery',
+                    'effect_type': 'boss_damage',
+                    'value': boss_dmg,
+                })
+
+            # Normal monster damage bonuses from masteries
+            normal_dmg = self.get_mastery_bonus(target_skill, "skill_normal_monster_damage")
+            if normal_dmg > 0:
+                if target_skill not in effects:
+                    effects[target_skill] = []
+                effects[target_skill].append({
+                    'source': 'Mastery',
+                    'effect_type': 'normal_monster_damage',
+                    'value': normal_dmg,
+                })
+
+            # Target bonuses from masteries
+            targets = self.get_mastery_bonus(target_skill, "skill_targets")
+            if targets > 0:
+                if target_skill not in effects:
+                    effects[target_skill] = []
+                effects[target_skill].append({
+                    'source': 'Mastery',
+                    'effect_type': 'targets',
+                    'value': targets,
+                })
+
+        return effects
 
 
 # =============================================================================

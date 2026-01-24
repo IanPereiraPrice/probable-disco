@@ -133,15 +133,17 @@ def load_saved_configs():
                     tier_str = row['tier']
 
                     # Map stat type
+                    # Note: Crit Damage is NOT available as an ability stat
                     stat_map = {
                         'damage': HeroPowerStatType.DAMAGE,
                         'boss_damage': HeroPowerStatType.BOSS_DAMAGE,
-                        'crit_damage': HeroPowerStatType.CRIT_DAMAGE,
+                        'normal_damage': HeroPowerStatType.NORMAL_DAMAGE,
                         'def_pen': HeroPowerStatType.DEF_PEN,
-                        'main_stat': HeroPowerStatType.MAIN_STAT,
-                        'attack_pct': HeroPowerStatType.ATTACK_PCT,
+                        'main_stat_flat': HeroPowerStatType.MAIN_STAT_FLAT,
+                        'attack_speed': HeroPowerStatType.ATTACK_SPEED,
                         'min_dmg_mult': HeroPowerStatType.MIN_DMG_MULT,
                         'max_dmg_mult': HeroPowerStatType.MAX_DMG_MULT,
+                        'crit_rate': HeroPowerStatType.CRIT_RATE,
                     }
                     stat_type = stat_map.get(stat_type_str, HeroPowerStatType.DAMAGE)
 
@@ -325,22 +327,25 @@ def analyze_stat_sources():
         print(f"    {key}: {value}")
 
     # Get PASSIVE_STAT skill contributions
+    # Uses skill_bonuses dict format: {stat_name: (base, per_level)}
     passive_stats = dict(mastery_stats)  # Copy mastery stats
     print(f"\n  From PASSIVE_STAT skills (+{all_skills_bonus} All Skills):")
     for skill_name, skill in BOWMASTER_SKILLS.items():
-        if skill.skill_type == SkillType.PASSIVE_STAT:
+        if skill.skill_type == SkillType.PASSIVE_STAT and skill.skill_bonuses:
             if character_level >= skill.unlock_level:
                 effective_level = 1 + all_skills_bonus
-                value = skill.base_stat_value + skill.stat_per_level * (effective_level - 1)
-                stat_key = skill.stat_type
 
-                # Aggregate into passive_stats
-                if stat_key in passive_stats:
-                    passive_stats[stat_key] += value
-                else:
-                    passive_stats[stat_key] = value
+                for stat_key, (base, per_level) in skill.skill_bonuses.items():
+                    # Formula: floor((base + per_level * level) * 10) / 10
+                    value = int((base + per_level * effective_level) * 10) / 10
 
-                print(f"    {skill_name}: +{value:.1f}% {stat_key}")
+                    # Aggregate into passive_stats
+                    if stat_key in passive_stats:
+                        passive_stats[stat_key] += value
+                    else:
+                        passive_stats[stat_key] = value
+
+                    print(f"    {skill_name}: +{value:.1f}% {stat_key}")
     sources["passives"] = passive_stats
 
     # 8. MAPLE RANK

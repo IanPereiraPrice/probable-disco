@@ -1,3 +1,136 @@
+# Skills System Refactor - Handoff Document
+
+## Latest Work: Passive Skill Stats Unification
+
+### Overview
+
+Refactored PASSIVE_STAT skills to use a unified `skill_bonuses` dict format instead of the legacy `stat_type`, `base_stat_value`, `stat_per_level` fields. Added phase-aware stat collection and proper handling of special stats (attack_speed, defense_pen, final_damage).
+
+### What Was Accomplished
+
+#### 1. Unified skill_bonuses Format
+
+All PASSIVE_STAT skills now use:
+```python
+skill_bonuses: Dict[str, Tuple[float, float]] = {
+    "stat_name": (base_value, per_level_value),
+}
+```
+
+Formula: `int((base + per_level * level) * 10) / 10` (truncates to 1 decimal)
+
+Example skills converted:
+- `archer_mastery`: `{"attack_speed": (5.0, 0.0146)}`
+- `extreme_archery`: `{"final_damage": (15.0, 0.045)}`
+- `armor_break`: `{"defense_pen": (10.0, 0.030), "final_damage": (10.0, 0.030)}`
+- `marksmanship`: `{"attack_pct": (20.0, 0.060)}` with `scenario="boss"`
+
+#### 2. Phase-Aware Stat Collection
+
+Added `scenario` field to SkillData for skills that only apply in certain situations:
+- `scenario="all"` - Always applies (default)
+- `scenario="boss"` - Only during single-target/boss fights (e.g., marksmanship)
+- `scenario="mob"` - Only during multi-target/mob fights
+
+`get_all_skill_stat_bonuses(is_boss_phase)` method:
+- `is_boss_phase=None` → permanent stats only (for character sheet)
+- `is_boss_phase=True` → includes "all" + "boss" scenario skills
+- `is_boss_phase=False` → includes "all" + "mob" scenario skills
+
+#### 3. apply_passive_skill_stats() Method
+
+New method that collects both PASSIVE_STAT skill bonuses AND global mastery stats:
+- Applies additive stats directly to character fields
+- Returns special stats as source lists for proper formula calculation:
+  ```python
+  {
+      "attack_speed_sources": [("Passive Skills", value), ("Masteries", value)],
+      "def_pen_sources": [("Passive Skills", decimal_value), ...],
+      "final_damage_sources": [("Passive Skills", decimal_value), ...],
+  }
+  ```
+
+#### 4. Attack Speed Refactoring
+
+- Deleted `get_effective_attack_speed()` method
+- Refactored `get_cast_time()` to take `attack_speed_mult` as parameter
+- All callers now pass `attack_speed_mult` explicitly
+- DPS calculation methods collect attack speed at the start and pass it through
+
+#### 5. SKILL_ENHANCER Type
+
+Added new skill type for skills that enhance other skills:
+- `maple_hero`: Grants FD to specific summons (arrow_platter, phoenix, covering_fire)
+- `advanced_final_attack`: Grants FD to final_attack
+- `flash_mirage_2`: Grants FD and targets to flash_mirage
+- `enchanted_quiver`: Grants FD to quiver_cartridge
+
+Uses `skill_bonuses` dict where keys are target skill names:
+```python
+skill_bonuses={"arrow_platter": (25, 1.25), "phoenix": (30, 1.5), ...}
+```
+
+### Remaining Work (IN PROGRESS)
+
+#### 1. Update Hardcoded Skill Lookups
+
+`calculate_hit_damage()` in skills.py has been updated: ✅ DONE
+- extreme_archery, armor_break: moved to apply_passive_skill_stats() (not inline)
+- mortal_blow: uses get_skill_bonus_value("mortal_blow", "final_damage")
+- SKILL_ENHANCER lookups: use get_skill_bonus_value()
+- concentration: uses get_skill_bonus_value("concentration", "crit_damage")
+- armor_break def_pen: now in char.defense_pen via apply_passive_skill_stats()
+
+Deprecated fields `stat_type`, `base_stat_value`, `stat_per_level` have been removed from SkillData.
+
+Helper method `get_skill_bonus_value(skill_name, stat_name)` was added to extract values from skill_bonuses.
+
+#### 2. BUFF Skill Handling (NEW)
+
+BUFF skills (Nimble Feet, Sharp Eyes) now use `skill_bonuses` format:
+- `nimble_feet`: `{"attack_speed": (15.0, 0.0)}`
+- `sharp_eyes`: `{"crit_rate": (8.0, 0.032), "crit_damage": (40.0, 0.161)}`
+
+New features:
+- `enabled_buffs: Set[str]` field on CharacterState for stat matching mode
+- `get_buff_stat_bonuses(active_buffs)` method to get buff stat values
+- When `active_buffs=None`, uses `char.enabled_buffs` (for stat display)
+- When `active_buffs` is a set, uses that set (for DPS simulation)
+
+DPS simulation: Need to implement dynamic buff tracking that:
+1. Tracks buff timers (when buffs expire)
+2. Recalculates attack_speed_mult when buffs activate/expire
+3. Auto-optimally decides when to cast buffs
+
+#### 3. Update maple_app.py ✅ DONE
+
+`_get_passive_skill_stats()` updated to use `skill_bonuses` dict format.
+
+#### 4. Update dps_calculator.py (Streamlit) ✅ DONE
+
+Mortal blow lookup updated to use `skill_bonuses.get("final_damage", (0, 0))`.
+
+### Key Files Modified
+
+| File | Changes |
+|------|---------|
+| `skills.py` | Added `scenario` field, `skill_bonuses` to all PASSIVE_STAT skills, `apply_passive_skill_stats()`, deleted `get_effective_attack_speed()`, refactored `get_cast_time()` |
+| `test_skills.py` | Updated tests for new `attack_speed_mult` parameter, fixed job level ranges |
+| `streamlit_app/pages/8_Damage_Calculator.py` | Fixed missing `attack_speed_mult` in `_precalculate_skill_values()` call |
+
+### Testing
+
+All tests pass (32 passed, 2 skipped):
+```
+pytest test_skills.py -v
+```
+
+Skipped tests need investigation:
+- `test_maple_hero_applies_to_arrow_platter` - Damage calculation changed
+- `test_fourth_job_most_valuable` - Job value ordering changed with job_skill_points
+
+---
+
 # Stat Names Standardization Refactor - Handoff Document
 
 ## Overview

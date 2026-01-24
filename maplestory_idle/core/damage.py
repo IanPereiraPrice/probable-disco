@@ -371,13 +371,14 @@ def calculate_damage_simple(
     enemy_def: float,
     boss_damage: float = 0,
     damage_amp: float = 0,
+    total_str: float = 0,
 ) -> float:
     """
     Simplified damage calculation for quick comparisons.
 
     Args:
         base_atk: Total attack value
-        total_dex: Total DEX after percentage bonus
+        total_dex: Total DEX after percentage bonus (main stat, 1% per point)
         damage_percent: Total Damage %
         final_damage: Total Final Damage as decimal (already multiplicatively combined)
         crit_rate: Crit Rate % (e.g., 85.0)
@@ -386,12 +387,15 @@ def calculate_damage_simple(
         enemy_def: Enemy defense value
         boss_damage: Boss Damage % (default 0)
         damage_amp: Damage Amplification % (default 0)
+        total_str: Total STR after percentage bonus (secondary stat, 0.25% per point)
 
     Returns:
         Total damage as float
     """
-    # Stat multiplier
-    stat_mult = 1 + (total_dex * 0.01)
+    # Stat multiplier: main stat (1% per point) + secondary stat (0.25% per point)
+    # stat_dmg_pct = main_stat * 0.01 + secondary_stat * 0.0025
+    # multiplier = 1 + (stat_dmg_pct / 100)
+    stat_mult = 1 + (total_dex / 10000) + (total_str / 40000)
 
     # Damage multiplier
     damage_mult = 1 + (damage_percent / 100) + (boss_damage / 100)

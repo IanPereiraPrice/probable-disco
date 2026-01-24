@@ -82,12 +82,13 @@ SUB_SLOTS = 6
 TOTAL_EQUIP_SLOTS = 7
 
 # Inventory effect scaling per level by job advancement
-# From screenshots:
-# - Aspiring Warrior Lv 100: Attack 1703, Max HP 17034 → 17.03 attack/level, 170.34 HP/level
-# - Hero (1st) Lv 50: Attack 951, Max HP 9515 → 19.02 attack/level, 190.3 HP/level
-# - Hero (2nd) Lv 26: Main Stat 508 → ~19.5 main stat/level
-# - 3rd Job: ~1% Damage per level (7.8% at lv4 → 11.9% at lv8)
-# - 4th Job: ~2% Damage per level (10% at lv1 → 16% at higher levels)
+# From user data (Jan 2026):
+# - 2nd Job (Epic) Lv30: 601 main stat, Lv29: 577 (non-linear, need more data)
+# - 3rd Job (Unique): Starts at 5% damage at Lv1, 14% at Lv10 → linear: 5 + (L-1)*1.0
+# - 4th Job (Legendary): 10% at Lv1, 16% at Lv4, 18.1% at Lv5, 20.3% at Lv6 → QUADRATIC
+#
+# 4th Job Quadratic Formula: v = 0.025*L^2 + 1.875*L + 8.1
+#   Verified: L1=10.0, L4=16.0, L5=18.1, L6=20.25 (close to 20.3)
 INVENTORY_SCALING = {
     JobAdvancement.BASIC: {
         "attack_per_level": 17.03,  # 1703 / 100 from Aspiring Warrior screenshot
@@ -98,79 +99,134 @@ INVENTORY_SCALING = {
         "max_hp_per_level": 190.3,  # 9515 / 50 from screenshot
     },
     JobAdvancement.SECOND: {
-        # Hero (2nd) Lv 26: Main Stat 508, Max HP 12722 → 19.54/level, 489.3 HP/level
-        # Dark Knight (2nd) Lv 27: Main Stat 531, Max HP 13282 → 19.67/level, 491.9 HP/level
-        "main_stat_per_level": 19.6,  # Average of 19.54 and 19.67
-        "max_hp_per_level": 490.5,    # Average of 489.3 and 491.9
+        # Epic (2nd job): Lv30 = 601 main stat, Lv29 = 577
+        # Using lookup table until we have more data points
+        "type": "lookup",  # Flag to use lookup instead of formula
+        "max_hp_per_level": 490.5,
     },
     JobAdvancement.THIRD: {
-        # 3rd job gives Damage % as inventory effect
-        # ~1% per level, starting around 4.8% at level 1
-        "damage_base": 4.8,
+        # Unique (3rd job) gives Damage % as inventory effect
+        # Starts at 5% at Lv1, 14% at Lv10 → linear: 5 + (L-1)*1.0
+        "type": "linear",
+        "damage_base": 5.0,
         "damage_per_level": 1.0,
     },
     JobAdvancement.FOURTH: {
-        # 4th job gives Damage % as inventory effect
-        # ~2% per level, starting around 8% at level 1
-        "damage_base": 8.0,
-        "damage_per_level": 2.0,
+        # Legendary (4th job) gives Damage % as inventory effect
+        # L1=10%, L4=16%, L5=18.1%, L6=20.3% → QUADRATIC formula
+        # v = a*L^2 + b*L + c where a=0.025, b=1.875, c=8.1
+        "type": "quadratic",
+        "damage_a": 0.025,
+        "damage_b": 1.875,
+        "damage_c": 8.1,
     },
 }
 
-# On-equip scaling - CORRECTED based on user feedback
-# Bowmaster (4th): 20% at lv1, 26% at lv4 → base=20, per_level=2
+# 2nd Job (Epic) main stat lookup table - known values
+# Until we have more data points for a proper formula
+SECOND_JOB_MAIN_STAT_LOOKUP = {
+    29: 577,
+    30: 601,
+}
+
+
+def get_2nd_job_main_stat(level: int) -> float:
+    """Get 2nd job inventory main stat at given level.
+
+    Uses lookup table for known values.
+    For unknown levels, uses simple ratio scaling from L30=601.
+    This is a placeholder until we get more data points.
+
+    Known data: L29=577, L30=601
+    """
+    if level <= 0:
+        return 0.0
+
+    if level in SECOND_JOB_MAIN_STAT_LOOKUP:
+        return float(SECOND_JOB_MAIN_STAT_LOOKUP[level])
+
+    # For unknown levels, use ratio scaling from L30=601
+    # This assumes roughly linear scaling: value = (level/30) * 601
+    # This gives L1=20, L10=200, L20=401, L29=580, L30=601
+    # Note: This may not be accurate for lower levels
+    return (level / 30.0) * 601
+
+
+def get_4th_job_damage(level: int) -> float:
+    """Get 4th job inventory damage % at given level.
+
+    Uses quadratic formula: v = 0.025*L^2 + 1.875*L + 8.1
+    Verified against: L1=10%, L4=16%, L5=18.1%, L6=20.3%
+    """
+    a = 0.025
+    b = 1.875
+    c = 8.1
+    return a * level**2 + b * level + c
+
+# On-equip scaling - CORRECTED based on user data (Jan 2026)
+#
+# 3rd Job (Unique): All start at 10% at Lv1, 19% at Lv10 → per_level = 1.0
+#   EXCEPTIONS: DK starts at 12% (22% at L10), MM at 16% (30.4% at L10), F/P at 6% (11.4% at L10)
+#
+# 2nd Job (Epic): All start at 10% at Lv1, 19.5% at Lv30 → per_level = 0.328
+#   EXCEPTIONS: DK starts at 12% (23% at L30), MM at 16% (31.4% at L30), F/P at 6% (11.4% at L30)
+#
 # Format: {stat_type: {advancement: (base_at_lv1, per_level)}}
+# Note: Some companions have different on-equip types. The exceptions (DK/MM/FP)
+# are handled via COMPANION_ON_EQUIP_OVERRIDES below.
+
+# Default on-equip values (used for most companions)
 ON_EQUIP_VALUES = {
     OnEquipStatType.FLAT_ATTACK: {
         # Basic tier - flat attack
-        # Aspiring Warrior Lv 100: 654 on-equip attack → 6.54 per level
-        JobAdvancement.BASIC: (6.54, 6.54),  # 654 / 100 = 6.54 per level (base + per_level*99)
-        # 1st Job - flat attack (Hero 1st Lv 50: 1180 attack → 23.6 per level)
-        JobAdvancement.FIRST: (23.6, 23.6),  # 1180 / 50 = 23.6 per level
+        JobAdvancement.BASIC: (6.54, 6.54),   # 654 / 100 = 6.54 per level
+        # 1st Job - flat attack
+        JobAdvancement.FIRST: (23.6, 23.6),   # 1180 / 50 = 23.6 per level
     },
     OnEquipStatType.ATTACK_SPEED: {
-        JobAdvancement.SECOND: (10.0, 0.23),  # ~17% at lv30
-        JobAdvancement.THIRD: (14.0, 0.3),    # ~17% at lv10
-        JobAdvancement.FOURTH: (20.0, 2.0),   # 20% at lv1, 26% at lv4
+        # Default: 10% at L1, 19.5% at L30 (2nd), 19% at L10 (3rd)
+        JobAdvancement.SECOND: (10.0, 0.328),  # (19.5-10)/29 = 0.328
+        JobAdvancement.THIRD: (10.0, 1.0),     # (19-10)/9 = 1.0
+        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
     },
     OnEquipStatType.MIN_DMG_MULT: {
-        JobAdvancement.SECOND: (10.0, 0.23),
-        JobAdvancement.THIRD: (14.0, 0.4),
-        JobAdvancement.FOURTH: (20.0, 2.0),   # 24-26% range at low levels
+        JobAdvancement.SECOND: (10.0, 0.328),
+        JobAdvancement.THIRD: (10.0, 1.0),
+        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
     },
     OnEquipStatType.MAX_DMG_MULT: {
-        # Hero (2nd) Lv 26: 17.5% → base + 25*per_level = 17.5
-        # Assuming base ~5%, per_level = 0.5: 5 + 25*0.5 = 17.5 ✓
-        JobAdvancement.SECOND: (5.0, 0.5),
-        JobAdvancement.THIRD: (12.0, 0.35),
-        JobAdvancement.FOURTH: (18.0, 1.5),   # ~20% at lv1
+        JobAdvancement.SECOND: (10.0, 0.328),
+        JobAdvancement.THIRD: (10.0, 1.0),
+        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
     },
     OnEquipStatType.BOSS_DAMAGE: {
-        JobAdvancement.SECOND: (10.0, 0.23),
-        JobAdvancement.THIRD: (14.0, 0.4),
-        JobAdvancement.FOURTH: (20.0, 1.5),   # 22-24% range
+        JobAdvancement.SECOND: (10.0, 0.328),
+        JobAdvancement.THIRD: (10.0, 1.0),
+        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
     },
     OnEquipStatType.NORMAL_DAMAGE: {
-        JobAdvancement.SECOND: (10.0, 0.23),
-        JobAdvancement.THIRD: (15.0, 0.4),
-        JobAdvancement.FOURTH: (18.0, 1.5),   # ~20% at lv1
+        JobAdvancement.SECOND: (10.0, 0.328),
+        JobAdvancement.THIRD: (10.0, 1.0),
+        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
     },
     OnEquipStatType.CRIT_RATE: {
-        JobAdvancement.SECOND: (5.0, 0.1),
-        JobAdvancement.THIRD: (7.0, 0.2),
-        JobAdvancement.FOURTH: (11.0, 1.1),   # 13.2% at lv2
+        # F/P Arch Mage: 6% at L1, 11.4% at L29 (2nd), 11.4% at L10 (3rd)
+        # L29: 6 + 28*per = 11.4 → per = 0.193 ≈ 0.2
+        JobAdvancement.SECOND: (6.0, 0.2),     # 6 + 29*0.2 = 11.8% at L30
+        JobAdvancement.THIRD: (6.0, 0.6),      # (11.4-6)/9 = 0.6
+        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level (assumes same as others)
     },
     OnEquipStatType.STATUS_EFFECT_DMG: {
-        JobAdvancement.SECOND: (15.0, 0.5),
-        JobAdvancement.THIRD: (20.0, 0.6),    # 25.6% at lv10
-        JobAdvancement.FOURTH: (30.0, 2.0),   # 38.4% estimate
+        # Marksman: 16% at L1, 31.4% at L30 (2nd), 30.4% at L10 (3rd)
+        JobAdvancement.SECOND: (16.0, 0.531),  # (31.4-16)/29 = 0.531
+        JobAdvancement.THIRD: (16.0, 1.6),     # (30.4-16)/9 = 1.6
+        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level (assumes same as others)
     },
     OnEquipStatType.ACCURACY: {
-        # Dark Knight (2nd) Lv 27: 21 accuracy → base + 26*per_level = 21
-        # Assuming base ~8, per_level = 0.5: 8 + 26*0.5 = 21 ✓
-        JobAdvancement.SECOND: (8.0, 0.5),
-        JobAdvancement.THIRD: (12.0, 0.6),    # ~18 at lv10
-        JobAdvancement.FOURTH: (16.0, 1.0),
+        # Dark Knight: 12% at L1, 23% at L30 (2nd), 22% at L10 (3rd)
+        JobAdvancement.SECOND: (12.0, 0.379),  # (23-12)/29 = 0.379
+        JobAdvancement.THIRD: (12.0, 1.111),   # (22-12)/9 = 1.111
+        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level (assumes same as others)
     },
 }
 
@@ -251,19 +307,21 @@ class CompanionDefinition:
 
         elif self.advancement == JobAdvancement.SECOND:
             # 2nd job gives Main Stat + Max HP (confirmed from screenshots)
+            # Uses lookup table / extrapolation for main stat
             scaling = INVENTORY_SCALING[JobAdvancement.SECOND]
-            stats["main_stat_flat"] = level * scaling["main_stat_per_level"]
+            stats["main_stat_flat"] = get_2nd_job_main_stat(level)
             stats["max_hp"] = level * scaling["max_hp_per_level"]
 
         elif self.advancement == JobAdvancement.THIRD:
             # 3rd job gives generic Damage % (NOT their on-equip stat type)
+            # Linear formula: 5 + (L-1) * 1.0
             scaling = INVENTORY_SCALING[JobAdvancement.THIRD]
             stats["damage_pct"] = scaling["damage_base"] + (level - 1) * scaling["damage_per_level"]
 
         elif self.advancement == JobAdvancement.FOURTH:
             # 4th job gives generic Damage % (NOT their on-equip stat type)
-            scaling = INVENTORY_SCALING[JobAdvancement.FOURTH]
-            stats["damage_pct"] = scaling["damage_base"] + (level - 1) * scaling["damage_per_level"]
+            # Quadratic formula: 0.025*L^2 + 1.875*L + 8.1
+            stats["damage_pct"] = get_4th_job_damage(level)
 
         return stats
 

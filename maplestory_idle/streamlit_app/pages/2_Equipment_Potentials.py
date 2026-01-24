@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from core import ENEMY_DEFENSE_VALUES, get_enemy_defense
 from utils.data_manager import save_user_data, EQUIPMENT_SLOTS
 from utils.cube_analyzer import analyze_all_cube_priorities, format_stat_display, CubeRecommendation, get_distribution_data_for_slot
-from utils.dps_calculator import aggregate_stats, calculate_dps
+from utils.dps_calculator import aggregate_stats, calculate_dps, calculate_effective_attack_speed_with_sources
 from utils.distribution_chart import (
     create_dps_distribution_chart,
     create_expanded_distribution_chart,
@@ -325,8 +325,14 @@ def calculate_dps_from_stats(stats: Dict[str, Any], combat_mode: str = 'stage', 
     # Check if user has enabled realistic DPS calculation
     use_realistic_dps = getattr(data, 'use_realistic_dps', False)
     boss_importance = getattr(data, 'boss_importance', 70) / 100.0
+    boss_damage_multiplier = getattr(data, 'boss_damage_multiplier', 1.0)
 
-    return calculate_dps(stats, combat_mode, enemy_def, use_realistic_dps=use_realistic_dps, boss_importance=boss_importance)
+    return calculate_dps(
+        stats, combat_mode, enemy_def,
+        use_realistic_dps=use_realistic_dps,
+        boss_importance=boss_importance,
+        boss_damage_multiplier=boss_damage_multiplier,
+    )
 
 
 @st.cache_data(ttl=30)
@@ -388,19 +394,19 @@ with col_editor:
         st.session_state.selected_equip_slot = new_slot
         st.rerun()
 
-    # Potential type toggle
-    pot_type = st.radio("Type", ["Regular", "Bonus"], horizontal=True, key="pot_type_select")
+    # Potential type toggle - include slot in key so state resets when switching slots
+    pot_type = st.radio("Type", ["Regular", "Bonus"], horizontal=True, key=f"pot_type_select_{selected_slot}")
 
     prefix = "" if pot_type == "Regular" else "bonus_"
     tier_key = "tier" if pot_type == "Regular" else "bonus_tier"
     pity_key = "regular_pity" if pot_type == "Regular" else "bonus_pity"
 
-    # Tier + Pity row
+    # Tier + Pity row - include slot and prefix in keys for proper state management
     t_col, p_col = st.columns([2, 1])
     with t_col:
         current_tier_val = pots.get(tier_key, "Legendary")
         tier_idx = POTENTIAL_TIERS.index(current_tier_val) if current_tier_val in POTENTIAL_TIERS else 3
-        new_tier = st.selectbox("Tier", POTENTIAL_TIERS, index=tier_idx, key="tier_select")
+        new_tier = st.selectbox("Tier", POTENTIAL_TIERS, index=tier_idx, key=f"tier_select_{selected_slot}_{prefix}")
         if new_tier != pots.get(tier_key):
             pots[tier_key] = new_tier
             for i in range(1, 4):
@@ -412,7 +418,7 @@ with col_editor:
             st.rerun()
 
     with p_col:
-        new_pity = st.number_input("Pity", 0, 999, int(pots.get(pity_key, 0)), key="pity_input")
+        new_pity = st.number_input("Pity", 0, 999, int(pots.get(pity_key, 0)), key=f"pity_input_{selected_slot}_{prefix}")
         if new_pity != pots.get(pity_key):
             pots[pity_key] = new_pity
             auto_save()
@@ -423,7 +429,7 @@ with col_editor:
     stat_options = get_stat_options(selected_slot)
     current_tier = pots.get(tier_key, "Legendary")
 
-    # Lines 1-3
+    # Lines 1-3 - include slot in keys for proper state management when switching slots
     for i in range(1, 4):
         stat_key = f"{prefix}line{i}_stat"
         val_key = f"{prefix}line{i}_value"
@@ -439,7 +445,7 @@ with col_editor:
                 st.markdown(f"**L{i}** 🟡")
             else:
                 yg_label = "🟡" if is_yellow else "⚫"
-                if st.button(yg_label, key=f"yg_{prefix}{i}", help="Toggle Yellow/Grey"):
+                if st.button(yg_label, key=f"yg_{selected_slot}_{prefix}{i}", help="Toggle Yellow/Grey"):
                     pots[yellow_key] = not is_yellow
                     if current_stat:
                         pots[val_key] = get_stat_value_for_ui(current_stat, current_tier, not is_yellow, selected_slot)
@@ -455,7 +461,7 @@ with col_editor:
             new_stat = st.selectbox(
                 f"L{i}", stat_options, index=stat_idx,
                 format_func=format_stat_for_display,
-                key=f"stat_{prefix}{i}",
+                key=f"stat_{selected_slot}_{prefix}{i}",
                 label_visibility="collapsed"
             )
             if new_stat != current_stat:
@@ -543,7 +549,14 @@ bottom_left, bottom_right = st.columns(2)
 with bottom_left:
     st.markdown("<div class='section-header'>Total Stats from Potentials</div>", unsafe_allow_html=True)
 
+    # Get full stats with all sources (for attack speed diminishing returns)
+    full_stats = aggregate_stats_for_dps()
+    all_atk_spd_sources = full_stats.get('attack_speed_sources', [])
+
     totals = {}
+    # Track raw attack speed from potentials for display
+    attack_speed_pot_raw = 0.0
+
     for slot in EQUIPMENT_SLOTS:
         slot_pots = data.equipment_potentials.get(slot, {})
 
@@ -551,16 +564,41 @@ with bottom_left:
             stat = slot_pots.get(f"line{i}_stat", "")
             val = slot_pots.get(f"line{i}_value", 0)
             if stat and val > 0:
-                totals[stat] = totals.get(stat, 0) + val
+                if stat == "attack_speed":
+                    attack_speed_pot_raw += val
+                else:
+                    totals[stat] = totals.get(stat, 0) + val
 
         for i in range(1, 4):
             stat = slot_pots.get(f"bonus_line{i}_stat", "")
             val = slot_pots.get(f"bonus_line{i}_value", 0)
             if stat and val > 0:
-                totals[stat] = totals.get(stat, 0) + val
+                if stat == "attack_speed":
+                    attack_speed_pot_raw += val
+                else:
+                    totals[stat] = totals.get(stat, 0) + val
+
+    # Calculate effective attack speed contribution from potentials
+    # considering diminishing returns with ALL sources
+    if attack_speed_pot_raw > 0:
+        # Calculate total with all sources
+        total_with_all, breakdown = calculate_effective_attack_speed_with_sources(all_atk_spd_sources)
+
+        # Calculate total WITHOUT potential sources
+        non_pot_sources = [(name, val) for name, val in all_atk_spd_sources
+                          if '_pot' not in name and '_bonus_pot' not in name]
+        total_without_pots, _ = calculate_effective_attack_speed_with_sources(non_pot_sources)
+
+        # Effective contribution from potentials = difference
+        effective_pot_contrib = total_with_all - total_without_pots
+
+        totals["attack_speed"] = effective_pot_contrib
+        totals["_attack_speed_raw"] = attack_speed_pot_raw
 
     if totals:
-        sorted_stats = sorted(totals.items(), key=lambda x: x[1], reverse=True)
+        # Filter out internal keys and sort
+        display_totals = {k: v for k, v in totals.items() if not k.startswith('_')}
+        sorted_stats = sorted(display_totals.items(), key=lambda x: x[1], reverse=True)
 
         cols = st.columns(3)
         for idx, (stat_str, val) in enumerate(sorted_stats[:9]):
@@ -572,12 +610,22 @@ with bottom_left:
                 except ValueError:
                     val_str = f"{val:.1f}%"
 
-                st.markdown(f"""
-                <div class='stat-box'>
-                    <div class='stat-value'>{val_str}</div>
-                    <div class='stat-label'>{stat_name}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                # Special display for attack speed showing diminishing returns
+                if stat_str == "attack_speed" and "_attack_speed_raw" in totals:
+                    raw_val = totals["_attack_speed_raw"]
+                    st.markdown(f"""
+                    <div class='stat-box'>
+                        <div class='stat-value'>{val_str}</div>
+                        <div class='stat-label'>{stat_name} (raw: {raw_val:.1f}%)</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class='stat-box'>
+                        <div class='stat-value'>{val_str}</div>
+                        <div class='stat-label'>{stat_name}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
     else:
         st.info("No potentials configured yet.")
 
@@ -697,7 +745,12 @@ with bottom_right:
                     pity_html += f"├─ Pity: {rec.current_pity}/{rec.pity_threshold} [{pity_bar}] {pity_pct:.0f}%<br>"
                     if rec.cubes_to_tier_up < float('inf'):
                         pity_html += f"├─ Expected tier-up: ~{rec.cubes_to_tier_up:.0f} cubes<br>"
-                    if rec.tier_up_score_gain > 0:
+                    # Show tier-up value using P99 approach
+                    if rec.tier_up_dps_value > 0:
+                        pity_html += f"├─ Next tier P99: <span style='color:#66ff66'>+{rec.next_tier_p99_dps:.2f}%</span> DPS<br>"
+                        pity_html += f"└─ Tier-up value: <span style='color:#ffcc00'>+{rec.tier_up_dps_value:.2f}%</span> DPS"
+                    elif rec.tier_up_score_gain > 0:
+                        # Fallback to legacy score gain if P99 not available
                         pity_html += f"└─ Tier-up score boost: +{rec.tier_up_score_gain:.0f} pts potential"
                     pity_html += "</div>"
                     st.markdown(pity_html, unsafe_allow_html=True)
