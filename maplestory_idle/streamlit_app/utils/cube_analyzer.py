@@ -28,6 +28,7 @@ from cubes import (
     get_exact_roll_distribution,
     clear_exact_distribution_cache,
 )
+from job_classes import JobClass, get_main_stat_name
 
 # Equipment slots
 EQUIPMENT_SLOTS = [
@@ -76,6 +77,32 @@ TIER_NAME_TO_ENUM = {
     "Legendary": PotentialTier.LEGENDARY,
     "Mystic": PotentialTier.MYSTIC,
 }
+
+# Map job class main stat name to cubes.StatType for potential analysis
+MAIN_STAT_TO_CUBE_STAT = {
+    "dex": StatType.DEX_PCT,
+    "str": StatType.STR_PCT,
+    "int": StatType.INT_PCT,
+    "luk": StatType.LUK_PCT,
+}
+
+
+def get_main_stat_type_for_job(job_class_str: str) -> StatType:
+    """
+    Get the cubes.StatType for a job class's main stat.
+
+    Args:
+        job_class_str: Job class value string (e.g., 'night_lord', 'bowmaster')
+
+    Returns:
+        The StatType for the job's main stat percentage (e.g., StatType.LUK_PCT for Night Lord)
+    """
+    try:
+        job_class = JobClass(job_class_str)
+        main_stat_name = get_main_stat_name(job_class)  # e.g., "luk" for Night Lord
+        return MAIN_STAT_TO_CUBE_STAT.get(main_stat_name, StatType.DEX_PCT)
+    except (ValueError, KeyError):
+        return StatType.DEX_PCT  # Default fallback
 
 
 @dataclass
@@ -336,7 +363,7 @@ def analyze_all_cube_priorities(
     user_data,
     aggregate_stats_func: Callable[[], Dict[str, float]],
     calculate_dps_func: Callable[[Dict[str, float]], Dict[str, Any]],
-    main_stat_type: StatType = StatType.DEX_PCT,
+    main_stat_type: StatType = None,
 ) -> List[CubeRecommendation]:
     """
     Analyze cube priority for all equipment slots.
@@ -347,11 +374,16 @@ def analyze_all_cube_priorities(
         user_data: Streamlit UserData object
         aggregate_stats_func: Function to aggregate all stats (returns stats dict)
         calculate_dps_func: Function to calculate DPS from stats dict
-        main_stat_type: Player's main stat type
+        main_stat_type: Player's main stat type. If None, auto-detects from user_data.job_class
 
     Returns:
         List of CubeRecommendation sorted by efficiency (best first)
     """
+    # Auto-detect main stat from job class if not provided
+    if main_stat_type is None:
+        job_class_str = getattr(user_data, 'job_class', 'bowmaster')
+        main_stat_type = get_main_stat_type_for_job(job_class_str)
+
     results: List[CubeRecommendation] = []
 
     for slot in EQUIPMENT_SLOTS:
@@ -1029,13 +1061,18 @@ def analyze_all_tier_upgrades(
     user_data,
     aggregate_stats_func: Callable[[], Dict[str, float]],
     calculate_dps_func: Callable[[Dict[str, float]], Dict[str, Any]],
-    main_stat_type: StatType = StatType.DEX_PCT,
+    main_stat_type: StatType = None,
 ) -> List[TierUpgradeRecommendation]:
     """
     Analyze tier upgrade value for all equipment slots.
 
     Returns list of recommendations sorted by efficiency (best first).
     """
+    # Auto-detect main stat from job class if not provided
+    if main_stat_type is None:
+        job_class_str = getattr(user_data, 'job_class', 'bowmaster')
+        main_stat_type = get_main_stat_type_for_job(job_class_str)
+
     # Clear distribution cache at start of analysis
     # This ensures fresh calculations when equipment changes, while still
     # benefiting from cache reuse within this analysis run
@@ -1139,7 +1176,7 @@ def get_distribution_data_for_slot(
     is_bonus: bool,
     aggregate_stats_func: Callable[[], Dict[str, float]],
     calculate_dps_func: Callable[[Dict[str, float]], Dict[str, Any]],
-    main_stat_type: StatType = StatType.DEX_PCT,
+    main_stat_type: StatType = None,
     use_exact: bool = True,
 ) -> Optional[Dict]:
     """
@@ -1155,7 +1192,7 @@ def get_distribution_data_for_slot(
         is_bonus: True for bonus potential, False for regular
         aggregate_stats_func: Function to aggregate all stats
         calculate_dps_func: Function to calculate DPS from stats dict
-        main_stat_type: Player's main stat type
+        main_stat_type: Player's main stat type. If None, auto-detects from user_data.job_class
         use_exact: If True (default), use exact probability calculation.
                    If False, use Monte Carlo sampling.
 
@@ -1168,6 +1205,11 @@ def get_distribution_data_for_slot(
         - current_dps_gain: float (current roll's DPS gain)
         - is_exact: bool (True if using exact probabilities)
     """
+    # Auto-detect main stat from job class if not provided
+    if main_stat_type is None:
+        job_class_str = getattr(user_data, 'job_class', 'bowmaster')
+        main_stat_type = get_main_stat_type_for_job(job_class_str)
+
     slot_pots = user_data.equipment_potentials.get(slot, {})
 
     # Get tier

@@ -608,6 +608,28 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                 stats[main_pct_key] += value
             return
 
+        # Handle specific flat stats (dex_flat, str_flat, int_flat, luk_flat)
+        # Only contribute if they match the job's main or secondary stat type
+        specific_flat_stats = {'dex_flat', 'str_flat', 'int_flat', 'luk_flat'}
+        if stat_name in specific_flat_stats:
+            if stat_name == main_flat_key:
+                stats[main_flat_key] += value
+            elif stat_name == secondary_flat_key:
+                stats[secondary_flat_key] += value
+            # else: stat doesn't match job's main or secondary, ignore it
+            return
+
+        # Handle specific percentage stats (dex_pct, str_pct, int_pct, luk_pct)
+        # Only contribute if they match the job's main or secondary stat type
+        specific_pct_stats = {'dex_pct', 'str_pct', 'int_pct', 'luk_pct'}
+        if stat_name in specific_pct_stats:
+            if stat_name == main_pct_key:
+                stats[main_pct_key] += value
+            elif stat_name == secondary_pct_key:
+                stats[secondary_pct_key] += value
+            # else: stat doesn't match job's main or secondary, ignore it
+            return
+
         # Handle multiplicative stats (append to list)
         if stat_name == 'def_pen':
             # Determine priority based on source
