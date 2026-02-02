@@ -143,12 +143,44 @@ def get_enemy_defense(chapter: int) -> float:
 # Special case: World Boss doesn't follow linear formula
 WORLD_BOSS_DEFENSE = 6.527  # King Castle Golem - verified
 
-# Pre-computed common values for convenience
+# Pre-computed values for all chapters (using formula: chapter * 0.028)
+# Verified data points: Chapter 1=0, Chapter 14=0.388, Chapter 27=0.752
 ENEMY_DEFENSE_VALUES: Dict[str, float] = {
-    "Chapter 1": 0.0,      # Maple Island - no defense (verified)
-    "Chapter 14": 0.388,   # Aquarium (verified)
-    "Chapter 27": 0.752,   # Mu Lung (verified)
-    "World Boss": 6.527,   # King Castle Golem (verified)
+    "Chapter 1": 0.028,
+    "Chapter 2": 0.056,
+    "Chapter 3": 0.084,
+    "Chapter 4": 0.112,
+    "Chapter 5": 0.140,
+    "Chapter 6": 0.168,
+    "Chapter 7": 0.196,
+    "Chapter 8": 0.224,
+    "Chapter 9": 0.252,
+    "Chapter 10": 0.280,
+    "Chapter 11": 0.308,
+    "Chapter 12": 0.336,
+    "Chapter 13": 0.364,
+    "Chapter 14": 0.392,
+    "Chapter 15": 0.420,
+    "Chapter 16": 0.448,
+    "Chapter 17": 0.476,
+    "Chapter 18": 0.504,
+    "Chapter 19": 0.532,
+    "Chapter 20": 0.560,
+    "Chapter 21": 0.588,
+    "Chapter 22": 0.616,
+    "Chapter 23": 0.644,
+    "Chapter 24": 0.672,
+    "Chapter 25": 0.700,
+    "Chapter 26": 0.728,
+    "Chapter 27": 0.756,
+    "Chapter 28": 0.784,
+    "Chapter 29": 0.812,
+    "Chapter 30": 0.840,
+    "Chapter 31": 0.868,
+    "Chapter 32": 0.896,
+    "Chapter 33": 0.924,
+    "Chapter 34": 0.952,
+    "World Boss": 6.527,
 }
 
 

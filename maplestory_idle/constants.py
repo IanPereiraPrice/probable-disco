@@ -122,6 +122,9 @@ ENEMY_DEFENSE_VALUES: Dict[str, float] = {
     "Chapter 29": 0.81,
     "Chapter 30": 0.84,
     "Chapter 31": 0.87,
+    "Chapter 32": 0.90,
+    "Chapter 33": 0.93,
+    "Chapter 34": 0.96,
     # World Boss
     "World Boss": 6.527,  # Verified (King Castle Golem)
 }
