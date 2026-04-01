@@ -58,6 +58,7 @@ class EquipmentSlot(Enum):
     CAPE = "cape"
     RING = "ring"
     NECKLACE = "necklace"
+    EYE = "eye"
     FACE = "face"
 
 
@@ -190,7 +191,7 @@ ENEMY_DEFENSE_VALUES: Dict[str, float] = {
 
 EQUIPMENT_SLOTS: List[str] = [
     'hat', 'top', 'bottom', 'gloves', 'shoes', 'belt',
-    'shoulder', 'cape', 'ring', 'necklace', 'face'
+    'shoulder', 'cape', 'ring', 'necklace', 'eye', 'face'
 ]
 
 

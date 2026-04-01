@@ -42,6 +42,7 @@ class EquipmentSlot(Enum):
     CAPE = "cape"
     RING = "ring"
     NECKLACE = "necklace"
+    EYE = "eye"
     FACE = "face"
 
 
@@ -192,6 +193,9 @@ def rarity_from_string(s: str) -> Rarity:
 
 # Short names for compact UI (stat_name -> abbreviation)
 STAT_SHORT_NAMES: Dict[str, str] = {
+    # Job-agnostic main stat (maps to job's actual main stat at runtime)
+    "main_stat_pct": "Main%",
+    "main_stat_flat": "Main",
     # Main stats %
     "dex_pct": "DEX%",
     "str_pct": "STR%",
@@ -225,6 +229,9 @@ STAT_SHORT_NAMES: Dict[str, str] = {
 
 # Full display names
 STAT_DISPLAY_NAMES: Dict[str, str] = {
+    # Job-agnostic main stat (maps to job's actual main stat at runtime)
+    "main_stat_pct": "Main Stat %",
+    "main_stat_flat": "Main Stat (Flat)",
     # Main stats %
     "dex_pct": "DEX %",
     "str_pct": "STR %",

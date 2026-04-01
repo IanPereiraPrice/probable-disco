@@ -45,6 +45,7 @@ class EquipmentSlot(Enum):
     CAPE = "cape"
     RING = "ring"
     NECKLACE = "necklace"
+    EYE = "eye"
     FACE = "face"
 
 
@@ -65,6 +66,7 @@ SLOT_THIRD_MAIN_STAT: Dict[str, str] = {
     "cape": "evasion",
     "ring": "main_stat",
     "necklace": "main_stat",
+    "eye": "main_stat",
     "face": "main_stat",
 }
 
@@ -90,7 +92,7 @@ SPECIAL_SUB_STATS = [
 ]
 
 # Slots that can have Damage % as default (not just on special items)
-DAMAGE_PCT_SLOTS = ["ring", "necklace", "face"]
+DAMAGE_PCT_SLOTS = ["ring", "necklace", "eye", "face"]
 
 
 # =============================================================================
@@ -133,13 +135,13 @@ STARFORCE_TABLE: Dict[int, StarforceStage] = {
     # Decrease Zone (13-14): 12% decrease chance, no destruction
     13: StarforceStage(13, 0.32, 0.56, 0.12, 0.00, 2.25, 2.50, 0.25, 0.25, 13, 230000),
     14: StarforceStage(14, 0.31, 0.57, 0.12, 0.00, 2.50, 3.00, 0.25, 0.50, 14, 250000),
-    # Destruction Zone (15+): Destruction chance starts
-    15: StarforceStage(15, 0.30, 0.67, 0.00, 0.03, 3.00, 3.50, 0.50, 0.60, 15, 270000),
-    16: StarforceStage(16, 0.275, 0.53, 0.15, 0.045, 3.50, 4.00, 0.60, 0.70, 16, 300000),
-    17: StarforceStage(17, 0.25, 0.54, 0.15, 0.06, 4.00, 4.50, 0.70, 0.80, 17, 330000),
-    18: StarforceStage(18, 0.225, 0.55, 0.15, 0.075, 4.50, 5.00, 0.80, 0.90, 18, 360000),
-    19: StarforceStage(19, 0.20, 0.56, 0.15, 0.09, 5.00, 6.00, 0.90, 1.00, 19, 390000),
-    # High Stars (20+): Major amplify jumps, 10%+ destruction
+    # Safe Destruction Zone (15-19): No destruction, destroy% moved to decrease% (updated Feb 2026)
+    15: StarforceStage(15, 0.30, 0.67, 0.03, 0.00, 3.00, 3.50, 0.50, 0.60, 15, 270000),
+    16: StarforceStage(16, 0.275, 0.53, 0.195, 0.00, 3.50, 4.00, 0.60, 0.70, 16, 300000),
+    17: StarforceStage(17, 0.25, 0.54, 0.21, 0.00, 4.00, 4.50, 0.70, 0.80, 17, 330000),
+    18: StarforceStage(18, 0.225, 0.55, 0.225, 0.00, 4.50, 5.00, 0.80, 0.90, 18, 360000),
+    19: StarforceStage(19, 0.20, 0.56, 0.24, 0.00, 5.00, 6.00, 0.90, 1.00, 19, 390000),
+    # High Stars (20+): Major amplify jumps, destruction resumes at 11%
     20: StarforceStage(20, 0.14, 0.75, 0.00, 0.11, 6.00, 7.00, 1.00, 1.10, 20, 420000),
     21: StarforceStage(21, 0.10, 0.70, 0.10, 0.10, 7.00, 9.00, 1.10, 1.30, 25, 470000),
     22: StarforceStage(22, 0.08, 0.72, 0.10, 0.10, 9.00, 12.00, 1.30, 1.60, 30, 520000),
@@ -441,6 +443,7 @@ class EquipmentStats:
 DAMAGE_PCT_SLOTS = [
     EquipmentSlot.RING,
     EquipmentSlot.NECKLACE,
+    EquipmentSlot.EYE,
     EquipmentSlot.FACE,
     # Plus special helmets like Zakum
 ]
@@ -448,7 +451,7 @@ DAMAGE_PCT_SLOTS = [
 # Equipment slots to track (excludes weapon)
 EQUIPMENT_SLOTS = [
     "hat", "top", "bottom", "gloves", "shoes",
-    "belt", "shoulder", "cape", "ring", "necklace", "face"
+    "belt", "shoulder", "cape", "ring", "necklace", "eye", "face"
 ]
 
 

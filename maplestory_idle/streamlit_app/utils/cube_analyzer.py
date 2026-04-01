@@ -33,7 +33,7 @@ from job_classes import JobClass, get_main_stat_name
 # Equipment slots
 EQUIPMENT_SLOTS = [
     "hat", "top", "bottom", "gloves", "shoes",
-    "belt", "shoulder", "cape", "ring", "necklace", "face"
+    "belt", "shoulder", "cape", "ring", "necklace", "eye", "face"
 ]
 
 # Cost per cube in diamonds
@@ -153,7 +153,7 @@ class CubeRecommendation:
     priority_rank: int
 
     # Top stats to target
-    top_stats: List[tuple]  # [(stat_name, dps_gain, probability), ...]
+    top_stats: List[tuple]  # [(stat_name, dps_gain, probability, value_str, is_yellow), ...]
 
     # Useful line count
     yellow_count: int
@@ -381,12 +381,17 @@ def analyze_all_cube_priorities(
     """
     # Auto-detect main stat from job class if not provided
     if main_stat_type is None:
-        job_class_str = getattr(user_data, 'job_class', 'bowmaster')
-        main_stat_type = get_main_stat_type_for_job(job_class_str)
+        main_stat_type = get_main_stat_type_for_job(user_data.job_class)
+
+    # Full backup of all potentials — restored unconditionally at the end
+    # so that any exception or missed restore in per-call try/finally can't leave
+    # equipment_potentials in a temporarily-cleared state.
+    _potentials_backup = deepcopy(user_data.equipment_potentials)
 
     results: List[CubeRecommendation] = []
 
-    for slot in EQUIPMENT_SLOTS:
+    try:
+      for slot in EQUIPMENT_SLOTS:
         slot_pots = user_data.equipment_potentials.get(slot, {})
 
         # Capture original potentials ONCE before any testing
@@ -490,6 +495,10 @@ def analyze_all_cube_priorities(
         )
         if bon_result:
             results.append(bon_result)
+
+    finally:
+        # Always restore potentials — guards against any exception or missed per-call restore
+        user_data.equipment_potentials = _potentials_backup
 
     # Sort by efficiency score (higher = better to cube)
     results.sort(key=lambda x: x.efficiency_score, reverse=True)
@@ -1070,8 +1079,7 @@ def analyze_all_tier_upgrades(
     """
     # Auto-detect main stat from job class if not provided
     if main_stat_type is None:
-        job_class_str = getattr(user_data, 'job_class', 'bowmaster')
-        main_stat_type = get_main_stat_type_for_job(job_class_str)
+        main_stat_type = get_main_stat_type_for_job(user_data.job_class)
 
     # Clear distribution cache at start of analysis
     # This ensures fresh calculations when equipment changes, while still
@@ -1080,7 +1088,10 @@ def analyze_all_tier_upgrades(
 
     results: List[TierUpgradeRecommendation] = []
 
-    for slot in EQUIPMENT_SLOTS:
+    _potentials_backup = deepcopy(user_data.equipment_potentials)
+
+    try:
+      for slot in EQUIPMENT_SLOTS:
         slot_pots = user_data.equipment_potentials.get(slot, {})
 
         # Capture original potentials ONCE before any testing
@@ -1163,6 +1174,9 @@ def analyze_all_tier_upgrades(
         if bon_result:
             results.append(bon_result)
 
+    finally:
+        user_data.equipment_potentials = _potentials_backup
+
     # Sort by efficiency (higher = better to cube)
     # Items with negative efficiency (great rolls) will naturally sort lower
     results.sort(key=lambda x: x.efficiency, reverse=True)
@@ -1207,8 +1221,7 @@ def get_distribution_data_for_slot(
     """
     # Auto-detect main stat from job class if not provided
     if main_stat_type is None:
-        job_class_str = getattr(user_data, 'job_class', 'bowmaster')
-        main_stat_type = get_main_stat_type_for_job(job_class_str)
+        main_stat_type = get_main_stat_type_for_job(user_data.job_class)
 
     slot_pots = user_data.equipment_potentials.get(slot, {})
 

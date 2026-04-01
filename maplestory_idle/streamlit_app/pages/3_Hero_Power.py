@@ -73,8 +73,11 @@ def calc_dps_from_stats(stats: Dict[str, Any]) -> float:
         chapter_num = 27
     enemy_def = get_enemy_defense(chapter_num)
 
+    from job_classes import JobClass
+    job_class = JobClass(data.job_class)
     result = calculate_dps(
         stats, 'stage', enemy_def,
+        job_class=job_class,
         use_realistic_dps=getattr(data, 'use_realistic_dps', False),
         boss_importance=getattr(data, 'boss_importance', 70) / 100.0,
         boss_damage_multiplier=getattr(data, 'boss_damage_multiplier', 1.0),

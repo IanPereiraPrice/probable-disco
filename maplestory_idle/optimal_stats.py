@@ -146,8 +146,11 @@ SLOT_EXCLUSIVE_STATS = {
     'belt': {
         'buff_duration': {'mystic': 20.0, 'legendary': 12.0, 'unique': 8.0}
     },
-    'face': {
+    'eye': {
         'main_stat_per_level': {'mystic': 12, 'legendary': 8, 'unique': 5}
+    },
+    'face': {
+        'final_damage': {'mystic': 12.0, 'legendary': 8.0, 'unique': 5.0, 'epic': 3.0}
     },
 }
 
@@ -182,7 +185,7 @@ ARTIFACT_POTENTIAL_VALUES = {
 # =============================================================================
 
 EQUIPMENT_SLOTS = ['hat', 'top', 'bottom', 'gloves', 'shoes', 'belt',
-                   'shoulder', 'cape', 'ring', 'necklace', 'face']
+                   'shoulder', 'cape', 'ring', 'necklace', 'eye', 'face']
 
 
 # =============================================================================

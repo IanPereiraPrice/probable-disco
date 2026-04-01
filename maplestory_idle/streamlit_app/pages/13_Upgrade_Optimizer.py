@@ -103,9 +103,11 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     boss_importance = getattr(data, 'boss_importance', 70) / 100.0
     boss_damage_multiplier = getattr(data, 'boss_damage_multiplier', 1.0)
 
-    # book_of_ancient_stars=None means use value from stats (from user's artifact inventory)
+    from job_classes import JobClass
+    job_class = JobClass(data.job_class)
     return shared_calculate_dps(
         stats, combat_mode, enemy_def,
+        job_class=job_class,
         use_realistic_dps=use_realistic_dps,
         boss_importance=boss_importance,
         boss_damage_multiplier=boss_damage_multiplier,
@@ -183,7 +185,8 @@ SLOT_TARGET_STATS = {
     'cape': ['final_damage', 'damage', 'dex_pct'],
     'ring': ['all_skills', 'damage', 'boss_damage'],
     'necklace': ['all_skills', 'damage', 'boss_damage'],
-    'face': ['damage', 'boss_damage', 'dex_pct'],
+    'eye': ['damage', 'boss_damage', 'dex_pct'],
+    'face': ['final_damage', 'damage', 'boss_damage'],
 }
 
 
@@ -649,7 +652,7 @@ if refresh_clicked:
     ARTIFACT_KEY_BY_NAME = {defn.name: key for key, defn in ARTIFACTS.items()}
 
     equipped_artifact_keys = []
-    for i in range(3):
+    for i in range(4):
         slot_data = artifacts_equipped.get(f'slot{i}', {})
         if isinstance(slot_data, dict):
             name = slot_data.get('name', '')

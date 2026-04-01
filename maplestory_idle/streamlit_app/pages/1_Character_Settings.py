@@ -96,14 +96,8 @@ with col1:
     job_options = list(JobClass)
     job_display_options = [JOB_DISPLAY_NAMES[j] for j in job_options]
 
-    # Get current job class from data, default to bowmaster
-    current_job_str = getattr(data, 'job_class', 'bowmaster')
-    try:
-        current_job = JobClass(current_job_str)
-        current_idx = job_options.index(current_job)
-    except (ValueError, KeyError):
-        current_job = JobClass.BOWMASTER
-        current_idx = 0
+    current_job = JobClass(data.job_class)
+    current_idx = job_options.index(current_job)
 
     selected_job_display = st.selectbox(
         "Job Class",
@@ -116,7 +110,7 @@ with col1:
     selected_idx = job_display_options.index(selected_job_display)
     selected_job = job_options[selected_idx]
 
-    if selected_job.value != current_job_str:
+    if selected_job != current_job:
         data.job_class = selected_job.value
         auto_save()
 
@@ -173,6 +167,48 @@ with col1:
 
     total_set_stat = new_medal + new_costume
     st.metric("Total from Sets", f"+{total_set_stat:,}")
+
+    st.divider()
+
+    # Unique Stats (HeroUniqueStatOption)
+    st.subheader("Unique Stats")
+    if not hasattr(data, 'unique_stats') or not data.unique_stats:
+        data.unique_stats = {}
+
+    # Define unique stat configs: (key, label, max_level, base_val, added_val)
+    UNIQUE_STAT_DEFS = [
+        ('attack_speed', 'Attack Speed', 20, 30, 2),
+        ('crit_chance', 'Crit Chance', 10, 50, 5),
+        ('min_damage', 'Min Damage', 20, 50, 3),
+        ('max_damage', 'Max Damage', 20, 50, 3),
+        ('crit_power', 'Crit Power', 30, 50, 5),
+        ('normal_damage', 'Normal Monster Dmg', 30, 50, 5),
+        ('boss_damage', 'Boss Damage', 30, 50, 5),
+        ('skill_power', 'Skill Power', 30, 100, 5),
+        ('attack_power', 'Attack Power', 50, 100, 5),
+        ('main_stat', 'Main Stat', 160, 300, 5),
+    ]
+
+    ucol1, ucol2 = st.columns(2)
+    for i, (key, label, max_lv, base_v, add_v) in enumerate(UNIQUE_STAT_DEFS):
+        cur_lv = data.unique_stats.get(key, 0)
+        # Compute current bonus for display
+        bonus = (base_v + add_v * cur_lv) / 10 if cur_lv > 0 else 0
+        # Main stat is flat, others are percentages
+        suffix = '' if key == 'main_stat' else '%'
+        col = ucol1 if i % 2 == 0 else ucol2
+        with col:
+            new_lv = st.number_input(
+                f"{label} (Lv {cur_lv}, +{bonus:.1f}{suffix})",
+                min_value=0,
+                max_value=max_lv,
+                value=cur_lv,
+                step=1,
+                key=f"unique_{key}",
+            )
+            if new_lv != cur_lv:
+                data.unique_stats[key] = new_lv
+                auto_save()
 
 with col2:
     st.subheader("Combat Settings")
@@ -353,7 +389,8 @@ with imp_col:
             st.text(csv_text[:1000] + "..." if len(csv_text) > 1000 else csv_text)
 
         if st.button("Import Build", type="primary"):
-            imported_data = import_user_data_csv(csv_text, st.session_state.username)
+            imported_data = import_user_data_csv(csv_text, st.session_state.username,
+                                                  current_job_class=getattr(data, 'job_class', None))
             if imported_data:
                 # Update session state
                 st.session_state.user_data = imported_data

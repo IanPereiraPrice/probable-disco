@@ -413,8 +413,8 @@ EQUIPMENT_SLOT_RECOMMENDATIONS: Dict[str, SlotRecommendation] = {
         avoid_stats=["Defense", "Max HP"],
         priority_tier=3,
     ),
-    "face": SlotRecommendation(
-        slot="Face",
+    "eye": SlotRecommendation(
+        slot="Eye Accessory",
         special_stat="Main Stat per Level",
         special_value_legendary=8.0,
         special_value_mystic=12.0,
@@ -422,6 +422,16 @@ EQUIPMENT_SLOT_RECOMMENDATIONS: Dict[str, SlotRecommendation] = {
         secondary_stats=["Main Stat %"],
         avoid_stats=["Defense", "Max HP"],
         priority_tier=3,
+    ),
+    "face": SlotRecommendation(
+        slot="Face Accessory",
+        special_stat="Final Damage %",
+        special_value_legendary=8.0,
+        special_value_mystic=12.0,
+        primary_recommendation="Final Damage % (special) or Damage %",
+        secondary_stats=["Boss Damage %", "Main Stat %"],
+        avoid_stats=["Defense", "Max HP"],
+        priority_tier=2,
     ),
     "top": SlotRecommendation(
         slot="Top",

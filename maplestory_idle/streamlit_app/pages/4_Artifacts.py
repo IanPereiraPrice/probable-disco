@@ -40,11 +40,15 @@ st.set_page_config(page_title="Artifacts", page_icon="💎", layout="wide")
 
 def calculate_dps(stats, mode='stage'):
     """Wrapper that respects user's realistic DPS setting."""
-    use_realistic = getattr(st.session_state.user_data, 'use_realistic_dps', False)
-    boss_importance = getattr(st.session_state.user_data, 'boss_importance', 70) / 100.0
-    boss_damage_multiplier = getattr(st.session_state.user_data, 'boss_damage_multiplier', 1.0)
+    from job_classes import JobClass
+    user_data = st.session_state.user_data
+    use_realistic = getattr(user_data, 'use_realistic_dps', False)
+    boss_importance = getattr(user_data, 'boss_importance', 70) / 100.0
+    boss_damage_multiplier = getattr(user_data, 'boss_damage_multiplier', 1.0)
+    job_class = JobClass(user_data.job_class)
     return shared_calculate_dps(
         stats, mode,
+        job_class=job_class,
         use_realistic_dps=use_realistic,
         boss_importance=boss_importance,
         boss_damage_multiplier=boss_damage_multiplier,
@@ -158,7 +162,7 @@ def ensure_artifact_data():
         data.artifacts_resonance = {'total_stars': 0, 'main_stat_bonus': 0, 'hp_bonus': 0}
 
     # Initialize equipped slots
-    for i in range(3):
+    for i in range(4):
         slot_key = f'slot{i}'
         if slot_key not in data.artifacts_equipped:
             data.artifacts_equipped[slot_key] = {'name': '', 'stars': 0, 'potentials': []}
@@ -237,7 +241,7 @@ def calculate_active_effects(scenario: str = "normal", fight_duration: float = 6
     }
 
     equipped_names = []
-    for i in range(3):
+    for i in range(4):
         slot_data = data.artifacts_equipped.get(f'slot{i}', {})
         if not isinstance(slot_data, dict):
             continue
@@ -339,10 +343,10 @@ with tab_config:
 
     # ========== LEFT COLUMN ==========
     with col_left:
-        # EQUIPPED ARTIFACTS (3 slots)
+        # EQUIPPED ARTIFACTS (4 slots)
         st.markdown("<div class='section-header'>Equipped Artifacts (Active Effects)</div>", unsafe_allow_html=True)
 
-        for slot_idx in range(3):
+        for slot_idx in range(4):
             slot_key = f'slot{slot_idx}'
             slot_data = data.artifacts_equipped.get(slot_key, {'name': '', 'stars': 0})
 
@@ -465,7 +469,7 @@ with tab_config:
                             art_data['stars'] = new_stars
                             data.artifacts_inventory[art_key] = art_data
                             # Update equipped artifacts if this one is equipped
-                            for i in range(3):
+                            for i in range(4):
                                 slot = data.artifacts_equipped.get(f'slot{i}', {})
                                 if ARTIFACT_KEY_BY_NAME.get(slot.get('name', '')) == art_key:
                                     slot['stars'] = new_stars
@@ -1004,7 +1008,7 @@ with tab_efficiency:
 
     # Get equipped artifact keys
     equipped_artifact_keys = []
-    for i in range(3):
+    for i in range(4):
         slot_data = data.artifacts_equipped.get(f'slot{i}', {})
         if isinstance(slot_data, dict):
             name = slot_data.get('name', '')

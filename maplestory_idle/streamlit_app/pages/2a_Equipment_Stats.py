@@ -69,10 +69,10 @@ RARITY_OPTIONS = ["Normal", "Epic", "Unique", "Legendary", "Mystic", "Ancient"]
 SLOT_THIRD_STAT = {
     "hat": "Defense", "top": "Defense", "bottom": "Accuracy", "gloves": "Accuracy",
     "shoes": "Max MP", "belt": "Max MP", "shoulder": "Evasion", "cape": "Evasion",
-    "ring": "Main Stat", "necklace": "Main Stat", "face": "Main Stat",
+    "ring": "Main Stat", "necklace": "Main Stat", "eye": "Main Stat", "face": "Main Stat",
 }
 
-SPECIAL_STAT_OPTIONS = {"damage_pct": "Damage %", "all_skills": "All Skills", "final_damage": "Final Damage %"}
+SPECIAL_STAT_OPTIONS = {"damage_pct": "Damage %", "all_skills": "All Skills", "final_damage": "Final Damage %", "def_pen": "Defense Pen %"}
 
 
 def ensure_item_fields(item: dict) -> dict:
@@ -89,6 +89,8 @@ def ensure_item_fields(item: dict) -> dict:
         'sub_skill_1st': 0, 'sub_skill_2nd': 0, 'sub_skill_3rd': 0, 'sub_skill_4th': 0,
         # Special stats (Sub Amplify) - only on special items
         'special_stat_type': 'damage_pct', 'special_stat_value': 0,
+        # Min/Max Damage % (Sub Amplify)
+        'sub_min_dmg': 0, 'sub_max_dmg': 0,
     }
     for k, v in defaults.items():
         if k not in item:
@@ -96,11 +98,13 @@ def ensure_item_fields(item: dict) -> dict:
     return item
 
 
-def save_equipment_changes():
-    """Save all pending equipment changes."""
-    save_user_data(st.session_state.username, data)
-    st.session_state.equip_stats_last_save = datetime.now()
-    st.session_state.equip_stats_has_unsaved = False
+def save_equipment_changes() -> bool:
+    """Save all pending equipment changes. Returns True on success."""
+    success = save_user_data(st.session_state.username, data)
+    if success:
+        st.session_state.equip_stats_last_save = datetime.now()
+        st.session_state.equip_stats_has_unsaved = False
+    return success
 
 
 def load_slot_to_editor(slot: str):
@@ -128,6 +132,8 @@ def load_slot_to_editor(slot: str):
     st.session_state.edit_equip_is_special = item.get('is_special', False)
     st.session_state.edit_equip_special_type = item.get('special_stat_type', 'damage_pct')
     st.session_state.edit_equip_special_value = item.get('special_stat_value', 0)
+    st.session_state.edit_equip_sub_min_dmg = item.get('sub_min_dmg', 0)
+    st.session_state.edit_equip_sub_max_dmg = item.get('sub_max_dmg', 0)
     st.session_state.equip_stats_has_unsaved = False
 
 
@@ -244,9 +250,13 @@ with col_editor:
             item['is_special'] = st.session_state.edit_equip_is_special
             item['special_stat_type'] = st.session_state.edit_equip_special_type
             item['special_stat_value'] = st.session_state.edit_equip_special_value
-            save_equipment_changes()
-            st.success("Changes saved!")
-            st.rerun()
+            item['sub_min_dmg'] = st.session_state.edit_equip_sub_min_dmg
+            item['sub_max_dmg'] = st.session_state.edit_equip_sub_max_dmg
+            if save_equipment_changes():
+                st.success("Changes saved!")
+                st.rerun()
+            else:
+                st.error("Save failed — check that the data file isn't locked (e.g. open in Excel or OneDrive syncing).")
 
     with btn_col2:
         if st.button("↩️ Reset", use_container_width=True):
@@ -436,6 +446,23 @@ with col_editor:
                 st.session_state.equip_stats_has_unsaved = True
 
         st.caption(f"After SF: {SPECIAL_STAT_OPTIONS.get(st.session_state.edit_equip_special_type, 'Damage %')} +{new_special_value*sub_mult:.1f}")
+
+    # Min/Max Damage % subsection (always visible, independent of is_special)
+    st.markdown("---")
+    st.markdown("**Min/Max Damage %** (Sub Amplify)")
+    col1, col2 = st.columns(2)
+    with col1:
+        new_min_dmg = st.number_input("Min Dmg %", 0.0, 100.0, float(st.session_state.get('edit_equip_sub_min_dmg', 0)), step=0.1, key=f"input_eq_min_dmg_{slot_key}")
+        if new_min_dmg != st.session_state.get('edit_equip_sub_min_dmg', 0):
+            st.session_state.edit_equip_sub_min_dmg = new_min_dmg
+            st.session_state.equip_stats_has_unsaved = True
+    with col2:
+        new_max_dmg = st.number_input("Max Dmg %", 0.0, 100.0, float(st.session_state.get('edit_equip_sub_max_dmg', 0)), step=0.1, key=f"input_eq_max_dmg_{slot_key}")
+        if new_max_dmg != st.session_state.get('edit_equip_sub_max_dmg', 0):
+            st.session_state.edit_equip_sub_max_dmg = new_max_dmg
+            st.session_state.equip_stats_has_unsaved = True
+    if new_min_dmg > 0 or new_max_dmg > 0:
+        st.caption(f"After SF: Min +{new_min_dmg*sub_mult:.1f}% | Max +{new_max_dmg*sub_mult:.1f}%")
 
 # Info box about starforce calculator
 st.markdown("---")

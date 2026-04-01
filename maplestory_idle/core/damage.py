@@ -292,6 +292,7 @@ def calculate_damage(
     enemy_def: float,
     boss_damage: float = 0,
     str_flat: float = 0,
+    dex_flat_conversion: float = 0,
 ) -> DamageResult:
     """
     Calculate total damage using the master formula.
@@ -324,8 +325,8 @@ def calculate_damage(
     Returns:
         DamageResult with total damage and breakdown
     """
-    # DEX calculation
-    total_dex = calculate_total_dex(dex_flat, dex_percent)
+    # DEX calculation: conversion-based flat stats (e.g. Shield Mastery) added AFTER % multiplication
+    total_dex = calculate_total_dex(dex_flat, dex_percent) + dex_flat_conversion
     stat_mult = 1 + calculate_stat_proportional_damage(total_dex, str_flat)
 
     # Damage %

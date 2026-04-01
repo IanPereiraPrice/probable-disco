@@ -27,6 +27,7 @@ from utils.dps_calculator import (
     aggregate_stats as shared_aggregate_stats,
     calculate_dps as shared_calculate_dps,
 )
+from job_classes import JobClass
 
 st.set_page_config(page_title="Damage Calculator", page_icon="💥", layout="wide")
 
@@ -61,9 +62,11 @@ def calculate_dps(stats, combat_mode='stage', enemy_def=None, log_actions=False)
     use_realistic_dps = getattr(data, 'use_realistic_dps', False)
     boss_importance = getattr(data, 'boss_importance', 70) / 100.0
     boss_damage_multiplier = getattr(data, 'boss_damage_multiplier', 1.0)
+    job_class = JobClass(data.job_class)
 
     return shared_calculate_dps(
         stats, combat_mode, enemy_def,
+        job_class=job_class,
         use_realistic_dps=use_realistic_dps,
         boss_importance=boss_importance,
         log_actions=log_actions,

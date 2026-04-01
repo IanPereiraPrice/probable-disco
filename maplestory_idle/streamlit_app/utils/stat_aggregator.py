@@ -317,11 +317,7 @@ def populate_from_user_data(user_data, job_class=None) -> StatAggregator:
 
     # Get job class
     if job_class is None:
-        job_class_str = getattr(user_data, 'job_class', 'bowmaster')
-        try:
-            job_class = JobClass(job_class_str)
-        except ValueError:
-            job_class = JobClass.BOWMASTER
+        job_class = JobClass(user_data.job_class)
 
     agg = StatAggregator(job_class=job_class)
     agg.character_level = user_data.character_level
@@ -677,7 +673,7 @@ def populate_from_user_data(user_data, job_class=None) -> StatAggregator:
     # Build set of equipped artifact keys
     equipped_artifact_keys = set()
     if artifacts_equipped:
-        for slot_key in ['slot0', 'slot1', 'slot2']:
+        for slot_key in ['slot0', 'slot1', 'slot2', 'slot3']:
             slot_data = artifacts_equipped.get(slot_key, {})
             if not isinstance(slot_data, dict):
                 continue
@@ -752,7 +748,7 @@ def populate_from_user_data(user_data, job_class=None) -> StatAggregator:
 
     # Artifact active effects (from equipped artifacts)
     if artifacts_equipped:
-        for slot_key in ['slot0', 'slot1', 'slot2']:
+        for slot_key in ['slot0', 'slot1', 'slot2', 'slot3']:
             slot_data = artifacts_equipped.get(slot_key, {})
             if not isinstance(slot_data, dict):
                 continue

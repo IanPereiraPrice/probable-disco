@@ -6,11 +6,14 @@ import streamlit as st
 import pandas as pd
 from typing import Dict, Any, List
 import copy
+import hashlib
 
 from utils.data_manager import save_user_data
 from utils.dps_calculator import (
     aggregate_stats,
     calculate_dps,
+    calculate_effective_defense_pen_with_sources,
+    calculate_effective_attack_speed_with_sources,
 )
 from job_classes import JobClass, get_main_stat_name
 
@@ -29,7 +32,7 @@ Higher current stats = more diminishing returns on that stat type.
 """)
 
 # Get current stats and DPS
-job_class = getattr(data, 'job_class', JobClass.BOWMASTER)
+job_class = JobClass(getattr(data, 'job_class', 'bowmaster'))
 combat_mode = getattr(data, 'combat_mode', 'stage')
 
 # Get base stats
@@ -124,21 +127,123 @@ STAT_CONFIGS = [
         'display_unit': '',
         'description': '+All Skills level bonus',
     },
+    {
+        'name': '1st Job Skills',
+        'key': 'skill_1st',
+        'default_amount': 10,
+        'max_amount': 200,
+        'step': 10,
+        'display_unit': '',
+        'description': '+1st Job Skill levels',
+    },
+    {
+        'name': '2nd Job Skills',
+        'key': 'skill_2nd',
+        'default_amount': 10,
+        'max_amount': 200,
+        'step': 10,
+        'display_unit': '',
+        'description': '+2nd Job Skill levels',
+    },
+    {
+        'name': '3rd Job Skills',
+        'key': 'skill_3rd',
+        'default_amount': 10,
+        'max_amount': 200,
+        'step': 10,
+        'display_unit': '',
+        'description': '+3rd Job Skill levels',
+    },
+    {
+        'name': '4th Job Skills',
+        'key': 'skill_4th',
+        'default_amount': 10,
+        'max_amount': 200,
+        'step': 10,
+        'display_unit': '',
+        'description': '+4th Job Skill levels',
+    },
+    {
+        'name': 'Min DMG',
+        'key': 'min_dmg_mult',
+        'default_amount': 10,
+        'max_amount': 100,
+        'step': 5,
+        'display_unit': '%',
+        'description': '+Min Damage %',
+    },
+    {
+        'name': 'Max DMG',
+        'key': 'max_dmg_mult',
+        'default_amount': 10,
+        'max_amount': 100,
+        'step': 5,
+        'display_unit': '%',
+        'description': '+Max Damage %',
+    },
+    {
+        'name': 'Def Pen',
+        'key': 'def_pen',
+        'source_type': 'def_pen',
+        'default_amount': 5,
+        'max_amount': 50,
+        'step': 5,
+        'display_unit': '%',
+        'description': '+Defense Penetration %',
+    },
+    {
+        'name': 'Att Speed',
+        'key': 'attack_speed',
+        'source_type': 'attack_speed',
+        'default_amount': 10,
+        'max_amount': 100,
+        'step': 10,
+        'display_unit': '%',
+        'description': '+Attack Speed %',
+    },
+    {
+        'name': 'Skill CD',
+        'key': 'skill_cd',
+        'default_amount': 2,
+        'max_amount': 10,
+        'step': 2,
+        'display_unit': 's',
+        'description': '+Skill Cooldown Reduction (seconds)',
+    },
 ]
 
 
-def calculate_dps_with_stat_change(base_stats: Dict, stat_key: str, amount: float) -> float:
-    """Calculate DPS with a stat increased by the given amount."""
-    modified_stats = copy.deepcopy(base_stats)
-    current_value = modified_stats.get(stat_key, 0)
-    modified_stats[stat_key] = current_value + amount
-    result = calculate_dps(modified_stats, combat_mode, job_class=job_class)
+def _make_stats_key(stats: Dict) -> str:
+    """Create a stable hash key from a stats dict for caching."""
+    s = str(sorted((k, str(v)) for k, v in stats.items()))
+    return hashlib.sha1(s.encode()).hexdigest()[:20]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_dps_with_change(stats_key: str, stat_key: str, amount: float, source_type: str,
+                             combat_mode_str: str, job_class_str: str, _base_stats: Dict) -> float:
+    """Cached DPS calculation with one stat changed. stats_key is the cache key, _base_stats is the actual data."""
+    modified_stats = copy.deepcopy(_base_stats)
+    if source_type == 'def_pen':
+        modified_stats['def_pen_sources'].append(('Stat Compare', amount / 100, 999))
+    elif source_type == 'attack_speed':
+        modified_stats['attack_speed_sources'].append(('Stat Compare', amount))
+    else:
+        current_value = modified_stats.get(stat_key, 0)
+        modified_stats[stat_key] = current_value + amount
+    result = calculate_dps(modified_stats, combat_mode_str, job_class=JobClass(job_class_str))
     return result['total']
 
 
-def calculate_stat_value(base_stats: Dict, base_dps: float, stat_key: str, amount: float) -> Dict:
+def calculate_dps_with_stat_change(base_stats: Dict, stat_key: str, amount: float, source_type: str = 'additive') -> float:
+    stats_key = _make_stats_key(base_stats)
+    return _cached_dps_with_change(stats_key, stat_key, amount, source_type,
+                                   combat_mode, job_class.value, base_stats)
+
+
+def calculate_stat_value(base_stats: Dict, base_dps: float, stat_key: str, amount: float, source_type: str = 'additive') -> Dict:
     """Calculate the DPS gain and efficiency for a stat increase."""
-    new_dps = calculate_dps_with_stat_change(base_stats, stat_key, amount)
+    new_dps = calculate_dps_with_stat_change(base_stats, stat_key, amount, source_type)
     dps_gain = new_dps - base_dps
     pct_gain = (dps_gain / base_dps * 100) if base_dps > 0 else 0
 
@@ -178,13 +283,23 @@ with st.expander("Adjust Stat Amounts", expanded=True):
 # Calculate values for each stat
 results = []
 for config in STAT_CONFIGS:
+    source_type = config.get('source_type', 'additive')
     amount = stat_amounts[config['key']]
-    value = calculate_stat_value(base_stats, base_dps, config['key'], amount)
-    current_value = base_stats.get(config['key'], 0)
+    value = calculate_stat_value(base_stats, base_dps, config['key'], amount, source_type)
+
+    # Get current value for display
+    if source_type == 'def_pen':
+        eff, _ = calculate_effective_defense_pen_with_sources(base_stats.get('def_pen_sources', []))
+        current_value = eff * 100
+    elif source_type == 'attack_speed':
+        eff, _ = calculate_effective_attack_speed_with_sources(base_stats.get('attack_speed_sources', []))
+        current_value = eff - 100  # excess over base 100%
+    else:
+        current_value = base_stats.get(config['key'], 0)
 
     results.append({
         'Stat': config['name'],
-        'Current': f"{current_value:,.0f}{config['display_unit']}",
+        'Current': f"{current_value:,.1f}{config['display_unit']}",
         'Added': f"+{amount:,.0f}{config['display_unit']}",
         'DPS Gain': f"+{value['dps_gain']:,.0f}",
         'DPS %': f"+{value['pct_gain']:.2f}%",
@@ -219,6 +334,7 @@ chart_stat = st.selectbox(
 
 selected_config = next(c for c in STAT_CONFIGS if c['name'] == chart_stat)
 stat_key = selected_config['key']
+chart_source_type = selected_config.get('source_type', 'additive')
 current_stat_value = base_stats.get(stat_key, 0)
 
 # Generate data points for the chart
@@ -239,7 +355,7 @@ for i in range(num_points + 1):
             'Marginal DPS': 0,
         })
     else:
-        new_dps = calculate_dps_with_stat_change(base_stats, stat_key, added_amount)
+        new_dps = calculate_dps_with_stat_change(base_stats, stat_key, added_amount, chart_source_type)
         prev_dps = chart_data[-1]['DPS']
         marginal_gain = (new_dps - prev_dps) / step_size  # DPS per unit of stat
 

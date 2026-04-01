@@ -218,21 +218,24 @@ ARTIFACT_DROP_RATES = {
     "hexagon_necklace": 0.013571,
     "zakum_raid_artifact": 0.013571,
 
-    # Legendary tier: 1% / 14 artifacts = 0.0714% each
-    "chalice": 0.000714,
-    "old_music_box": 0.000714,
-    "silver_pendant": 0.000714,
-    "book_of_ancient": 0.000714,
-    "star_rock": 0.000714,
-    "fire_flower": 0.000714,
-    "soul_contract": 0.000714,
-    "lit_lamp": 0.000714,
-    "ancient_text_piece": 0.000714,
-    "sayrams_necklace": 0.000714,
-    "icy_soul_rock": 0.000714,
-    "soul_pouch": 0.000714,
-    "lunar_dew": 0.000714,
-    "flaming_lava": 0.000714,
+    # Legendary tier: 1% / 17 artifacts = 0.0588% each
+    "chalice": 0.000588,
+    "old_music_box": 0.000588,
+    "silver_pendant": 0.000588,
+    "book_of_ancient": 0.000588,
+    "star_rock": 0.000588,
+    "fire_flower": 0.000588,
+    "soul_contract": 0.000588,
+    "lit_lamp": 0.000588,
+    "ancient_text_piece": 0.000588,
+    "sayrams_necklace": 0.000588,
+    "icy_soul_rock": 0.000588,
+    "soul_pouch": 0.000588,
+    "lunar_dew": 0.000588,
+    "flaming_lava": 0.000588,
+    "bottle_of_emotions": 0.000588,
+    "candle": 0.000588,
+    "peach_tree_herb_pouch": 0.000588,
 }
 
 # Tier totals
@@ -1230,6 +1233,62 @@ ARTIFACTS = {
         inventory_base=10,  # 10 at ★0
         inventory_per_star=2,  # +2 per star → 20 at ★5
     ),
+
+    # -------------------------------------------------------------------------
+    # NEW LEGENDARIES (March 2026)
+    # -------------------------------------------------------------------------
+    "bottle_of_emotions": ArtifactDefinition(
+        name="Bottle of Emotions",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="ATK +X%; FD +Y% per 3% Atk Spd over 60% (cap Z%)",
+        active_effects=[
+            ArtifactEffect(stat="attack_buff", base=0.15, per_star=0.03),  # 15→30%
+            # FD = rate × (spd-60)/3, capped at cap
+            # base/per_star = FD rate per tick (0.5%→1.0%); cap is 10%→20% (inline in dispatch)
+            ArtifactEffect(
+                stat="final_damage",
+                base=0.005,   # FD rate per tick at ★0: +0.5% per 3% speed over 60%
+                per_star=0.001,  # +0.1%/star → 1.0% per tick at ★5
+                effect_type=EffectType.DERIVED,
+                derived_from="attack_speed_fd",  # (spd-60)/3 ticks × rate, cap=10%+2%/star
+            ),
+        ],
+        inventory_description="Min Damage +X%",
+        inventory_stat="min_dmg_mult",
+        inventory_base=0.15,   # 15% at ★0
+        inventory_per_star=0.03,  # +3%/star → 30% at ★5
+    ),
+    "candle": ArtifactDefinition(
+        name="Candle",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="FD +X% (0-20s from battle start); Boss DMG +Y% (20-30s from battle start)",
+        # NOTE: Dual-phase timing is handled specially in dps_calculator.py:
+        #   FD active 0-20s → uptime = min(20, T) / T
+        #   Boss DMG active 20-30s → uptime = max(0, min(30, T) - 20) / T
+        # get_effective_uptime() is NOT used; candle has no buff_duration/cooldown here.
+        active_effects=[
+            ArtifactEffect(stat="final_damage", base=0.08, per_star=0.016),   # 8%→16% at ★5
+            ArtifactEffect(stat="boss_damage", base=0.30, per_star=0.06),     # 30%→60% at ★5
+        ],
+        inventory_description="Damage +X%",
+        inventory_stat="damage",
+        inventory_base=0.30,     # 30% at ★0
+        inventory_per_star=0.06,  # +6%/star → 60% at ★5
+    ),
+    "peach_tree_herb_pouch": ArtifactDefinition(
+        name="Peach Tree Herb Pouch",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="Increases target's damage taken by X% for 5s on attack (procs continuously)",
+        # Models the base proc-on-attack debuff as permanent uptime (always refreshed in idle gameplay).
+        # The once-per-battle bonus (extra +X% when buff removal triggers) is not modeled.
+        active_effects=[
+            ArtifactEffect(stat="enemy_damage_taken", base=0.15, per_star=0.03),  # 15%→30% at ★5
+        ],
+        inventory_description="ATK Speed +X%",
+        inventory_stat="attack_speed",
+        inventory_base=0.05,     # 5% at ★0
+        inventory_per_star=0.01,  # +1%/star → 10% at ★5
+    ),
 }
 
 
@@ -1344,6 +1403,29 @@ def calculate_book_of_ancient_bonus(stars: int, crit_rate: float) -> Tuple[float
     cd_bonus = total_cr * conversion_rate
 
     return (cr_bonus, cd_bonus)
+
+
+def calculate_bottle_of_emotions_fd(stars: int, attack_speed_pct: float) -> float:
+    """
+    Calculate Bottle of Emotions Final Damage bonus.
+
+    Grants FD based on attack speed exceeding 60%:
+      rate  = 0.5% per 3% speed at ★0, +0.1% per star → 1.0%/3spd at ★5
+      cap   = 10% at ★0, +2% per star → 20% at ★5
+      FD    = min(cap, floor(excess_speed / 3) * rate)
+
+    Args:
+        stars: Awakening stars (0-5)
+        attack_speed_pct: Total attack speed percentage (e.g., 90.0 for 90%)
+
+    Returns:
+        Final Damage bonus as a decimal (e.g., 0.10 for 10%)
+    """
+    excess_speed = max(0.0, attack_speed_pct - 60.0)
+    ticks = excess_speed / 3.0
+    rate_per_tick = 0.005 + 0.001 * stars   # 0.5%→1.0% per 3% speed
+    cap = 0.10 + 0.02 * stars               # 10%→20%
+    return min(cap, ticks * rate_per_tick)
 
 
 def calculate_fire_flower_fd(stars: int, targets: int) -> float:

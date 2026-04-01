@@ -217,7 +217,6 @@ POTENTIAL_STATS: Dict[PotentialTier, List[PotentialStat]] = {
         PotentialStat(StatType.DAMAGE_PCT, 18.0, 0.04),
         PotentialStat(StatType.MIN_DMG_MULT, 10.0, 0.04),
         PotentialStat(StatType.MAX_DMG_MULT, 10.0, 0.04),
-        PotentialStat(StatType.SKILL_CD, 1.0, 0.01),
     ],
     PotentialTier.LEGENDARY: [
         PotentialStat(StatType.DEX_PCT, 12.0, 0.045),
@@ -236,7 +235,6 @@ POTENTIAL_STATS: Dict[PotentialTier, List[PotentialStat]] = {
         PotentialStat(StatType.DAMAGE_PCT, 25.0, 0.04),
         PotentialStat(StatType.MIN_DMG_MULT, 15.0, 0.04),
         PotentialStat(StatType.MAX_DMG_MULT, 15.0, 0.04),
-        PotentialStat(StatType.SKILL_CD, 1.5, 0.01),
     ],
     PotentialTier.MYSTIC: [
         PotentialStat(StatType.DEX_PCT, 15.0, 0.045),
@@ -255,7 +253,6 @@ POTENTIAL_STATS: Dict[PotentialTier, List[PotentialStat]] = {
         PotentialStat(StatType.DAMAGE_PCT, 35.0, 0.04),
         PotentialStat(StatType.MIN_DMG_MULT, 25.0, 0.04),
         PotentialStat(StatType.MAX_DMG_MULT, 25.0, 0.04),
-        PotentialStat(StatType.SKILL_CD, 2.0, 0.01),
     ],
 }
 
@@ -345,10 +342,20 @@ SPECIAL_POTENTIALS: Dict[str, SpecialPotential] = {
             PotentialTier.MYSTIC: 20.0,
         }
     ),
-    "face": SpecialPotential(
+    "eye": SpecialPotential(
         StatType.MAIN_STAT_PER_LEVEL,
         {
             # +X Main Stat per 1 Level
+            PotentialTier.EPIC: 3.0,
+            PotentialTier.UNIQUE: 5.0,
+            PotentialTier.LEGENDARY: 8.0,
+            PotentialTier.MYSTIC: 12.0,
+        }
+    ),
+    "face": SpecialPotential(
+        StatType.FINAL_DAMAGE,
+        {
+            # Final Damage %
             PotentialTier.EPIC: 3.0,
             PotentialTier.UNIQUE: 5.0,
             PotentialTier.LEGENDARY: 8.0,
@@ -2781,32 +2788,36 @@ def calculate_stat_rankings(
     """
     rankings = []
     tier_stats = POTENTIAL_STATS.get(tier, [])
+    prev_tier = tier.prev_tier()
+    prev_tier_stats = POTENTIAL_STATS.get(prev_tier, []) if prev_tier else []
 
-    # Test regular stats (include all tiers, not just S/A/B)
-    tested_stat_types = set()
-    for stat in tier_stats:
-        # Skip duplicate stat types (same stat may appear multiple times)
-        if stat.stat_type in tested_stat_types:
-            continue
-        tested_stat_types.add(stat.stat_type)
+    def _test_stat_list(stats, is_yellow):
+        tested = set()
+        for stat in stats:
+            if stat.stat_type in tested:
+                continue
+            tested.add(stat.stat_type)
 
-        test_lines = [PotentialLine(1, stat.stat_type, stat.value, True, False)]
-        new_dps = dps_calc_func(test_lines)
-        dps_gain = ((new_dps / current_dps) - 1) * 100 if current_dps > 0 else 0
+            # Skip off-job main stat %
+            if stat.stat_type in (StatType.DEX_PCT, StatType.STR_PCT, StatType.INT_PCT, StatType.LUK_PCT):
+                if stat.stat_type != main_stat_type:
+                    continue
 
-        display_name = get_stat_display_name(stat.stat_type)
-        # Adjust probability for main stat selection (only count player's main stat)
-        if stat.stat_type == main_stat_type:
-            probability = stat.probability * 100
-        elif stat.stat_type in (StatType.DEX_PCT, StatType.STR_PCT, StatType.INT_PCT, StatType.LUK_PCT):
-            # Other main stats not useful for player
-            continue
-        else:
-            probability = stat.probability * 100
+            test_lines = [PotentialLine(1, stat.stat_type, stat.value, is_yellow, False)]
+            new_dps = dps_calc_func(test_lines)
+            dps_gain = ((new_dps / current_dps) - 1) * 100 if current_dps > 0 else 0
 
-        rankings.append((display_name, dps_gain, probability))
+            if dps_gain <= 0:
+                continue
 
-    # Test special potential
+            display_name = get_stat_display_name(stat.stat_type)
+            value_str = format_stat_value(stat.stat_type, stat.value)
+            rankings.append((display_name, dps_gain, stat.probability * 100, value_str, is_yellow))
+
+    _test_stat_list(tier_stats, is_yellow=True)
+    _test_stat_list(prev_tier_stats, is_yellow=False)
+
+    # Test special potential (always yellow — current tier only)
     if slot in SPECIAL_POTENTIALS:
         special = SPECIAL_POTENTIALS[slot]
         if tier in special.values:
@@ -2814,10 +2825,10 @@ def calculate_stat_rankings(
             new_dps = dps_calc_func(test_lines)
             dps_gain = ((new_dps / current_dps) - 1) * 100 if current_dps > 0 else 0
 
-            display_name = f"{get_stat_display_name(special.stat_type)} ⭐"
-            probability = SPECIAL_POTENTIAL_RATE * 100  # 1%
-
-            rankings.append((display_name, dps_gain, probability))
+            if dps_gain > 0:
+                display_name = f"{get_stat_display_name(special.stat_type)} ⭐"
+                value_str = format_stat_value(special.stat_type, special.values[tier])
+                rankings.append((display_name, dps_gain, SPECIAL_POTENTIAL_RATE * 100, value_str, True))
 
     # Sort by DPS gain descending
     rankings.sort(key=lambda x: x[1], reverse=True)

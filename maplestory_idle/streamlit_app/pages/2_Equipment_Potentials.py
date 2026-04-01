@@ -121,6 +121,7 @@ MAX_POT_VALUES = {
     StatType.DEF_PEN: 12.0,
     StatType.FINAL_DAMAGE: 8.0,
     StatType.ALL_SKILLS: 12,
+    StatType.MAIN_STAT_PCT: 12.0,
     StatType.DEX_PCT: 12.0,
     StatType.STR_PCT: 12.0,
     StatType.INT_PCT: 12.0,
@@ -327,8 +328,11 @@ def calculate_dps_from_stats(stats: Dict[str, Any], combat_mode: str = 'stage', 
     boss_importance = getattr(data, 'boss_importance', 70) / 100.0
     boss_damage_multiplier = getattr(data, 'boss_damage_multiplier', 1.0)
 
+    from job_classes import JobClass
+    job_class = JobClass(data.job_class)
     return calculate_dps(
         stats, combat_mode, enemy_def,
+        job_class=job_class,
         use_realistic_dps=use_realistic_dps,
         boss_importance=boss_importance,
         boss_damage_multiplier=boss_damage_multiplier,
@@ -771,9 +775,13 @@ with bottom_right:
                 # Top stats to target
                 if rec.top_stats:
                     st.markdown("**🎯 Stats to Target:**")
-                    stats_html = "<div style='font-family:monospace; font-size:12px; color:#ccc; margin-left:16px;'>"
-                    for j, (stat_name, dps_gain, prob) in enumerate(rec.top_stats[:5], 1):
-                        stats_html += f"{j}. {stat_name}: <span style='color:#66ff66'>+{dps_gain:.2f}%</span> DPS ({prob:.1f}% chance)<br>"
+                    stats_html = "<div style='font-family:monospace; font-size:12px; margin-left:16px;'>"
+                    for j, (stat_name, dps_gain, prob, value_str, is_yellow) in enumerate(rec.top_stats[:10], 1):
+                        name_color = "#ffdd44" if is_yellow else "#aaaaaa"
+                        stats_html += (
+                            f"<span style='color:{name_color}'>{j}. {stat_name} ({value_str})</span>: "
+                            f"<span style='color:#66ff66'>+{dps_gain:.2f}%</span> DPS ({prob:.1f}% chance)<br>"
+                        )
                     stats_html += "</div>"
                     st.markdown(stats_html, unsafe_allow_html=True)
 

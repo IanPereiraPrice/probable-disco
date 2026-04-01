@@ -20,7 +20,7 @@ USERS_DATA_DIR = os.path.join(DATA_DIR, "users")
 # Equipment slots
 EQUIPMENT_SLOTS = [
     "hat", "top", "bottom", "gloves", "shoes",
-    "belt", "shoulder", "cape", "ring", "necklace", "face"
+    "belt", "shoulder", "cape", "ring", "necklace", "eye", "face"
 ]
 
 
@@ -91,6 +91,9 @@ class UserData:
 
     # Hero Power passive stat values (direct values, not levels)
     hero_power_passive_values: Dict[str, float] = field(default_factory=dict)
+
+    # Unique stats (HeroUniqueStatOption levels)
+    unique_stats: Dict[str, int] = field(default_factory=dict)
 
     def get_equipment(self, slot: str) -> 'Equipment':
         """
@@ -222,6 +225,7 @@ def save_user_data(username: str, data: UserData) -> bool:
             writer.writerow(['character', 'all_skills', '', str(data.all_skills)])
             writer.writerow(['character', 'combat_mode', '', data.combat_mode])
             writer.writerow(['character', 'chapter', '', data.chapter])
+            writer.writerow(['character', 'job_class', '', data.job_class])
 
             # Equipment items
             for slot, item in data.equipment_items.items():
@@ -334,6 +338,11 @@ def save_user_data(username: str, data: UserData) -> bool:
             for stat_key, value in hero_power_passive_values.items():
                 writer.writerow(['hero_power_passive_value', stat_key, '', str(value)])
 
+            # Unique stats (HeroUniqueStatOption levels)
+            unique_stats = getattr(data, 'unique_stats', {}) or {}
+            for stat_key, level in unique_stats.items():
+                writer.writerow(['unique_stat', stat_key, '', str(level)])
+
         return True
     except Exception as e:
         print(f"Error saving user data: {e}")
@@ -371,6 +380,8 @@ def load_user_data(username: str) -> UserData:
                         data.combat_mode = value
                     elif key == 'chapter':
                         data.chapter = value
+                    elif key == 'job_class':
+                        data.job_class = value
 
                 elif section == 'equipment':
                     if key not in data.equipment_items:
@@ -480,6 +491,9 @@ def load_user_data(username: str) -> UserData:
 
                 elif section == 'hero_power_passive_value':
                     data.hero_power_passive_values[key] = float(value)
+
+                elif section == 'unique_stat':
+                    data.unique_stats[key] = int(value)
 
     except Exception as e:
         print(f"Error loading user data: {e}")
@@ -613,6 +627,7 @@ def export_user_data_csv(data: UserData) -> str:
     writer.writerow(['character', 'all_skills', '', str(data.all_skills)])
     writer.writerow(['character', 'combat_mode', '', data.combat_mode])
     writer.writerow(['character', 'chapter', '', data.chapter])
+    writer.writerow(['character', 'job_class', '', data.job_class])
 
     # Equipment items
     for slot, item in data.equipment_items.items():
@@ -731,17 +746,25 @@ def export_user_data_csv(data: UserData) -> str:
     for stat_key, value in hero_power_passive_values.items():
         writer.writerow(['hero_power_passive_value', stat_key, '', str(value)])
 
+    # Unique stats
+    unique_stats = getattr(data, 'unique_stats', {}) or {}
+    for stat_key, level in unique_stats.items():
+        writer.writerow(['unique_stat', stat_key, '', str(level)])
+
     return output.getvalue()
 
 
-def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
+def import_user_data_csv(csv_content: str, username: str, current_job_class: str = None) -> Optional[UserData]:
     """
     Import user data from CSV string.
     Returns UserData object if successful, None if failed.
+
+    current_job_class: if provided and the CSV has no job_class row, use this instead of the default.
     """
     import io
     data = UserData(username=username)
     _init_default_data(data)
+    job_class_found = False
 
     try:
         reader = csv.DictReader(io.StringIO(csv_content))
@@ -763,6 +786,9 @@ def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
                     data.combat_mode = value
                 elif key == 'chapter':
                     data.chapter = value
+                elif key == 'job_class':
+                    data.job_class = value
+                    job_class_found = True
 
             elif section == 'equipment':
                 if key not in data.equipment_items:
@@ -889,6 +915,28 @@ def import_user_data_csv(csv_content: str, username: str) -> Optional[UserData]:
 
             elif section == 'hero_power_passive_value':
                 data.hero_power_passive_values[key] = float(value)
+
+            elif section == 'unique_stat':
+                data.unique_stats[key] = int(value)
+
+        # If the CSV had no job_class row, preserve the caller's current job class
+        if not job_class_found and current_job_class:
+            data.job_class = current_job_class
+
+        # Migrate legacy DEX potentials to the actual main stat for non-Bowmaster jobs.
+        # Old CSVs saved before job class support used dex_flat/dex_pct as "main stat"
+        # labels. For any job where DEX is not the main stat, convert these to the
+        # job's real main stat (e.g. luk_pct for Shadower/Night Lord).
+        from job_classes import JobClass as JC, get_main_stat_name
+        actual_job = JC(data.job_class)
+        main_stat = get_main_stat_name(actual_job)  # e.g. 'luk', 'str', 'int'
+        if main_stat != 'dex':
+            _dex_to_main = {'dex_pct': f'{main_stat}_pct', 'dex_flat': f'{main_stat}_flat',
+                            'main_stat_pct': f'{main_stat}_pct', 'main_stat_flat': f'{main_stat}_flat'}
+            for slot_pots in data.equipment_potentials.values():
+                for field in list(slot_pots.keys()):
+                    if field.endswith('_stat') and slot_pots[field] in _dex_to_main:
+                        slot_pots[field] = _dex_to_main[slot_pots[field]]
 
         return data
     except Exception as e:

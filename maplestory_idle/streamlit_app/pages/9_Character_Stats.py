@@ -374,7 +374,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
     # Artifact potentials - only from EQUIPPED artifacts
     # Build set of equipped artifact keys
     equipped_artifact_keys = set()
-    for slot_key in ['slot0', 'slot1', 'slot2']:
+    for slot_key in ['slot0', 'slot1', 'slot2', 'slot3']:
         slot_data = artifacts_equipped.get(slot_key, {})
         if not isinstance(slot_data, dict):
             continue
@@ -481,7 +481,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
         from artifacts import EffectType
         # Use artifacts_equipped already loaded above from session state
 
-        for slot_key in ['slot0', 'slot1', 'slot2']:
+        for slot_key in ['slot0', 'slot1', 'slot2', 'slot3']:
             slot_data = artifacts_equipped.get(slot_key, {})
             if not isinstance(slot_data, dict):
                 continue
@@ -806,11 +806,7 @@ def get_calculated_stats(job_class: JobClass = None) -> Tuple[Dict[str, float], 
 
     # Determine job class for main stat keys
     if job_class is None:
-        job_class_str = getattr(data, 'job_class', 'bowmaster')
-        try:
-            job_class = JobClass(job_class_str.lower())
-        except ValueError:
-            job_class = JobClass.BOWMASTER
+        job_class = JobClass(data.job_class)
 
     main_stat = get_main_stat_name(job_class)  # e.g., 'dex'
     main_flat_key = f'{main_stat}_flat'
@@ -918,8 +914,9 @@ else:
     enemy_def = get_enemy_defense(chapter_num)
 
 # Calculate for mobs and boss
-ba_mob = calculate_basic_attack_damage(ba_stats, enemy_def=enemy_def, vs_boss=False)
-ba_boss = calculate_basic_attack_damage(ba_stats, enemy_def=enemy_def, vs_boss=True)
+ba_job_class = JobClass(data.job_class)
+ba_mob = calculate_basic_attack_damage(ba_stats, enemy_def=enemy_def, job_class=ba_job_class, vs_boss=False)
+ba_boss = calculate_basic_attack_damage(ba_stats, enemy_def=enemy_def, job_class=ba_job_class, vs_boss=True)
 
 st.markdown(f"**{ba_mob['skill_display_name']}** ({ba_mob['skill_damage_pct']:.0f}% × {ba_mob['hits']} hits × {ba_mob['targets']} targets)")
 
