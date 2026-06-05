@@ -1091,8 +1091,11 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                     # Enemy damage taken (Silver Pendant) - acts like FD
                     if effect_value > 0:
                         stats['final_damage_sources'].append(effect_value)
+                elif stat == 'buff_duration':
+                    # Buff duration: decimal → percentage points; extends buff uptime
+                    stats['buff_duration'] += effect_value * 100
                 # Utility stats (no DPS impact) - silently skip
-                elif stat in ('buff_duration', 'hp_recovery', 'hp_mp_recovery',
+                elif stat in ('hp_recovery', 'hp_mp_recovery',
                               'companion_duration', 'cooldown_reduction', 'utility'):
                     pass
 
@@ -1786,6 +1789,7 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     char.attack_speed_pct = total_attack_speed
     char.ba_target_bonus = int(stats.get('ba_target_bonus', 0))
     char.skill_cd_reduction = stats.get('skill_cd_reduction', 0)
+    char.buff_duration_pct = stats.get('buff_duration', 0)
 
     # Job-specific skill level bonuses from equipment
     char.skill_1st_bonus = int(stats.get('skill_1st_bonus', 0))

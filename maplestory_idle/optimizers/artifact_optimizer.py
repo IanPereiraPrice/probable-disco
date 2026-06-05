@@ -497,7 +497,7 @@ def _apply_stat_to_dict(stats: Dict[str, Any], stat: str, value: float) -> None:
 
     # Utility stats that don't affect DPS - skip silently
     utility_stats = {
-        BUFF_DURATION, 'hp_recovery', 'hp_mp_recovery',
+        'hp_recovery', 'hp_mp_recovery',
         'companion_duration', 'cooldown_reduction', 'utility',
     }
     if stat in utility_stats:
@@ -517,6 +517,11 @@ def _apply_stat_to_dict(stats: Dict[str, Any], stat: str, value: float) -> None:
             stats['attack_speed_sources'] = []
         if value > 0:
             stats['attack_speed_sources'].append(('artifact_effect', value * 100))
+        return
+
+    # Buff duration: decimal (0.06) → percentage points (6.0) stored in 'buff_duration'
+    if stat in (BUFF_DURATION, 'buff_duration'):
+        stats['buff_duration'] = stats.get('buff_duration', 0) + value * 100
         return
 
     # Artifact-specific stat name translations (only non-standard names)
