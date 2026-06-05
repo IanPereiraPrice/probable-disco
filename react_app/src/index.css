@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 224 71% 4%;
+    --foreground: 213 31% 91%;
+    --sidebar-bg: 222 47% 8%;
+    --sidebar-border: 217 33% 17%;
+    --card: 222 47% 11%;
+    --card-foreground: 213 31% 91%;
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --primary: 25 95% 53%;     /* maple orange */
+    --primary-foreground: 0 0% 100%;
+    --muted: 223 47% 11%;
+    --muted-foreground: 215 20% 60%;
+    --accent: 216 34% 17%;
+    --accent-foreground: 213 31% 91%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(217, 33%, 17%);
+    box-sizing: border-box;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+}
