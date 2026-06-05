@@ -1,4 +1,4 @@
-# hero_power.py - Hero Power System Data Structures and Simulation Logic
+﻿# hero_power.py - Hero Power System Data Structures and Simulation Logic
 """
 MapleStory Idle - Hero Power System
 ====================================
@@ -17,11 +17,11 @@ import random
 import copy
 
 # Import standardized stat names and utilities
-from stat_names import (
+from libs.stat_names import (
     get_display_name,
     DAMAGE_PCT, BOSS_DAMAGE, NORMAL_DAMAGE, DEF_PEN,
     MAX_DMG_MULT, MIN_DMG_MULT, CRIT_RATE,
-    MAIN_STAT_FLAT, ATTACK_FLAT, ATTACK_SPEED, MAX_HP, ACCURACY
+    MAIN_STAT_FLAT, ATTACK_FLAT, ATTACK_SPEED, MAX_HP, ACCURACY, DEFENSE
 )
 
 
@@ -404,69 +404,91 @@ DEFAULT_STAT_PROBS: Dict[HeroPowerStatType, float] = {
 }
 
 # Stat value ranges by tier (min, max)
-# From https://idle.maplestorywiki.net/w/Ability
-# Note: Not all stats are available at all tiers - N/A means stat cannot roll at that tier
-# Key insight: Best offensive stats (Boss Dmg, Def Pen) are only at LOWER tiers (Rare/Epic)!
+# Authoritative source: data_mine/TextAsset/HeroPowerAbilityOptionTable.json
+# (mapping: Grade1=Common, Grade2=Rare, Grade3=Epic, Grade4=Unique,
+#  Grade5=Legendary, Grade6=Mystic — confirmed by HeroPowerAbilityGradeProbTable
+#  whose Grade1..Grade6 probabilities at level 15 exactly match the in-game
+#  common/rare/epic/unique/legendary/mystic rates.)
+#
+# Datamine percentage stats are stored ×10 (e.g. AttackPowerToBoss 280-400
+# displays as 28-40%). Flat stats (MainStat, MaxHp) use their raw values.
+#
+# Key insight (CORRECTED from a prior incorrect table): higher tiers strictly
+# dominate lower tiers in BOTH stat selection AND value ranges. Mystic is the
+# best tier for every offensive stat. Boss Damage / Normal Damage / Def Pen
+# (PiercePower) only roll at Legendary or Mystic.
 HERO_POWER_STAT_RANGES: Dict[HeroPowerTier, Dict[HeroPowerStatType, Tuple[float, float]]] = {
-    # Mystic: Only defensive/utility stats - NO offensive stats!
-    HeroPowerTier.MYSTIC: {
-        HeroPowerStatType.MAIN_STAT_FLAT: (1500, 2500),
-        HeroPowerStatType.MAX_HP: (70000, 115000),
-        # No offensive stats available at Mystic tier
+    # Common (Grade1): only main stat + utility (no offensive stats)
+    HeroPowerTier.COMMON: {
+        HeroPowerStatType.MAIN_STAT_FLAT: (40, 60),
+        HeroPowerStatType.MAX_HP: (1200, 1500),
     },
-    # Legendary: Main stat, HP, Damage%, but NO def pen/boss dmg/crit rate/attack speed
-    HeroPowerTier.LEGENDARY: {
-        HeroPowerStatType.MAIN_STAT_FLAT: (800, 1200),
-        HeroPowerStatType.MAX_HP: (35000, 65000),
-        HeroPowerStatType.DAMAGE: (28.0, 40.0),
-        # No def pen, boss dmg, normal dmg, crit rate, attack speed at this tier
+    # Rare (Grade2): adds AttackPower (Damage %)
+    HeroPowerTier.RARE: {
+        HeroPowerStatType.MAIN_STAT_FLAT: (100, 150),
+        HeroPowerStatType.MAX_HP: (1800, 3000),
+        HeroPowerStatType.DAMAGE: (3.0, 5.0),
     },
-    # Unique: Damage%, Min/Max Dmg Mult, Crit Rate
-    HeroPowerTier.UNIQUE: {
-        HeroPowerStatType.MAIN_STAT_FLAT: (400, 700),
-        HeroPowerStatType.MAX_HP: (15000, 30000),
-        HeroPowerStatType.DAMAGE: (18.0, 25.0),
-        HeroPowerStatType.MAX_DMG_MULT: (28.0, 40.0),
-        HeroPowerStatType.MIN_DMG_MULT: (28.0, 40.0),
-        HeroPowerStatType.CRIT_RATE: (15.0, 20.0),
-        # No def pen, boss dmg, normal dmg, attack speed at this tier
-    },
-    # Epic: Attack Speed, Crit Rate, Def Pen, Boss/Normal Dmg become available here
+    # Epic (Grade3): adds Min/Max Damage Ratio and Crit Chance
     HeroPowerTier.EPIC: {
         HeroPowerStatType.MAIN_STAT_FLAT: (200, 300),
         HeroPowerStatType.MAX_HP: (4500, 9000),
+        HeroPowerStatType.DAMAGE: (7.0, 10.0),
+        HeroPowerStatType.MIN_DMG_MULT: (7.0, 10.0),
+        HeroPowerStatType.MAX_DMG_MULT: (7.0, 10.0),
+        HeroPowerStatType.CRIT_RATE: (3.0, 6.0),
+    },
+    # Unique (Grade4): adds Attack Speed
+    HeroPowerTier.UNIQUE: {
+        HeroPowerStatType.MAIN_STAT_FLAT: (400, 700),
+        HeroPowerStatType.MAX_HP: (15000, 30000),
         HeroPowerStatType.DAMAGE: (12.0, 15.0),
-        HeroPowerStatType.MAX_DMG_MULT: (18.0, 25.0),
+        HeroPowerStatType.MIN_DMG_MULT: (12.0, 15.0),
+        HeroPowerStatType.MAX_DMG_MULT: (12.0, 15.0),
+        HeroPowerStatType.CRIT_RATE: (7.0, 9.0),
+        HeroPowerStatType.ATTACK_SPEED: (7.0, 9.0),
+    },
+    # Legendary (Grade5): adds Pierce Power (Def Pen) and Boss/Normal Damage
+    HeroPowerTier.LEGENDARY: {
+        HeroPowerStatType.MAIN_STAT_FLAT: (800, 1200),
+        HeroPowerStatType.MAX_HP: (35000, 65000),
+        HeroPowerStatType.DAMAGE: (18.0, 25.0),
         HeroPowerStatType.MIN_DMG_MULT: (18.0, 25.0),
+        HeroPowerStatType.MAX_DMG_MULT: (18.0, 25.0),
         HeroPowerStatType.CRIT_RATE: (10.0, 14.0),
-        HeroPowerStatType.ATTACK_SPEED: (15.0, 20.0),
+        HeroPowerStatType.ATTACK_SPEED: (10.0, 14.0),
         HeroPowerStatType.DEF_PEN: (8.0, 12.0),
         HeroPowerStatType.BOSS_DAMAGE: (18.0, 25.0),
         HeroPowerStatType.NORMAL_DAMAGE: (18.0, 25.0),
     },
-    # Rare: BEST tier for Def Pen (14-20%) and Boss/Normal Dmg (28-40%)!
-    HeroPowerTier.RARE: {
-        HeroPowerStatType.MAIN_STAT_FLAT: (100, 150),
-        HeroPowerStatType.MAX_HP: (1800, 3000),
-        HeroPowerStatType.DAMAGE: (7.0, 10.0),
-        HeroPowerStatType.MAX_DMG_MULT: (12.0, 15.0),
-        HeroPowerStatType.MIN_DMG_MULT: (12.0, 15.0),
-        HeroPowerStatType.CRIT_RATE: (7.0, 9.0),
-        HeroPowerStatType.ATTACK_SPEED: (10.0, 14.0),
-        HeroPowerStatType.DEF_PEN: (14.0, 20.0),  # BEST def pen is at Rare!
-        HeroPowerStatType.BOSS_DAMAGE: (28.0, 40.0),  # BEST boss dmg is at Rare!
-        HeroPowerStatType.NORMAL_DAMAGE: (28.0, 40.0),  # BEST normal dmg is at Rare!
+    # Mystic (Grade6): strictly best across the board
+    HeroPowerTier.MYSTIC: {
+        HeroPowerStatType.MAIN_STAT_FLAT: (1500, 2500),
+        HeroPowerStatType.MAX_HP: (70000, 115000),
+        HeroPowerStatType.DAMAGE: (28.0, 40.0),
+        HeroPowerStatType.MIN_DMG_MULT: (28.0, 40.0),
+        HeroPowerStatType.MAX_DMG_MULT: (28.0, 40.0),
+        HeroPowerStatType.CRIT_RATE: (15.0, 20.0),
+        HeroPowerStatType.ATTACK_SPEED: (15.0, 20.0),
+        HeroPowerStatType.DEF_PEN: (14.0, 20.0),
+        HeroPowerStatType.BOSS_DAMAGE: (28.0, 40.0),
+        HeroPowerStatType.NORMAL_DAMAGE: (28.0, 40.0),
     },
-    # Common (Normal): Lowest tier
-    HeroPowerTier.COMMON: {
-        HeroPowerStatType.MAIN_STAT_FLAT: (40, 60),
-        HeroPowerStatType.MAX_HP: (1200, 1500),
-        HeroPowerStatType.DAMAGE: (3.0, 5.0),
-        HeroPowerStatType.MAX_DMG_MULT: (7.0, 10.0),
-        HeroPowerStatType.MIN_DMG_MULT: (7.0, 10.0),
-        HeroPowerStatType.CRIT_RATE: (3.0, 6.0),
-        HeroPowerStatType.ATTACK_SPEED: (7.0, 9.0),
-    },
+}
+
+
+# Total number of distinct stats that can roll at each tier per the datamine,
+# INCLUDING utility stats not tracked here (MaxMp, HitChance, AvoidChance,
+# MpRegen, DebuffResist, CriticalResist, Toughness, BonusGold/ExpPercent).
+# Used for accurate per-line probability: P(specific stat) = tier_rate / N.
+# Source: data_mine/TextAsset/HeroPowerAbilityOptionTable.json grouped by GradeType.
+STATS_PER_GRADE: Dict[HeroPowerTier, int] = {
+    HeroPowerTier.COMMON: 6,      # Grade1
+    HeroPowerTier.RARE: 8,        # Grade2
+    HeroPowerTier.EPIC: 12,       # Grade3
+    HeroPowerTier.UNIQUE: 14,     # Grade4
+    HeroPowerTier.LEGENDARY: 19,  # Grade5
+    HeroPowerTier.MYSTIC: 19,     # Grade6
 }
 
 
@@ -894,29 +916,29 @@ def rank_all_possible_lines_by_dps(
     combat_modes = ["stage", "boss", "world_boss"]
     results: Dict[str, List[Dict]] = {mode: [] for mode in combat_modes}
 
-    # Iterate through tiers with offensive stats
-    # Note: Rare has the BEST offensive stats (Boss Dmg 28-40%, Def Pen 14-20%)
-    # Mystic only has Main Stat and HP - no offensive stats!
+    # Tiers with offensive stats worth evaluating
     valuable_tiers = [
-        HeroPowerTier.RARE,       # Best: Boss/Normal 28-40%, Def Pen 14-20%
-        HeroPowerTier.EPIC,       # Good: Boss/Normal 18-25%, Def Pen 8-12%, AS 15-20%
-        HeroPowerTier.UNIQUE,     # Dmg 18-25%, Min/Max 28-40%, CR 15-20%
-        HeroPowerTier.LEGENDARY,  # Dmg 28-40%, Main Stat, HP
+        HeroPowerTier.RARE, HeroPowerTier.EPIC,
+        HeroPowerTier.UNIQUE, HeroPowerTier.LEGENDARY,
     ]
-
-    # Stats to evaluate for DPS ranking
-    # Note: Crit Damage is NOT available as an ability stat
     offensive_stats = [
-        HeroPowerStatType.DEF_PEN,
-        HeroPowerStatType.BOSS_DAMAGE,
-        HeroPowerStatType.DAMAGE,
-        HeroPowerStatType.MAX_DMG_MULT,
-        HeroPowerStatType.NORMAL_DAMAGE,
-        HeroPowerStatType.MAIN_STAT_FLAT,
-        HeroPowerStatType.CRIT_RATE,
-        HeroPowerStatType.ATTACK_SPEED,
+        HeroPowerStatType.DEF_PEN, HeroPowerStatType.BOSS_DAMAGE,
+        HeroPowerStatType.DAMAGE, HeroPowerStatType.MAX_DMG_MULT,
+        HeroPowerStatType.NORMAL_DAMAGE, HeroPowerStatType.MAIN_STAT_FLAT,
+        HeroPowerStatType.CRIT_RATE, HeroPowerStatType.ATTACK_SPEED,
         HeroPowerStatType.MIN_DMG_MULT,
     ]
+
+    # When real DPS callbacks are present, compute baseline ONCE and use the
+    # hypothetical-line evaluator (which correctly handles source-list stats
+    # like def_pen / attack_speed). calc_dps_func returns DPS for a single
+    # combat mode, so all 3 mode keys end up with identical real-DPS rankings
+    # (the per-mode distinction only matters in the heuristic fallback below).
+    use_real_dps = calc_dps_func is not None and get_stats_func is not None
+    current_stats = get_stats_func() if use_real_dps else None
+    current_dps = calc_dps_func(current_stats) if use_real_dps and current_stats else 0
+    if use_real_dps and current_dps <= 0:
+        use_real_dps = False  # Bad stats; fall back to heuristics
 
     for mode in combat_modes:
         mode_lines = []
@@ -929,38 +951,27 @@ def rank_all_possible_lines_by_dps(
                     continue
 
                 min_val, max_val = tier_ranges[stat_type]
-
-                # Create a hypothetical line with max value to calculate DPS
                 hypothetical_line = HeroPowerLine(
-                    slot=0,
-                    stat_type=stat_type,
-                    value=max_val,
-                    tier=tier,
-                    is_locked=False
+                    slot=0, stat_type=stat_type, value=max_val,
+                    tier=tier, is_locked=False,
                 )
 
-                # Calculate DPS contribution using mode-specific scoring
-                if calc_dps_func and get_stats_func:
-                    dps_contribution = calculate_line_dps_value(
-                        hypothetical_line, calc_dps_func, get_stats_func
+                if use_real_dps:
+                    dps_contribution = calculate_hypothetical_line_dps_value(
+                        hypothetical_line, current_stats, current_dps, calc_dps_func,
                     )
                 else:
-                    # Fallback: use weight-based estimation with mode adjustments
+                    # Heuristic fallback: per-mode weights × base weight × value
                     base_weight = STAT_DPS_WEIGHTS.get(stat_type, 0.5)
                     mode_adjustments = MODE_STAT_ADJUSTMENTS.get(mode, {})
                     mode_mult = mode_adjustments.get(stat_type, 1.0)
-
-                    # For flat stats, use different scaling
                     if stat_type == HeroPowerStatType.MAIN_STAT_FLAT:
                         dps_contribution = max_val / 1000.0 * base_weight * mode_mult
                     else:
                         dps_contribution = max_val * base_weight * mode_mult * 0.05
 
-                # Get display name
                 stat_name = STAT_DISPLAY_NAMES.get(stat_type, stat_type.value)
                 tier_name = tier.value.capitalize()
-
-                # Format value range
                 if stat_type == HeroPowerStatType.MAIN_STAT_FLAT:
                     value_range = f"{min_val:.0f}-{max_val:.0f}"
                 else:
@@ -977,13 +988,9 @@ def rank_all_possible_lines_by_dps(
                     'dps_contribution': dps_contribution,
                 })
 
-        # Sort by DPS contribution (highest first)
         mode_lines.sort(key=lambda x: x['dps_contribution'], reverse=True)
-
-        # Add rank
         for i, line in enumerate(mode_lines, 1):
             line['rank'] = i
-
         results[mode] = mode_lines
 
     return results
@@ -1172,7 +1179,7 @@ class HeroPowerConfig:
             StatBlock with all hero power stats (except def_pen)
         """
         from stats import create_stat_block_for_job
-        from job_classes import JobClass
+        from game.job_classes import JobClass
 
         if job_class is None:
             job_class = JobClass.BOWMASTER
@@ -1689,467 +1696,485 @@ def analyze_lock_strategy(
     }
 
 
-# =============================================================================
-# DPS OPTIMIZER - Strategy-Based Optimization
-# =============================================================================
-
-class OptimizationStrategy(Enum):
-    """Optimization strategies for Hero Power rerolling."""
-    CONSERVATIVE = "conservative"     # Lock early, minimize medal spend
-    BALANCED = "balanced"             # Default - balance cost vs improvement
-    AGGRESSIVE = "aggressive"         # Keep rerolling for near-perfect lines
-    EFFICIENCY = "efficiency"         # Pure DPS/1000 medals optimization
-    LINE_COUNT = "line_count"         # Target X/6 good lines
-
-
-# Strategy parameters
-STRATEGY_PARAMS: Dict[OptimizationStrategy, Dict] = {
-    OptimizationStrategy.CONSERVATIVE: {
-        'lock_threshold_score': 50,      # Lock lines scoring 50+
-        'stop_at_good_lines': 4,         # Stop when 4/6 lines are good
-        'max_rerolls': 500,              # Cap at 500 rerolls
-        'description': "Lock early, minimize medal spend",
-    },
-    OptimizationStrategy.BALANCED: {
-        'lock_threshold_score': 60,      # Lock lines scoring 60+
-        'stop_at_good_lines': 5,         # Stop when 5/6 lines are good
-        'max_rerolls': 2000,
-        'description': "Balance between cost and improvement",
-    },
-    OptimizationStrategy.AGGRESSIVE: {
-        'lock_threshold_score': 75,      # Only lock excellent lines
-        'stop_at_good_lines': 6,         # Want all 6 good
-        'max_rerolls': 10000,
-        'description': "Keep rerolling for near-perfect lines",
-    },
-    OptimizationStrategy.EFFICIENCY: {
-        'min_efficiency': 0.01,          # Stop when < 0.01% DPS per 1000 medals
-        'dynamic_threshold': True,       # Use calculate_reroll_efficiency()
-        'description': "Pure DPS per medal efficiency",
-    },
-    OptimizationStrategy.LINE_COUNT: {
-        'target_good_lines': 5,          # Default 5/6
-        'good_line_threshold': 60,       # Score >= 60 is "good"
-        'description': "Target specific number of good lines",
-    },
-}
-
-
-# DPS Reference Table - Shows estimated DPS gain for each tier/stat combo
-# Based on typical endgame stats: ~40k main stat, ~200% damage, ~50% def pen
-DPS_REFERENCE_TABLE: Dict[str, List[Dict]] = {
-    'mystic': [
-        {'stat': 'Main Stat', 'low': 1500, 'mid': 2000, 'high': 2500,
-         'dps_low': 0.5, 'dps_mid': 0.7, 'dps_high': 0.8, 'note': ''},
-        {'stat': 'Max HP', 'low': 70000, 'mid': 92500, 'high': 115000,
-         'dps_low': 0, 'dps_mid': 0, 'dps_high': 0, 'note': 'defensive only'},
-    ],
-    'legendary': [
-        {'stat': 'Main Stat', 'low': 800, 'mid': 1000, 'high': 1200,
-         'dps_low': 0.25, 'dps_mid': 0.35, 'dps_high': 0.4, 'note': ''},
-        {'stat': 'Damage %', 'low': 28, 'mid': 34, 'high': 40,
-         'dps_low': 1.4, 'dps_mid': 1.7, 'dps_high': 2.0, 'note': ''},
-        {'stat': 'Max HP', 'low': 35000, 'mid': 50000, 'high': 65000,
-         'dps_low': 0, 'dps_mid': 0, 'dps_high': 0, 'note': 'defensive only'},
-    ],
-    'unique': [
-        {'stat': 'Main Stat', 'low': 400, 'mid': 550, 'high': 700,
-         'dps_low': 0.1, 'dps_mid': 0.14, 'dps_high': 0.18, 'note': ''},
-        {'stat': 'Damage %', 'low': 18, 'mid': 21.5, 'high': 25,
-         'dps_low': 0.9, 'dps_mid': 1.1, 'dps_high': 1.25, 'note': ''},
-        {'stat': 'Max Dmg Mult', 'low': 28, 'mid': 34, 'high': 40,
-         'dps_low': 0.9, 'dps_mid': 1.1, 'dps_high': 1.3, 'note': ''},
-        {'stat': 'Min Dmg Mult', 'low': 28, 'mid': 34, 'high': 40,
-         'dps_low': 0.5, 'dps_mid': 0.6, 'dps_high': 0.7, 'note': ''},
-        {'stat': 'Crit Rate', 'low': 15, 'mid': 17.5, 'high': 20,
-         'dps_low': 0.6, 'dps_mid': 0.7, 'dps_high': 0.8, 'note': ''},
-    ],
-    'epic': [
-        {'stat': 'Def Pen', 'low': 8, 'mid': 10, 'high': 12,
-         'dps_low': 1.6, 'dps_mid': 2.0, 'dps_high': 2.4, 'note': ''},
-        {'stat': 'Boss Dmg', 'low': 18, 'mid': 21.5, 'high': 25,
-         'dps_low': 0.7, 'dps_mid': 0.9, 'dps_high': 1.0, 'note': 'boss only'},
-        {'stat': 'Normal Dmg', 'low': 18, 'mid': 21.5, 'high': 25,
-         'dps_low': 0.7, 'dps_mid': 0.9, 'dps_high': 1.0, 'note': 'mob only'},
-        {'stat': 'Damage %', 'low': 12, 'mid': 13.5, 'high': 15,
-         'dps_low': 0.6, 'dps_mid': 0.68, 'dps_high': 0.75, 'note': ''},
-        {'stat': 'Attack Speed', 'low': 15, 'mid': 17.5, 'high': 20,
-         'dps_low': 0.75, 'dps_mid': 0.9, 'dps_high': 1.0, 'note': ''},
-        {'stat': 'Crit Rate', 'low': 10, 'mid': 12, 'high': 14,
-         'dps_low': 0.4, 'dps_mid': 0.5, 'dps_high': 0.6, 'note': ''},
-    ],
-    'rare': [
-        {'stat': 'Def Pen', 'low': 14, 'mid': 17, 'high': 20,
-         'dps_low': 2.8, 'dps_mid': 3.4, 'dps_high': 4.0, 'note': 'BEST'},
-        {'stat': 'Boss Dmg', 'low': 28, 'mid': 34, 'high': 40,
-         'dps_low': 1.1, 'dps_mid': 1.4, 'dps_high': 1.6, 'note': 'boss only'},
-        {'stat': 'Normal Dmg', 'low': 28, 'mid': 34, 'high': 40,
-         'dps_low': 1.1, 'dps_mid': 1.4, 'dps_high': 1.6, 'note': 'mob only'},
-        {'stat': 'Attack Speed', 'low': 10, 'mid': 12, 'high': 14,
-         'dps_low': 0.5, 'dps_mid': 0.6, 'dps_high': 0.7, 'note': ''},
-        {'stat': 'Damage %', 'low': 7, 'mid': 8.5, 'high': 10,
-         'dps_low': 0.35, 'dps_mid': 0.42, 'dps_high': 0.5, 'note': ''},
-    ],
-}
-
-
-# Best lines ranking - sorted by max DPS gain
-BEST_LINES_RANKING: List[Dict] = [
-    {'rank': 1, 'tier': 'Rare', 'stat': 'Def Pen', 'max_value': '20%', 'max_dps': 4.0, 'probability': '3%'},
-    {'rank': 2, 'tier': 'Epic', 'stat': 'Def Pen', 'max_value': '12%', 'max_dps': 2.4, 'probability': '1.2%'},
-    {'rank': 3, 'tier': 'Legendary', 'stat': 'Damage %', 'max_value': '40%', 'max_dps': 2.0, 'probability': '0.46%'},
-    {'rank': 4, 'tier': 'Rare', 'stat': 'Boss Dmg', 'max_value': '40%', 'max_dps': 1.6, 'probability': '3%'},
-    {'rank': 5, 'tier': 'Rare', 'stat': 'Normal Dmg', 'max_value': '40%', 'max_dps': 1.6, 'probability': '3%'},
-    {'rank': 6, 'tier': 'Unique', 'stat': 'Max Dmg', 'max_value': '40%', 'max_dps': 1.3, 'probability': '0.75%'},
-    {'rank': 7, 'tier': 'Unique', 'stat': 'Damage %', 'max_value': '25%', 'max_dps': 1.25, 'probability': '1%'},
-    {'rank': 8, 'tier': 'Epic', 'stat': 'Boss Dmg', 'max_value': '25%', 'max_dps': 1.0, 'probability': '1.2%'},
-    {'rank': 9, 'tier': 'Epic', 'stat': 'Attack Speed', 'max_value': '20%', 'max_dps': 1.0, 'probability': '1.5%'},
-    {'rank': 10, 'tier': 'Mystic', 'stat': 'Main Stat', 'max_value': '2500', 'max_dps': 0.8, 'probability': '0.06%'},
-]
-
-
-def auto_detect_goal(
-    config: HeroPowerConfig,
-    level_config: HeroPowerLevelConfig,
-    calc_dps_func: Optional[Callable] = None,
-    get_stats_func: Optional[Callable] = None,
-) -> Dict:
+def calculate_hypothetical_line_dps_value(
+    line: HeroPowerLine,
+    current_stats: Dict,
+    current_dps: float,
+    calc_dps_func: Callable,
+) -> float:
     """
-    Analyze current config and suggest realistic improvement goals.
+    Compute % DPS gain from ADDING a hypothetical line to current_stats.
 
-    Args:
-        config: Current HeroPowerConfig with 6 lines
-        level_config: Level config for tier rates and costs
-        calc_dps_func: Optional callback for actual DPS calculation
-        get_stats_func: Optional callback to get current stats
+    Unlike calculate_line_dps_value (which subtracts an existing line to find
+    baseline), this is for evaluating lines that are NOT currently in the
+    user's data — e.g., for reference tables and "what if I rolled X" rankings.
 
-    Returns:
-        Dict with current state and suggested goals
+    Caller pre-computes current_stats and current_dps once so this helper can
+    be called many times cheaply (just one extra DPS call per evaluation).
     """
-    # Calculate current line scores
-    line_scores = []
-    for line in config.lines:
-        score = score_hero_power_line(line, calc_dps_func, get_stats_func)
-        dps_value = calculate_line_dps_value(line, calc_dps_func, get_stats_func)
-        line_scores.append({
-            'slot': line.slot,
-            'score': score,
-            'dps_value': dps_value,
-            'tier': line.tier.value,
-            'stat': STAT_DISPLAY_NAMES.get(line.stat_type, line.stat_type.value),
-        })
+    stats_key = STAT_TO_STATS_KEY.get(line.stat_type)
+    if not stats_key or current_dps <= 0:
+        return 0.0
 
-    # Sort by score descending to find best/worst lines
-    sorted_scores = sorted(line_scores, key=lambda x: x['score'], reverse=True)
+    test_stats = copy.deepcopy(current_stats)
 
-    # Count "good" lines (score >= 60)
-    good_lines = sum(1 for ls in line_scores if ls['score'] >= 60)
-    excellent_lines = sum(1 for ls in line_scores if ls['score'] >= 75)
+    if stats_key == 'def_pen':
+        # Multiplicative source list — append as a new source
+        # decimal value, priority 50 (matches existing hero power lines)
+        test_stats.setdefault('def_pen_sources', []).append(
+            ('hypothetical_hero_power', line.value / 100, 50)
+        )
+    elif stats_key == 'attack_speed':
+        test_stats.setdefault('attack_speed_sources', []).append(
+            ('hypothetical_hero_power', line.value)
+        )
+    elif stats_key == 'main_stat_flat':
+        # Resolves to job-specific flat key (dex_flat, str_flat, etc.)
+        main_stat_type = test_stats.get('main_stat_type', 'dex')
+        actual_key = f'{main_stat_type}_flat'
+        test_stats[actual_key] = test_stats.get(actual_key, 0) + line.value
+    else:
+        test_stats[stats_key] = test_stats.get(stats_key, 0) + line.value
 
-    # Calculate total DPS contribution
-    total_dps = sum(ls['dps_value'] for ls in line_scores)
+    try:
+        test_dps = calc_dps_func(test_stats)
+    except Exception:
+        return 0.0
 
-    # Find best and worst lines
-    best_line = sorted_scores[0] if sorted_scores else None
-    worst_line = sorted_scores[-1] if sorted_scores else None
+    return max(0.0, (test_dps / current_dps - 1) * 100)
 
-    # Calculate average score
-    avg_score = sum(ls['score'] for ls in line_scores) / len(line_scores) if line_scores else 0
 
-    # Generate suggested goals
-    goals = []
+def compute_dps_reference_table_for_character(
+    calc_dps_func: Callable,
+    get_stats_func: Callable,
+) -> Dict[str, List[Dict]]:
+    """
+    Build a per-tier DPS reference table using the user's actual character
+    stats. Same shape as DPS_REFERENCE_TABLE but populated with real numbers.
+    """
+    current_stats = get_stats_func()
+    current_dps = calc_dps_func(current_stats) if current_stats else 0
+    if current_dps <= 0:
+        return {}
 
-    # Goal 1: +1 good line (if not all good)
-    if good_lines < 6:
-        goals.append({
-            'name': f'{good_lines + 1}/6 Good Lines',
-            'type': 'line_count',
-            'target_good_lines': good_lines + 1,
-            'description': f'Improve from {good_lines} to {good_lines + 1} lines with score >= 60',
-            'difficulty': 'Easy' if good_lines < 3 else 'Medium',
-        })
+    result: Dict[str, List[Dict]] = {}
 
-    # Goal 2: +2% total DPS
-    if total_dps < 15:  # If total DPS contribution is under 15%
-        goals.append({
-            'name': f'+2% Total DPS',
-            'type': 'dps_improvement',
-            'target_dps': total_dps + 2.0,
-            'description': f'Increase total DPS contribution from {total_dps:.1f}% to {total_dps + 2:.1f}%',
-            'difficulty': 'Medium',
-        })
-
-    # Goal 3: Replace worst line
-    if worst_line and worst_line['score'] < 40:
-        goals.append({
-            'name': f'Replace Worst Line (Slot {worst_line["slot"]})',
-            'type': 'replace_worst',
-            'target_slot': worst_line['slot'],
-            'current_score': worst_line['score'],
-            'description': f'Replace {worst_line["stat"]} ({worst_line["tier"]}) with better stat',
-            'difficulty': 'Easy',
-        })
-
-    # Goal 4: All good lines (ambitious)
-    if good_lines < 6:
-        goals.append({
-            'name': '6/6 Good Lines',
-            'type': 'line_count',
-            'target_good_lines': 6,
-            'description': 'Achieve 6 lines with score >= 60 (may take many rerolls)',
-            'difficulty': 'Hard',
-        })
-
-    # Goal 5: Maximum efficiency (keep going while worthwhile)
-    goals.append({
-        'name': 'Maximum Efficiency',
-        'type': 'efficiency',
-        'min_efficiency': 0.01,
-        'description': 'Keep rerolling while DPS gain per 1000 medals > 0.01%',
-        'difficulty': 'Variable',
-    })
-
-    return {
-        'current_state': {
-            'total_dps': total_dps,
-            'good_lines': good_lines,
-            'excellent_lines': excellent_lines,
-            'avg_score': avg_score,
-            'best_line': best_line,
-            'worst_line': worst_line,
-        },
-        'line_scores': line_scores,
-        'suggested_goals': goals,
+    # Annotate notes for stats whose value depends on combat context
+    NOTES = {
+        HeroPowerStatType.BOSS_DAMAGE: 'boss only',
+        HeroPowerStatType.NORMAL_DAMAGE: 'mob only',
+        HeroPowerStatType.MAX_HP: 'defensive only',
     }
 
+    for tier, ranges in HERO_POWER_STAT_RANGES.items():
+        tier_name = tier.value
+        entries: List[Dict] = []
+        for stat_type, (low, high) in ranges.items():
+            mid = (low + high) / 2
 
-def estimate_cost_to_goal(
-    current_config: HeroPowerConfig,
-    goal: Dict,
-    level_config: HeroPowerLevelConfig,
-    strategy: OptimizationStrategy = OptimizationStrategy.BALANCED,
-    iterations: int = 1000,
-    max_rerolls: int = 10000,
-    calc_dps_func: Optional[Callable] = None,
-    get_stats_func: Optional[Callable] = None,
-) -> Dict:
-    """
-    Monte Carlo simulation to estimate cost to reach a goal.
-
-    Args:
-        current_config: Starting HeroPowerConfig
-        goal: Goal dict from auto_detect_goal()
-        level_config: Level config for tier rates and costs
-        strategy: Optimization strategy to use
-        iterations: Number of simulation runs
-        max_rerolls: Max rerolls per simulation
-        calc_dps_func: Optional DPS calculation callback
-        get_stats_func: Optional stats callback
-
-    Returns:
-        Dict with cost estimates and statistics
-    """
-    goal_type = goal.get('type', 'line_count')
-    strategy_params = STRATEGY_PARAMS.get(strategy, STRATEGY_PARAMS[OptimizationStrategy.BALANCED])
-
-    reroll_counts = []
-    medal_costs = []
-    successes = 0
-    capped = 0
-
-    for _ in range(iterations):
-        # Make a copy of the config
-        config = copy.deepcopy(current_config)
-
-        # Calculate which lines to lock based on strategy
-        lock_threshold = strategy_params.get('lock_threshold_score', 60)
-        for line in config.lines:
-            score = score_hero_power_line(line, calc_dps_func, get_stats_func)
-            line.is_locked = score >= lock_threshold
-
-        rerolls = 0
-        total_medals = 0
-
-        while rerolls < max_rerolls:
-            # Check if goal achieved
-            goal_achieved = False
-
-            if goal_type == 'line_count':
-                target = goal.get('target_good_lines', 5)
-                good_count = sum(
-                    1 for line in config.lines
-                    if score_hero_power_line(line, calc_dps_func, get_stats_func) >= 60
+            def _eval(val: float) -> float:
+                line = HeroPowerLine(
+                    slot=0, stat_type=stat_type, value=val,
+                    tier=tier, is_locked=False,
                 )
-                goal_achieved = good_count >= target
-
-            elif goal_type == 'dps_improvement':
-                target_dps = goal.get('target_dps', 10)
-                current_dps = sum(
-                    calculate_line_dps_value(line, calc_dps_func, get_stats_func)
-                    for line in config.lines
+                return calculate_hypothetical_line_dps_value(
+                    line, current_stats, current_dps, calc_dps_func,
                 )
-                goal_achieved = current_dps >= target_dps
 
-            elif goal_type == 'efficiency':
-                # For efficiency mode, check if any line is worth rerolling
-                min_efficiency = goal.get('min_efficiency', 0.01)
-                worth_rerolling = False
-                for line in config.lines:
-                    if line.is_locked:
-                        continue
-                    line_dps = calculate_line_dps_value(line, calc_dps_func, get_stats_func)
-                    eff = calculate_reroll_efficiency(
-                        line_dps, config.get_locked_count(), level_config,
-                        calc_dps_func, get_stats_func
-                    )
-                    if eff['efficiency'] >= min_efficiency:
-                        worth_rerolling = True
-                        break
-                goal_achieved = not worth_rerolling
+            entries.append({
+                'stat': STAT_DISPLAY_NAMES.get(stat_type, stat_type.value),
+                'stat_type': stat_type,
+                'low': low,
+                'mid': mid,
+                'high': high,
+                'dps_low': _eval(low),
+                'dps_mid': _eval(mid),
+                'dps_high': _eval(high),
+                'note': NOTES.get(stat_type, ''),
+            })
+        result[tier_name] = entries
+    return result
 
-            elif goal_type == 'replace_worst':
-                target_slot = goal.get('target_slot', 1)
-                target_line = next((l for l in config.lines if l.slot == target_slot), None)
-                if target_line:
-                    new_score = score_hero_power_line(target_line, calc_dps_func, get_stats_func)
-                    goal_achieved = new_score >= 60
 
-            if goal_achieved:
-                successes += 1
-                break
+def compute_best_lines_ranking_for_character(
+    calc_dps_func: Callable,
+    get_stats_func: Callable,
+    level_config: Optional['HeroPowerLevelConfig'] = None,
+    top_n: int = 10,
+) -> List[Dict]:
+    """
+    Rank top-N best (tier, stat) combinations to roll for, based on the user's
+    actual character stats. Same shape as BEST_LINES_RANKING.
 
-            # Reroll unlocked lines
-            cost = level_config.get_reroll_cost(config.get_locked_count())
-            config = simulate_hero_power_reroll(config, level_config)
-            rerolls += 1
-            total_medals += cost
+    Probability per line ≈ tier_rate / number_of_stats_at_that_tier
+    (uniform-within-tier assumption matches the hardcoded table).
+    """
+    current_stats = get_stats_func()
+    current_dps = calc_dps_func(current_stats) if current_stats else 0
+    if current_dps <= 0:
+        return []
 
-            # Re-evaluate locks after reroll
-            for line in config.lines:
-                if not line.is_locked:
-                    score = score_hero_power_line(line, calc_dps_func, get_stats_func)
-                    if score >= lock_threshold:
-                        line.is_locked = True
-        else:
-            capped += 1
-
-        reroll_counts.append(rerolls)
-        medal_costs.append(total_medals)
-
-    # Calculate statistics
-    if not reroll_counts:
-        return {
-            'expected_rerolls': 0,
-            'expected_medals': 0,
-            'median_rerolls': 0,
-            'median_medals': 0,
-            'p90_rerolls': 0,
-            'p90_medals': 0,
-            'success_rate': 0,
-            'capped_simulations': 0,
+    # Map tier → rate from level config (% per roll). Default to a reasonable
+    # spread when no level config provided so the table still renders.
+    if level_config is not None:
+        tier_rates = {
+            HeroPowerTier.MYSTIC: level_config.mystic_rate,
+            HeroPowerTier.LEGENDARY: level_config.legendary_rate,
+            HeroPowerTier.UNIQUE: level_config.unique_rate,
+            HeroPowerTier.EPIC: level_config.epic_rate,
+            HeroPowerTier.RARE: level_config.rare_rate,
+            HeroPowerTier.COMMON: level_config.common_rate,
         }
+    else:
+        tier_rates = {t: 0.0 for t in HeroPowerTier}
 
-    sorted_rerolls = sorted(reroll_counts)
-    sorted_medals = sorted(medal_costs)
-    median_idx = len(sorted_rerolls) // 2
-    p90_idx = int(len(sorted_rerolls) * 0.9)
+    candidates: List[Dict] = []
+    for tier, ranges in HERO_POWER_STAT_RANGES.items():
+        # Use the FULL stat count per grade from the datamine (includes utility
+        # stats not tracked in HERO_POWER_STAT_RANGES) so probabilities reflect
+        # what the game actually rolls.
+        stats_at_tier = STATS_PER_GRADE.get(tier, len(ranges))
+        if stats_at_tier == 0:
+            continue
+        tier_rate = tier_rates.get(tier, 0.0)
+        per_line_prob = tier_rate / stats_at_tier
 
-    return {
-        'expected_rerolls': sum(reroll_counts) / len(reroll_counts),
-        'expected_medals': sum(medal_costs) / len(medal_costs),
-        'median_rerolls': sorted_rerolls[median_idx],
-        'median_medals': sorted_medals[median_idx],
-        'p90_rerolls': sorted_rerolls[p90_idx],
-        'p90_medals': sorted_medals[p90_idx],
-        'success_rate': successes / iterations,
-        'capped_simulations': capped,
-        'iterations': iterations,
+        for stat_type, (low, high) in ranges.items():
+            line = HeroPowerLine(
+                slot=0, stat_type=stat_type, value=high,
+                tier=tier, is_locked=False,
+            )
+            max_dps = calculate_hypothetical_line_dps_value(
+                line, current_stats, current_dps, calc_dps_func,
+            )
+            # Format max value
+            if stat_type in (HeroPowerStatType.MAIN_STAT_FLAT, HeroPowerStatType.MAX_HP):
+                max_value_str = f"{high:.0f}"
+            else:
+                max_value_str = f"{high:.0f}%"
+
+            candidates.append({
+                'tier': tier.value.capitalize(),
+                'stat': STAT_DISPLAY_NAMES.get(stat_type, stat_type.value),
+                'max_value': max_value_str,
+                'max_dps': max_dps,
+                'probability': f"{per_line_prob:.2f}%",
+            })
+
+    candidates.sort(key=lambda x: x['max_dps'], reverse=True)
+    for i, entry in enumerate(candidates[:top_n], 1):
+        entry['rank'] = i
+    return candidates[:top_n]
+
+
+# =============================================================================
+# BUDGET-DRIVEN OPTIMIZER
+# =============================================================================
+# Replaces the older strategy-preset system (Conservative / Balanced / Aggressive
+# / Efficiency / Line Count). The user enters a medal budget; the optimizer
+# enumerates all 2^6 lock subsets (filtered by any user-explicit locks),
+# computes expected end-state DPS under each via the closed-form
+#   E[max(C, best of N draws)]
+# where N is the budget divided by the cost-per-reroll at that lock count, and
+# returns the subset with highest expected total. A "cascade ladder" of
+# reservation values at each potential lock count is also returned so the user
+# can see the aggressive-early / lenient-late lock threshold curve.
+
+def _build_fresh_roll_distribution(
+    current_stats: Dict,
+    current_dps: float,
+    calc_dps_func: Callable,
+    level_config: 'HeroPowerLevelConfig',
+) -> List[Tuple[float, float]]:
+    """
+    Returns the discrete distribution of DPS contribution from one fresh-rolled
+    hero power line, as a list of (dps_value, probability) tuples sorted by dps.
+    Includes utility/defensive stats (dps=0) for their share of probability mass.
+    """
+    tier_rates_decimal = {
+        HeroPowerTier.MYSTIC: level_config.mystic_rate / 100,
+        HeroPowerTier.LEGENDARY: level_config.legendary_rate / 100,
+        HeroPowerTier.UNIQUE: level_config.unique_rate / 100,
+        HeroPowerTier.EPIC: level_config.epic_rate / 100,
+        HeroPowerTier.RARE: level_config.rare_rate / 100,
+        HeroPowerTier.COMMON: level_config.common_rate / 100,
     }
 
+    raw: List[Tuple[float, float]] = []
+    for tier, ranges in HERO_POWER_STAT_RANGES.items():
+        tier_rate = tier_rates_decimal.get(tier, 0.0)
+        if tier_rate <= 0:
+            continue
+        n_total = STATS_PER_GRADE.get(tier, len(ranges))
+        if n_total <= 0:
+            continue
+        n_tracked = len(ranges)
+        # 3 sample points per stat range, uniform-within-stat assumption
+        per_sample = tier_rate * (1.0 / n_total) * (1.0 / 3)
+        for stat_type, (lo, hi) in ranges.items():
+            mid = (lo + hi) / 2
+            for val in (lo, mid, hi):
+                line = HeroPowerLine(
+                    slot=0, stat_type=stat_type, value=val,
+                    tier=tier, is_locked=False,
+                )
+                dps = calculate_hypothetical_line_dps_value(
+                    line, current_stats, current_dps, calc_dps_func,
+                )
+                raw.append((dps, per_sample))
+        # Untracked utility stats contribute dps=0 with their probability share
+        n_untracked = n_total - n_tracked
+        if n_untracked > 0:
+            utility_prob = tier_rate * n_untracked / n_total
+            raw.append((0.0, utility_prob))
 
-def analyze_with_strategy(
-    config: HeroPowerConfig,
-    level_config: HeroPowerLevelConfig,
-    strategy: OptimizationStrategy = OptimizationStrategy.BALANCED,
-    calc_dps_func: Optional[Callable] = None,
-    get_stats_func: Optional[Callable] = None,
+    # Merge duplicate dps values to keep the CDF clean
+    from collections import defaultdict
+    merged: Dict[float, float] = defaultdict(float)
+    for d, p in raw:
+        merged[round(d, 9)] += p  # tiny rounding to merge near-duplicates
+    return sorted(merged.items())
+
+
+def _expected_max_of_current_and_best_of_n(
+    current: float,
+    N: int,
+    distribution: List[Tuple[float, float]],
+) -> float:
+    """
+    Closed-form E[max(current, best of N i.i.d. draws from `distribution`)].
+    `distribution` is a sorted ascending list of (dps_value, probability).
+    """
+    if N <= 0 or not distribution:
+        return current
+
+    # F(current) = P(draw <= current)
+    F_at_current = sum(p for d, p in distribution if d <= current)
+    P_all_below = F_at_current ** N
+
+    # E = current * P(max_N <= current) + sum over d > current of d * P(max_N = d)
+    result = current * P_all_below
+    cum = F_at_current
+    prev_FN = P_all_below
+    for d, p in distribution:
+        if d <= current:
+            continue
+        cum += p
+        FN = cum ** N
+        result += d * (FN - prev_FN)
+        prev_FN = FN
+    return result
+
+
+def _expected_best_of_n(
+    N: int,
+    distribution: List[Tuple[float, float]],
+) -> float:
+    """E[best of N draws] — equivalent to max(0, M_N) when distribution >= 0."""
+    return _expected_max_of_current_and_best_of_n(0.0, N, distribution)
+
+
+def analyze_budget(
+    config: 'HeroPowerConfig',
+    level_config: 'HeroPowerLevelConfig',
+    budget_medals: float,
+    calc_dps_func: Callable,
+    get_stats_func: Callable,
 ) -> Dict:
     """
-    Analyze a config using a specific strategy to determine lock/reroll decisions.
+    Budget-driven hero power optimizer.
 
-    Args:
-        config: HeroPowerConfig to analyze
-        level_config: Level config for costs and rates
-        strategy: Which strategy to use
-        calc_dps_func: Optional DPS callback
-        get_stats_func: Optional stats callback
+    Algorithm matches how rerolls actually work in-game: each reroll
+    overwrites the unlocked lines, you don't get to keep "the best so far"
+    unless you LOCK that line at the moment you see a great value. So the
+    optimal strategy is a threshold rule: lock anything above the
+    reservation R_K (where K is the current lock count), reroll the rest.
 
-    Returns:
-        Dict with lock/reroll recommendations and reasoning
+    For each lock count K in 0..5:
+        cost_K = base + K * 43
+        N_K = floor(budget / cost_K)   (each reroll attempts all unlocked
+                                        slots simultaneously, so the slot
+                                        sees N_K attempts)
+        R_K = expected best of N_K draws from the fresh-roll DPS distribution
+
+    R_K decreases with K (more locks → higher cost → fewer rerolls → lower
+    expected best), which gives the "aggressive at 0 locks, lenient at 5"
+    behaviour the user wants.
+
+    Lock-set decision: walk slots in DESCENDING order of current DPS
+    contribution; lock a slot if its current contribution beats R_K
+    (where K is the size of the lock-set built so far). Stop when no more
+    additions qualify.
+
+    User-explicit locks (line.is_locked=True) are forced locked.
+
+    See plan: C:/Users/ianpr/.claude/plans/sorted-nibbling-meteor.md
     """
-    strategy_params = STRATEGY_PARAMS.get(strategy, STRATEGY_PARAMS[OptimizationStrategy.BALANCED])
+    current_stats = get_stats_func()
+    if not current_stats:
+        return {'budget_medals': budget_medals, 'error': 'no current stats'}
+    current_dps = calc_dps_func(current_stats)
+    if current_dps <= 0:
+        return {'budget_medals': budget_medals, 'error': 'current dps is zero'}
 
-    # Analyze each line
+    # 1) Per-slot current DPS contributions
+    per_slot_dps: Dict[int, float] = {}
+    for line in config.lines:
+        per_slot_dps[line.slot] = calculate_line_dps_value(
+            line, calc_dps_func, get_stats_func,
+        )
+    current_total_dps_pct = sum(per_slot_dps.values())
+
+    # 2) Fresh-roll DPS distribution
+    distribution = _build_fresh_roll_distribution(
+        current_stats, current_dps, calc_dps_func, level_config,
+    )
+
+    # 3) Cascade ladder. N_K = budget / cost_K (one slot's perspective —
+    #    each reroll counts as one attempt for every unlocked slot).
+    cascade = []
+    for K in range(6):
+        cost_K = level_config.get_reroll_cost(K)
+        N_K = int(budget_medals / cost_K) if cost_K > 0 else 0
+        R_K = _expected_best_of_n(N_K, distribution)
+        cascade.append({
+            'locks_held': K,
+            'cost_per_reroll': cost_K,
+            'rerolls_in_budget': N_K,
+            'reservation_dps_pct': R_K,
+        })
+
+    # 4) Greedy lock decision.
+    user_locked = {line.slot for line in config.lines if line.is_locked}
+    locked = set(user_locked)
+    # Walk slots in DESCENDING current DPS so the best candidates get
+    # evaluated first against the (still low) lock count threshold.
+    flexible_sorted = sorted(
+        (line.slot for line in config.lines if line.slot not in user_locked),
+        key=lambda s: per_slot_dps[s],
+        reverse=True,
+    )
+    for slot in flexible_sorted:
+        K = len(locked)
+        R_K = cascade[min(K, 5)]['reservation_dps_pct']
+        if per_slot_dps[slot] >= R_K:
+            locked.add(slot)
+        # If the slot fails, all remaining slots have even lower current DPS
+        # (we sorted descending), but R_K rises only as K grows. So once one
+        # fails, none below it could pass either at this K — but K may have
+        # changed earlier locks. Re-check each slot independently to be safe.
+
+    final_K = len(locked)
+    final_cost = level_config.get_reroll_cost(final_K)
+    final_N = int(budget_medals / final_cost) if final_cost > 0 else 0
+    final_R = cascade[min(final_K, 5)]['reservation_dps_pct']
+
+    # 5) Expected end-state DPS.
+    #    Locked slots keep their current C. Unlocked slots: under a threshold
+    #    strategy, if no roll exceeds R within N attempts, the slot ends at
+    #    the LAST roll (random fresh value, expected = mean of distribution).
+    #    If at least one roll exceeds R, the slot ends at E[fresh | fresh > R].
+    expected_total = 0.0
+    mean_fresh = sum(d * p for d, p in distribution)
+    p_above_R = sum(p for d, p in distribution if d > final_R)
+    e_above_R = (
+        sum(d * p for d, p in distribution if d > final_R) / p_above_R
+        if p_above_R > 0 else mean_fresh
+    )
+
+    for line in config.lines:
+        slot = line.slot
+        C = per_slot_dps[slot]
+        if slot in locked:
+            expected_total += C
+        else:
+            # Outcome modelling: the slot ends at max(threshold_hit_value, C)
+            # because if we never hit R, we end on a random fresh draw — but
+            # we might still keep an existing-above-current value via the
+            # threshold strategy IF we set the threshold = max(R, C). Simpler
+            # conservative model: the slot ends at E[max(C, fresh_outcome)]
+            # under no rerolls if rerolling would be net-negative; otherwise
+            # at e_above_R with probability of hitting it within N attempts.
+            #
+            # Practical model the user can defend:
+            #   - With prob P_success = 1 - (1 - p_above_R)^N, we lock at
+            #     a value drawn from {d > R} → average e_above_R.
+            #   - With prob (1 - P_success), we never hit R → fall back to
+            #     last roll (mean_fresh) OR if mean_fresh < C, the user
+            #     would have re-locked the original (C). Use max(C, mean).
+            P_success = 1 - (1 - p_above_R) ** final_N if final_N > 0 else 0
+            fallback = max(C, mean_fresh)
+            expected_total += P_success * e_above_R + (1 - P_success) * fallback
+
+    # 6) Per-line analysis with cascade-anchored reasoning.
     line_analysis = []
     for line in config.lines:
-        score = score_hero_power_line(line, calc_dps_func, get_stats_func)
-        dps_value = calculate_line_dps_value(line, calc_dps_func, get_stats_func)
+        slot = line.slot
+        C = per_slot_dps[slot]
+        is_locked_rec = slot in locked
 
-        # Determine lock recommendation based on strategy
-        if strategy == OptimizationStrategy.EFFICIENCY:
-            # Use efficiency calculation
-            num_locked = sum(1 for la in line_analysis if la.get('recommendation') == 'LOCK')
-            eff_result = calculate_reroll_efficiency(
-                dps_value, num_locked, level_config, calc_dps_func, get_stats_func
-            )
-            recommendation = eff_result['recommendation']
-            reasoning = eff_result['reasoning']
+        if is_locked_rec:
+            stop_value = None
+            if slot in user_locked:
+                reason = (
+                    f"User-locked. Contributes {C:.2f}% DPS."
+                )
+            else:
+                # Find the K-state at which this slot was locked (the K
+                # of the lock-set before this slot was added).
+                slot_K = list(sorted(locked, key=lambda s: per_slot_dps[s], reverse=True)).index(slot) + len(user_locked)
+                reason = (
+                    f"Current {C:.2f}% beats the lock threshold "
+                    f"{cascade[min(slot_K, 5)]['reservation_dps_pct']:.2f}% "
+                    f"at {slot_K} locks. Keep it."
+                )
+            p_improve = None
         else:
-            # Use score threshold
-            lock_threshold = strategy_params.get('lock_threshold_score', 60)
-            recommendation = 'LOCK' if score >= lock_threshold else 'REROLL'
-            reasoning = f"Score {score:.0f} {'≥' if score >= lock_threshold else '<'} threshold {lock_threshold}"
+            stop_value = final_R
+            p_above = sum(p for d, p in distribution if d > final_R)
+            p_improve = p_above
+            if p_above > 1e-9:
+                expected_attempts = 1.0 / p_above
+                expected_cost = expected_attempts * final_cost
+                reason = (
+                    f"Current {C:.2f}% is below the lock threshold {final_R:.2f}% "
+                    f"at {final_K} locks. Reroll until you see >= {final_R:.2f}%, "
+                    f"then lock. Avg ~{expected_attempts:,.0f} rerolls "
+                    f"(~{expected_cost:,.0f} medals) per success."
+                )
+            else:
+                reason = (
+                    f"Threshold {final_R:.2f}% is unreachable in the budget. "
+                    f"Reroll, lock whatever lands above {C:.2f}%."
+                )
 
         line_analysis.append({
-            'slot': line.slot,
+            'slot': slot,
             'stat': STAT_DISPLAY_NAMES.get(line.stat_type, line.stat_type.value),
             'tier': line.tier.value.capitalize(),
             'value': line.value,
-            'score': score,
-            'dps_value': dps_value,
-            'recommendation': recommendation,
-            'reasoning': reasoning,
+            'current_dps_pct': C,
+            'recommendation': 'LOCK' if is_locked_rec else 'REROLL',
+            'reasoning': reason,
+            'stop_value_pct': stop_value,
+            'p_improvement_per_reroll': p_improve,
         })
 
-    # Sort by score for display
-    line_analysis.sort(key=lambda x: x['score'], reverse=True)
-
-    # Calculate summary stats
-    lines_to_lock = [la['slot'] for la in line_analysis if la['recommendation'] == 'LOCK']
-    lines_to_reroll = [la['slot'] for la in line_analysis if la['recommendation'] == 'REROLL']
-
-    cost_per_reroll = level_config.get_reroll_cost(len(lines_to_lock))
+    has_unlocked = any(la['recommendation'] == 'REROLL' for la in line_analysis)
+    expected_medals_spent = float(budget_medals) if has_unlocked else 0.0
 
     return {
-        'strategy': strategy.value,
-        'strategy_description': strategy_params.get('description', ''),
+        'budget_medals': float(budget_medals),
+        'recommended_locks': sorted(locked),
+        'cost_per_reroll': final_cost,
+        'expected_rerolls': final_N,
+        'expected_medals_spent': expected_medals_spent,
+        'current_total_dps_pct': current_total_dps_pct,
+        'expected_total_dps_pct': expected_total,
+        'expected_gain_pct': expected_total - current_total_dps_pct,
+        'cascade': cascade,
         'line_analysis': line_analysis,
-        'lines_to_lock': lines_to_lock,
-        'lines_to_reroll': lines_to_reroll,
-        'cost_per_reroll': cost_per_reroll,
-        'total_dps': sum(la['dps_value'] for la in line_analysis),
-        'avg_score': sum(la['score'] for la in line_analysis) / len(line_analysis) if line_analysis else 0,
     }
-
-
-def get_dps_reference_for_tier(tier: str) -> List[Dict]:
-    """Get DPS reference data for a specific tier."""
-    return DPS_REFERENCE_TABLE.get(tier.lower(), [])
-
-
-def get_best_lines_ranking() -> List[Dict]:
-    """Get the ranking of best possible lines by DPS gain."""
-    return BEST_LINES_RANKING
 
 
 # =============================================================================

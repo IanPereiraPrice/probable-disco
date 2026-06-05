@@ -1,10 +1,11 @@
-"""
+﻿"""
 Hero Power Page
 Configure hero power rerollable lines, passive stats, level config, and get reroll recommendations.
 Now with 10 preset tabs like the original app!
 """
 import streamlit as st
 import sys
+import copy
 from pathlib import Path
 from typing import Dict, Any
 
@@ -12,9 +13,12 @@ from typing import Dict, Any
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from utils.data_manager import save_user_data
-from utils.dps_calculator import aggregate_stats, calculate_dps
+from utils.dps_calculator import (
+    aggregate_stats, calculate_dps,
+    compute_phase_dps, STAGE_MOB_FRACTION, STAGE_BOSS_FRACTION,
+)
 from core import ENEMY_DEFENSE_VALUES, get_enemy_defense
-from hero_power import (
+from game.hero_power import (
     HeroPowerStatType, HeroPowerTier, HeroPowerPassiveStatType,
     STAT_DISPLAY_NAMES, TIER_COLORS, HERO_POWER_PASSIVE_STATS,
     PASSIVE_STAT_DISPLAY_NAMES, HERO_POWER_STAT_RANGES,
@@ -24,11 +28,9 @@ from hero_power import (
     rank_all_possible_lines_by_dps, MODE_STAT_ADJUSTMENTS,
     STAT_DPS_WEIGHTS, TIER_SCORE_MULTIPLIERS,
     calculate_line_dps_value,
-    # DPS Optimizer imports
-    OptimizationStrategy, STRATEGY_PARAMS,
-    DPS_REFERENCE_TABLE, BEST_LINES_RANKING,
-    auto_detect_goal, estimate_cost_to_goal, analyze_with_strategy,
-    get_dps_reference_for_tier, get_best_lines_ranking,
+    compute_dps_reference_table_for_character,
+    compute_best_lines_ranking_for_character,
+    analyze_budget,
 )
 
 st.set_page_config(page_title="Hero Power", page_icon="*", layout="wide")
@@ -65,24 +67,54 @@ def get_stats_for_dps() -> Dict[str, Any]:
 
 
 def calc_dps_from_stats(stats: Dict[str, Any]) -> float:
-    """Calculate DPS from stats dict, returning total DPS."""
-    chapter_str = getattr(data, 'chapter', 'Chapter 27')
-    try:
-        chapter_num = int(chapter_str.replace('Chapter ', '').strip())
-    except (ValueError, AttributeError):
-        chapter_num = 27
-    enemy_def = get_enemy_defense(chapter_num)
+    """
+    Calculate DPS from stats dict.
 
-    from job_classes import JobClass
+    For stage combat mode, returns the PHASE-WEIGHTED score
+    (mob_dps * 0.6 + boss_dps * 0.4) so that boss% and normal% damage stats
+    are credited by their actual phase-time share, not by raw absolute DPS
+    (which is dominated by multi-target mob phase in realistic mode).
+
+    For other modes, returns the raw total.
+    """
+    # Look up by string key so "World Boss Stage N" works as well as
+    # "Chapter N" (the int(chapter_str.replace('Chapter ', '')) pattern used
+    # to silently fall back to Chapter 27 for World Boss entries, which made
+    # def_pen value-per-point appear unchanged when switching combat target).
+    chapter_str = getattr(data, 'chapter', 'Chapter 27')
+    enemy_def = ENEMY_DEFENSE_VALUES.get(chapter_str, 0.752)
+
+    from game.job_classes import JobClass
     job_class = JobClass(data.job_class)
-    result = calculate_dps(
-        stats, 'stage', enemy_def,
-        job_class=job_class,
-        use_realistic_dps=getattr(data, 'use_realistic_dps', False),
-        boss_importance=getattr(data, 'boss_importance', 70) / 100.0,
-        boss_damage_multiplier=getattr(data, 'boss_damage_multiplier', 1.0),
-    )
-    return result.get('total', 0)
+    use_realistic = getattr(data, 'use_realistic_dps', False)
+    boss_importance = getattr(data, 'boss_importance', 70) / 100.0
+    boss_damage_multiplier = getattr(data, 'boss_damage_multiplier', 1.0)
+    combat_mode = getattr(data, 'combat_mode', 'stage')
+
+    def _dps_result(s, mode):
+        # Return the FULL result dict so compute_phase_dps can read
+        # mob_phase_dps / boss_phase_dps directly in realistic mode.
+        return calculate_dps(
+            s, mode, enemy_def,
+            job_class=job_class,
+            use_realistic_dps=use_realistic,
+            boss_importance=boss_importance,
+            boss_damage_multiplier=boss_damage_multiplier,
+        )
+
+    if combat_mode == 'stage':
+        mob, boss = compute_phase_dps(stats, _dps_result)
+        if mob > 0 and boss > 0:
+            # Geometric mean of phase DPS, weighted 60/40.
+            # Chosen so (new/old - 1) approximates the phase-weighted gain:
+            #   ln(new/old) = 0.6*ln(mob_ratio) + 0.4*ln(boss_ratio)
+            #              ≈ 0.6*mob_gain + 0.4*boss_gain
+            # An additive scalar (mob*0.6 + boss*0.4) would NOT have this
+            # property — its ratio is dominated by whichever phase is larger
+            # in absolute terms (mob in stage mode for multi-target classes).
+            return (mob ** STAGE_MOB_FRACTION) * (boss ** STAGE_BOSS_FRACTION)
+        # Fall through if a phase couldn't be computed
+    return _dps_result(stats, combat_mode).get('total', 0)
 
 
 def get_value_range(tier_str: str, stat_str: str) -> tuple:
@@ -197,15 +229,14 @@ for idx, col in enumerate(preset_cols):
             use_container_width=True
         ):
             if not is_active:
-                # Save current preset's lines before switching
+                # Save current preset's lines before switching (deep copy to avoid shared refs)
                 data.hero_power_presets[data.active_hero_power_preset] = {
-                    'lines': dict(data.hero_power_lines)
+                    'lines': copy.deepcopy(data.hero_power_lines)
                 }
-                # Switch to new preset
+                # Switch to new preset, deep copy to keep presets independent
                 data.active_hero_power_preset = preset_name
-                # Load new preset's lines
                 preset_data = data.hero_power_presets.get(preset_name, {})
-                data.hero_power_lines = dict(preset_data.get('lines', get_default_lines()))
+                data.hero_power_lines = copy.deepcopy(preset_data.get('lines', get_default_lines()))
                 auto_save()
                 st.rerun()
 
@@ -221,7 +252,7 @@ st.divider()
 # Ensure hero_power_lines has the current preset's data
 preset_data = data.hero_power_presets.get(data.active_hero_power_preset, {})
 if not data.hero_power_lines or data.hero_power_lines != preset_data.get('lines', {}):
-    data.hero_power_lines = dict(preset_data.get('lines', get_default_lines()))
+    data.hero_power_lines = copy.deepcopy(preset_data.get('lines', get_default_lines()))
 
 # Initialize hero power lines if not present
 for i in range(1, 7):
@@ -238,7 +269,7 @@ for i in range(1, 7):
 # MAIN CONTENT TABS
 # ============================================================================
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Ability Lines", "Line Analysis", "Passive Stats", "Level Config", "Summary", "Optimizer"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Ability Lines", "Line Analysis", "Passive Stats", "Level Config", "Summary", "Optimizer", "Preset Comparison"])
 
 # ============================================================================
 # TAB 1: ABILITY LINES (6 rerollable lines)
@@ -254,6 +285,9 @@ with tab1:
     st.caption(f"Locked: {locked_count}/6 | Reroll Cost: {reroll_cost} Medals")
 
     # Display all 6 lines in a dense format
+    # Widget keys include active preset so Streamlit creates fresh widgets on preset switch,
+    # preventing stale session state from contaminating the newly loaded preset.
+    p = data.active_hero_power_preset
     for i in range(1, 7):
         line_key = f'line{i}'
         line = data.hero_power_lines[line_key]
@@ -271,13 +305,12 @@ with tab1:
             new_locked = st.checkbox(
                 "",
                 value=line.get('locked', False),
-                key=f"hp_lock_{i}",
+                key=f"hp_lock_{i}_{p}",
                 help=f"Lock Line {i}"
             )
             if new_locked != line.get('locked'):
                 line['locked'] = new_locked
-                # Save to preset
-                data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
+                data.hero_power_presets[data.active_hero_power_preset] = {'lines': copy.deepcopy(data.hero_power_lines)}
                 auto_save()
 
         with col_tier:
@@ -286,13 +319,13 @@ with tab1:
                 f"L{i} Tier",
                 options=HP_TIERS,
                 index=tier_idx,
-                key=f"hp_tier_{i}",
+                key=f"hp_tier_{i}_{p}",
                 format_func=lambda x: HP_TIER_DISPLAY.get(x, x),
                 label_visibility="collapsed"
             )
             if new_tier != tier_str:
                 line['tier'] = new_tier
-                data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
+                data.hero_power_presets[data.active_hero_power_preset] = {'lines': copy.deepcopy(data.hero_power_lines)}
                 auto_save()
 
         with col_stat:
@@ -301,13 +334,13 @@ with tab1:
                 f"L{i} Stat",
                 options=HP_STATS,
                 index=stat_idx,
-                key=f"hp_stat_{i}",
+                key=f"hp_stat_{i}_{p}",
                 format_func=lambda x: HP_STAT_DISPLAY.get(x, x),
                 label_visibility="collapsed"
             )
             if new_stat != stat_str:
                 line['stat'] = new_stat
-                data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
+                data.hero_power_presets[data.active_hero_power_preset] = {'lines': copy.deepcopy(data.hero_power_lines)}
                 auto_save()
 
         with col_val:
@@ -324,12 +357,12 @@ with tab1:
                 max_value=max_val_f,
                 value=current_val,
                 step=step_val,
-                key=f"hp_val_{i}",
+                key=f"hp_val_{i}_{p}",
                 label_visibility="collapsed"
             )
             if new_value != line.get('value'):
                 line['value'] = new_value
-                data.hero_power_presets[data.active_hero_power_preset] = {'lines': dict(data.hero_power_lines)}
+                data.hero_power_presets[data.active_hero_power_preset] = {'lines': copy.deepcopy(data.hero_power_lines)}
                 auto_save()
 
         with col_score:
@@ -343,7 +376,7 @@ with tab1:
                         tier=HeroPowerTier(new_tier),
                         is_locked=new_locked
                     )
-                    score = score_hero_power_line(hp_line)
+                    score = score_hero_power_line(hp_line, calc_dps_from_stats, get_stats_for_dps)
                     category, color = get_line_score_category(score)
                     lock_icon = "L" if new_locked else ""
                     st.markdown(f"<span style='color:{color};'>{lock_icon}{score:.0f} ({category})</span>", unsafe_allow_html=True)
@@ -394,8 +427,8 @@ with tab2:
     hp_config = build_hero_power_config(data.hero_power_lines)
     level_config = get_level_config()
 
-    # Analyze lock strategy
-    analysis = analyze_lock_strategy(hp_config, level_config)
+    # Analyze lock strategy with real DPS callbacks
+    analysis = analyze_lock_strategy(hp_config, level_config, calc_dps_from_stats, get_stats_for_dps)
 
     st.markdown("### Current Lines Analysis")
 
@@ -411,8 +444,8 @@ with tab2:
         dps_value = calculate_line_dps_value(line, calc_dps_from_stats, get_stats_for_dps)
         total_dps_contribution += dps_value
 
-        # Calculate mode-specific score
-        mode_score = score_hero_power_line_for_mode(line, analysis_mode)
+        # Calculate mode-specific score (real DPS)
+        mode_score = score_hero_power_line_for_mode(line, analysis_mode, calc_dps_from_stats, get_stats_for_dps)
         category, color = get_line_score_category(mode_score)
 
         # Recommendation
@@ -451,7 +484,7 @@ with tab2:
     st.markdown("### Best Lines to Target")
     st.caption("Shows the most valuable lines to aim for when rerolling")
 
-    rankings = rank_all_possible_lines_by_dps()
+    rankings = rank_all_possible_lines_by_dps(calc_dps_from_stats, get_stats_for_dps)
     mode_rankings = rankings.get(analysis_mode, [])
 
     top_lines = []
@@ -765,164 +798,122 @@ with tab5:
 # TAB 6: OPTIMIZER - DPS-based optimization with strategies
 # ============================================================================
 with tab6:
-    st.markdown("**Hero Power Optimizer**")
-    st.caption("Analyze your ability lines and get recommendations based on optimization strategies")
-
-    # Build config and level config
-    hp_config = build_hero_power_config(data.hero_power_lines)
-    level_config = get_level_config()
-
-    # Strategy selector
-    st.markdown("### Strategy Selection")
-
-    strategy_options = {
-        OptimizationStrategy.CONSERVATIVE: "Conservative - Lock early, minimize spending",
-        OptimizationStrategy.BALANCED: "Balanced - Balance cost vs improvement (Default)",
-        OptimizationStrategy.AGGRESSIVE: "Aggressive - Keep rolling for near-perfect lines",
-        OptimizationStrategy.EFFICIENCY: "Efficiency - Pure DPS per 1000 medals",
-        OptimizationStrategy.LINE_COUNT: "Line Count - Target X/6 good lines",
-    }
-
-    selected_strategy = st.radio(
-        "Optimization Strategy",
-        options=list(strategy_options.keys()),
-        format_func=lambda x: strategy_options[x],
-        index=1,  # Default to Balanced
-        key="opt_strategy",
-        horizontal=True
+    st.markdown("**Hero Power Optimizer** — budget-driven")
+    st.caption(
+        "Enter your medal budget. The optimizer picks a lock pattern that "
+        "maximizes expected DPS gain within that budget. Aggressive at low "
+        "lock counts (cheap rerolls), lenient as locks add up (rerolls get expensive)."
     )
 
-    # Show strategy description
-    strategy_params = STRATEGY_PARAMS.get(selected_strategy, {})
-    st.info(f"**{selected_strategy.value.capitalize()}**: {strategy_params.get('description', '')}")
+    hp_config = build_hero_power_config(data.hero_power_lines)
+    level_config = get_level_config()
+    base_cost = level_config.base_cost
+
+    col_b, col_help = st.columns([1, 2])
+    with col_b:
+        budget_medals = st.number_input(
+            "Budget (medals)",
+            min_value=0, max_value=1_000_000_000, value=100_000, step=1_000,
+            key="hp_budget_medals",
+            help=f"Cost per reroll: {base_cost} + 43 × (lines locked).",
+        )
+
+    with st.spinner("Computing optimal lock recommendation..."):
+        budget_result = analyze_budget(
+            hp_config, level_config, budget_medals,
+            calc_dps_from_stats, get_stats_for_dps,
+        )
+
+    if budget_result.get('error'):
+        st.warning(f"Cannot run analysis: {budget_result['error']}")
+    else:
+        # Summary metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            locks = budget_result['recommended_locks']
+            st.metric(
+                "Lock these",
+                ", ".join(str(s) for s in locks) if locks else "None",
+            )
+        with col2:
+            st.metric("Cost / reroll", f"{budget_result['cost_per_reroll']:,}")
+        with col3:
+            st.metric("Rerolls in budget", f"{budget_result['expected_rerolls']:,}")
+        with col4:
+            gain = budget_result['expected_gain_pct']
+            st.metric(
+                "Expected DPS gain",
+                f"+{gain:.2f}%",
+                delta=f"from current +{budget_result['current_total_dps_pct']:.2f}%",
+            )
+
+        st.markdown("### Lock-threshold cascade")
+        st.caption(
+            "Be picky at 0 locks (high threshold) and progressively lenient as "
+            "locks accumulate — because each lock raises the per-reroll cost, "
+            "shrinking the remaining budget."
+        )
+        cascade_rows = []
+        for c in budget_result['cascade']:
+            cascade_rows.append({
+                "Locks held": c['locks_held'],
+                "Cost / reroll": f"{c['cost_per_reroll']:,}",
+                "Rerolls left in budget": f"{c['rerolls_in_budget']:,}",
+                "Lock next line if DPS >=": f"{c['reservation_dps_pct']:.2f}%",
+            })
+        st.dataframe(cascade_rows, use_container_width=True, hide_index=True)
+
+        st.markdown("### Per-line recommendations")
+        analysis_rows = []
+        for la in budget_result['line_analysis']:
+            val_str = (
+                f"{la['value']:,.0f}"
+                if la['value'] >= 1000
+                else f"{la['value']:.1f}"
+            )
+            stop = (
+                f"{la['stop_value_pct']:.2f}%"
+                if la['stop_value_pct'] is not None
+                else "—"
+            )
+            analysis_rows.append({
+                "Slot": la['slot'],
+                "Stat": la['stat'],
+                "Tier": la['tier'],
+                "Value": val_str,
+                "Current DPS": f"+{la['current_dps_pct']:.2f}%",
+                "Action": la['recommendation'],
+                "Stop at": stop,
+                "Reason": la['reasoning'],
+            })
+        st.dataframe(analysis_rows, use_container_width=True, hide_index=True)
 
     st.divider()
 
-    # Current State Analysis
-    st.markdown("### Current State")
-
-    goal_analysis = auto_detect_goal(hp_config, level_config)
-    current_state = goal_analysis['current_state']
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total DPS", f"+{current_state['total_dps']:.1f}%",
-                  help="Sum of DPS contribution from all 6 ability lines")
-    with col2:
-        st.metric("Good Lines", f"{current_state['good_lines']}/6",
-                  help="Lines with score >= 60")
-    with col3:
-        st.metric("Excellent Lines", f"{current_state['excellent_lines']}/6",
-                  help="Lines with score >= 75")
-    with col4:
-        st.metric("Avg Score", f"{current_state['avg_score']:.0f}",
-                  help="Average score across all lines")
-
-    # Best and worst line
-    col1, col2 = st.columns(2)
-    with col1:
-        best = current_state.get('best_line')
-        if best:
-            st.success(f"**Best**: {best['stat']} ({best['tier'].capitalize()}) - Score {best['score']:.0f}")
-    with col2:
-        worst = current_state.get('worst_line')
-        if worst:
-            st.warning(f"**Worst**: {worst['stat']} ({worst['tier'].capitalize()}) - Score {worst['score']:.0f}")
-
-    st.divider()
-
-    # Strategy Analysis
-    st.markdown("### Line Analysis by Strategy")
-
-    analysis = analyze_with_strategy(hp_config, level_config, selected_strategy)
-
-    # Show line-by-line analysis
-    analysis_rows = []
-    for la in analysis['line_analysis']:
-        rec_color = "green" if la['recommendation'] == 'LOCK' else "orange"
-        analysis_rows.append({
-            "Slot": la['slot'],
-            "Stat": la['stat'],
-            "Tier": la['tier'],
-            "Value": f"{la['value']:.1f}" if la['value'] < 1000 else f"{la['value']:,.0f}",
-            "Score": f"{la['score']:.0f}",
-            "DPS %": f"+{la['dps_value']:.2f}%",
-            "Action": la['recommendation'],
-            "Reason": la['reasoning'],
-        })
-
-    st.dataframe(analysis_rows, use_container_width=True, hide_index=True)
-
-    # Summary metrics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        lock_slots = ", ".join(str(s) for s in analysis['lines_to_lock']) if analysis['lines_to_lock'] else "None"
-        st.metric("Lines to Lock", lock_slots)
-    with col2:
-        reroll_slots = ", ".join(str(s) for s in analysis['lines_to_reroll']) if analysis['lines_to_reroll'] else "None"
-        st.metric("Lines to Reroll", reroll_slots)
-    with col3:
-        st.metric("Cost per Reroll", f"{analysis['cost_per_reroll']} Medals")
-
-    st.divider()
-
-    # Suggested Goals
-    st.markdown("### Suggested Goals")
-
-    for idx, goal in enumerate(goal_analysis['suggested_goals'][:4]):
-        with st.expander(f"{goal['name']} ({goal['difficulty']})", expanded=(idx == 0)):
-            st.write(goal['description'])
-
-            if st.button(f"Estimate Cost", key=f"est_cost_{idx}"):
-                with st.spinner("Running simulation (1000 iterations)..."):
-                    cost_result = estimate_cost_to_goal(
-                        hp_config, goal, level_config, selected_strategy,
-                        iterations=500, max_rerolls=5000
-                    )
-
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Expected Cost", f"{cost_result['expected_medals']:,.0f} Medals")
-                with col2:
-                    st.metric("Median Cost", f"{cost_result['median_medals']:,.0f} Medals")
-                with col3:
-                    st.metric("P90 (Unlucky)", f"{cost_result['p90_medals']:,.0f} Medals")
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Expected Rerolls", f"{cost_result['expected_rerolls']:.0f}")
-                with col2:
-                    st.metric("Success Rate", f"{cost_result['success_rate']:.1%}")
-
-    st.divider()
-
-    # DPS Reference Tables
+    # DPS Reference Tables — computed live from the user's current stats
     st.markdown("### DPS Reference by Tier")
-    st.caption("Estimated DPS gain for each stat at Low/Mid/High values (based on ~40k main stat, ~200% damage)")
+    st.caption(f"Real DPS gain for each tier/stat/value combination against your current build (combat mode: {COMBAT_MODE_DISPLAY.get(getattr(data, 'combat_mode', 'stage'), 'Stage')}).")
 
-    # Warning about Mystic
-    st.warning("**Important**: Mystic tier only has Main Stat and Max HP - NO offensive stats! "
-               "For DPS optimization, Rare tier offensive stats (Def Pen, Boss Dmg) are often better.")
+    # Build the computed table once (used by both the per-tier display and the ranking)
+    computed_ref = compute_dps_reference_table_for_character(calc_dps_from_stats, get_stats_for_dps)
 
-    # Tier selector for reference table
-    tier_tabs = st.tabs(["Rare (BEST)", "Epic", "Unique", "Legendary", "Mystic"])
-
+    tier_tabs = st.tabs(["Rare", "Epic", "Unique", "Legendary", "Mystic"])
     tier_order = ['rare', 'epic', 'unique', 'legendary', 'mystic']
     for tier_idx, tier_name in enumerate(tier_order):
         with tier_tabs[tier_idx]:
-            tier_data = get_dps_reference_for_tier(tier_name)
+            tier_data = computed_ref.get(tier_name, [])
             if tier_data:
                 ref_rows = []
                 for entry in tier_data:
-                    # Format values based on stat type
-                    if entry['high'] > 1000:  # Flat stat
+                    is_flat = entry['high'] > 1000  # Flat stats: Main Stat, Max HP
+                    if is_flat:
                         low_val = f"{entry['low']:,.0f}"
                         mid_val = f"{entry['mid']:,.0f}"
                         high_val = f"{entry['high']:,.0f}"
-                    else:  # Percentage stat
-                        low_val = f"{entry['low']}%"
-                        mid_val = f"{entry['mid']}%"
-                        high_val = f"{entry['high']}%"
+                    else:
+                        low_val = f"{entry['low']:.1f}%"
+                        mid_val = f"{entry['mid']:.1f}%"
+                        high_val = f"{entry['high']:.1f}%"
 
                     ref_rows.append({
                         "Stat": entry['stat'],
@@ -940,27 +931,86 @@ with tab6:
 
     st.divider()
 
-    # Best Lines Ranking
+    # Best Lines Ranking — computed for the user
     st.markdown("### Best Lines Ranked by Max DPS Gain")
-    st.caption("Top 10 most valuable lines to aim for when rerolling")
+    st.caption("Top 10 most valuable lines to aim for when rerolling, ranked by real DPS gain against your build. Probability uses your hero power level config.")
 
-    ranking = get_best_lines_ranking()
+    computed_ranking = compute_best_lines_ranking_for_character(
+        calc_dps_from_stats, get_stats_for_dps, level_config, top_n=10,
+    )
     ranking_rows = []
-    for entry in ranking:
+    for entry in computed_ranking:
         ranking_rows.append({
             "Rank": entry['rank'],
             "Tier": entry['tier'],
             "Stat": entry['stat'],
             "Max Value": entry['max_value'],
-            "Max DPS": f"+{entry['max_dps']:.1f}%",
+            "Max DPS": f"+{entry['max_dps']:.2f}%",
             "Probability": entry['probability'],
         })
     st.dataframe(ranking_rows, use_container_width=True, hide_index=True)
 
-    st.markdown("**Key Takeaways:**")
-    st.markdown("""
-    - **Rare Def Pen** (+4% DPS max) is the best offensive line and 30% likely per reroll
-    - **Mystic Main Stat** (+0.8% DPS max) is 10x rarer at 0.12% and gives 5x less DPS
-    - For DPS optimization, target Rare/Epic Def Pen and Legendary Damage% first
-    - Mystic tier is mostly for bragging rights - lower tiers often give more actual DPS
-    """)
+# ============================================================================
+# TAB 7: PRESET COMPARISON - Actual DPS for all 10 presets, ranked
+# ============================================================================
+with tab7:
+    st.markdown("**Preset Comparison**")
+    st.caption(f"Real DPS for each preset against your current stats (combat mode: {COMBAT_MODE_DISPLAY.get(getattr(data, 'combat_mode', 'stage'), 'Stage')}).")
+
+    original_active = data.active_hero_power_preset
+    comparison_rows = []
+    try:
+        for preset_id in range(1, PRESET_COUNT + 1):
+            preset_name = str(preset_id)
+            preset_info = data.hero_power_presets.get(preset_name, {})
+            preset_lines = preset_info.get('lines', {})
+
+            # Temporarily activate this preset so aggregate_stats picks it up
+            data.active_hero_power_preset = preset_name
+            stats = aggregate_stats(data)
+            preset_dps = calc_dps_from_stats(stats)
+
+            # Count configured lines
+            configured = sum(1 for ln in preset_lines.values() if ln.get('stat', ''))
+            locked = sum(1 for ln in preset_lines.values() if ln.get('locked', False))
+
+            comparison_rows.append({
+                'preset': preset_name,
+                'is_active': preset_name == original_active,
+                'dps': preset_dps,
+                'configured_lines': configured,
+                'locked_lines': locked,
+            })
+    finally:
+        # Always restore the original active preset, even if a calc raises
+        data.active_hero_power_preset = original_active
+
+    # Find the best preset for delta calculation
+    best_dps = max((r['dps'] for r in comparison_rows), default=0)
+    active_dps = next((r['dps'] for r in comparison_rows if r['is_active']), 0)
+
+    # Build display rows ranked by DPS
+    display_rows = []
+    for r in sorted(comparison_rows, key=lambda x: x['dps'], reverse=True):
+        delta_vs_best = (r['dps'] / best_dps - 1) * 100 if best_dps > 0 else 0
+        delta_vs_active = (r['dps'] / active_dps - 1) * 100 if active_dps > 0 else 0
+        display_rows.append({
+            "Preset": ("* " if r['is_active'] else "") + r['preset'],
+            "DPS": f"{r['dps']:,.0f}",
+            "vs Best": f"{delta_vs_best:+.2f}%" if delta_vs_best != 0 else "-- (best)",
+            "vs Active": f"{delta_vs_active:+.2f}%" if not r['is_active'] else "-- (active)",
+            "Lines": f"{r['configured_lines']}/6",
+            "Locked": r['locked_lines'],
+        })
+
+    st.dataframe(display_rows, use_container_width=True, hide_index=True)
+    st.caption("* = currently active preset. DPS uses your character's current stats with each preset's hero power lines applied.")
+
+    # Quick summary
+    if comparison_rows:
+        best = max(comparison_rows, key=lambda x: x['dps'])
+        if best['preset'] != original_active and best_dps > active_dps:
+            gain_pct = (best_dps / active_dps - 1) * 100 if active_dps > 0 else 0
+            st.success(f"Preset **{best['preset']}** is the best — switching from preset {original_active} would gain **{gain_pct:+.2f}%** DPS.")
+        elif best['preset'] == original_active:
+            st.info(f"Preset **{original_active}** is already your best.")
