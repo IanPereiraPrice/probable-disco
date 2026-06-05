@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Artifact System
 ==================================
 Artifact mechanics, awakening, potentials, and calculations.
@@ -592,7 +592,7 @@ class ArtifactDefinition:
         Returns a value between 0.0 and 1.0 representing the fraction of time
         the effect is active.
         """
-        from cooldown_calc import calculate_buff_uptime
+        from libs.cooldown_calc import calculate_buff_uptime
         import math
 
         # Handle trigger delay (e.g., Chalice waits for boss kill at ~10s)
@@ -805,7 +805,7 @@ class ArtifactConfig:
             StatBlock with all artifact stats
         """
         from stats import StatBlock, create_stat_block_for_job
-        from job_classes import JobClass
+        from game.job_classes import JobClass
 
         if job_class is None:
             job_class = JobClass.BOWMASTER
@@ -1289,6 +1289,45 @@ ARTIFACTS = {
         inventory_base=0.05,     # 5% at ★0
         inventory_per_star=0.01,  # +1%/star → 10% at ★5
     ),
+
+    "alliance_badge": ArtifactDefinition(
+        name="Alliance Badge",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="Attack +X% (applies to self and allied players; stacks per player equipped)",
+        active_effects=[
+            ArtifactEffect(stat="attack_buff", base=0.10, per_star=0.02),  # 10%→20% at ★5
+        ],
+        inventory_description="Max Damage Multiplier +X%",
+        inventory_stat="max_damage_mult",
+        inventory_base=0.15,     # 15% at ★0
+        inventory_per_star=0.03,  # +3%/star → 30% at ★5
+    ),
+
+    "horn_flute": ArtifactDefinition(
+        name="Horn Flute",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="Your Final Damage +X% while Companion is summoned (×2 in Chapter Boss, not modeled)",
+        active_effects=[
+            ArtifactEffect(stat="final_damage", base=0.10, per_star=0.02),  # 10%→20% at ★5
+        ],
+        inventory_description="Boss Monster Damage +X%",
+        inventory_stat="boss_damage",
+        inventory_base=0.15,     # 15% at ★0
+        inventory_per_star=0.03,  # +3%/star → 30% at ★5
+    ),
+
+    "cursed_doll": ArtifactDefinition(
+        name="Cursed Doll",
+        tier=ArtifactTier.LEGENDARY,
+        active_description="Final Damage +X% (disappears 5s if target evades — modeled as permanent in idle)",
+        active_effects=[
+            ArtifactEffect(stat="final_damage", base=0.07, per_star=0.014),  # 7%→14% at ★5
+        ],
+        inventory_description="Accuracy +X (utility, no DPS impact)",
+        inventory_stat="accuracy",
+        inventory_base=10,       # 10 at ★0
+        inventory_per_star=2,    # +2/star → 20 at ★5
+    ),
 }
 
 
@@ -1440,7 +1479,11 @@ def calculate_fire_flower_fd(stars: int, targets: int) -> float:
         Final Damage bonus as decimal
     """
     ff_def = ARTIFACTS["fire_flower"]
-    per_target = ff_def.get_active_value(stars)
+    if ff_def.active_effects:
+        effect = ff_def.active_effects[0]
+        per_target = effect.base + stars * effect.per_star
+    else:
+        per_target = ff_def.get_active_value(stars)
     return min(targets, 10) * per_target
 
 

@@ -94,17 +94,17 @@ ATTACK_PCT = "attack_pct"
 
 # Skill Stats
 SKILL_DAMAGE = "skill_damage"
-ALL_SKILLS = "all_skills"
-SKILL_CD = "skill_cd"
+ALL_SKILLS = "all_skills_bonus"
+SKILL_CD = "skill_cd_reduction"
 BUFF_DURATION = "buff_duration"
-SKILL_1ST = "skill_1st"
-SKILL_2ND = "skill_2nd"
-SKILL_3RD = "skill_3rd"
-SKILL_4TH = "skill_4th"
+SKILL_1ST = "skill_1st_bonus"
+SKILL_2ND = "skill_2nd_bonus"
+SKILL_3RD = "skill_3rd_bonus"
+SKILL_4TH = "skill_4th_bonus"
 
 # Utility Stats
 ACCURACY = "accuracy"
-BA_TARGETS = "ba_targets"
+BA_TARGETS = "ba_target_bonus"
 BASIC_ATTACK_DAMAGE = "basic_attack_damage"
 
 # Multiplicative Stats (special handling required)

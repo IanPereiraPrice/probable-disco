@@ -1,4 +1,4 @@
-"""
+﻿"""
 Character Settings Page
 Configure character level, combat mode, and chapter.
 All Skills bonus is auto-calculated from equipment sources.
@@ -12,8 +12,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from utils.data_manager import save_user_data, export_user_data_csv, import_user_data_csv, EQUIPMENT_SLOTS
 from constants import ENEMY_DEFENSE_VALUES
-from equipment import get_amplify_multiplier
-from job_classes import JobClass, JOB_DISPLAY_NAMES, get_job_stats, get_main_stat_name, get_secondary_stat_name
+from game.equipment import get_amplify_multiplier
+from game.job_classes import JobClass, JOB_DISPLAY_NAMES, get_job_stats, get_main_stat_name, get_secondary_stat_name
+from game.skills import get_skill_points_for_job, Job
 
 st.set_page_config(page_title="Character Settings", page_icon="⚔️", layout="wide")
 
@@ -69,6 +70,20 @@ def calculate_all_skills() -> int:
                 total += int(special_value * sub_mult)
 
     return total
+
+
+def calculate_skill_bonuses() -> dict:
+    """Sum equipment sub-stat skill bonuses (skill_1st–skill_4th) across all slots."""
+    totals = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+    for slot in EQUIPMENT_SLOTS:
+        item = data.equipment_items.get(slot, {})
+        stars = int(item.get('stars', 0))
+        sub_mult = get_amplify_multiplier(stars, is_sub=True)
+        totals[1] += item.get('sub_skill_1st', 0) * sub_mult
+        totals[2] += item.get('sub_skill_2nd', 0) * sub_mult
+        totals[3] += item.get('sub_skill_3rd', 0) * sub_mult
+        totals[4] += item.get('sub_skill_4th', 0) * sub_mult
+    return {k: int(v) for k, v in totals.items()}
 
 
 st.title("⚔️ Character Settings")
@@ -133,6 +148,30 @@ with col1:
         data.all_skills = calculated_all_skills
         auto_save()
 
+    # Skill Level Breakdown
+    st.subheader("Skill Levels")
+    st.caption("Base (from leveling, capped at L140) + equipment bonus + All Skills")
+
+    equip_bonuses = calculate_skill_bonuses()
+    all_sk = calculated_all_skills
+    level_for_pts = min(data.character_level, 140)
+
+    skill_jobs = [
+        ("1st Job", Job.FIRST, equip_bonuses[1]),
+        ("2nd Job", Job.SECOND, equip_bonuses[2]),
+        ("3rd Job", Job.THIRD, equip_bonuses[3]),
+        ("4th Job", Job.FOURTH, equip_bonuses[4]),
+    ]
+    for label, job, equip in skill_jobs:
+        base_pts = get_skill_points_for_job(level_for_pts, job)
+        total = 1 + base_pts + all_sk + equip
+        parts = f"1 base + {base_pts} leveling"
+        if all_sk:
+            parts += f" + {all_sk} all skills"
+        if equip:
+            parts += f" + {equip} equip"
+        st.metric(f"{label} Skill Level", total, help=parts)
+
     st.divider()
 
     # Medal/Costume Main Stat
@@ -156,10 +195,10 @@ with col1:
     new_costume = st.number_input(
         "Costume Main Stat",
         min_value=0,
-        max_value=1500,
+        max_value=3000,
         value=costume_val,
         step=10,
-        help="Main stat from costume inventory effect (0-1500)"
+        help="Main stat from costume inventory effect (0-3000)"
     )
     if new_costume != costume_val:
         data.equipment_sets['costume'] = new_costume

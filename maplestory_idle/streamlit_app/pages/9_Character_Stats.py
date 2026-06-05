@@ -1,4 +1,4 @@
-"""
+﻿"""
 Character Stats Page
 Compare calculated stats vs actual in-game values to identify gaps.
 Click on any stat to see a breakdown of all contributing sources.
@@ -17,8 +17,8 @@ from utils.dps_calculator import (
     BASE_MIN_DMG,
     BASE_MAX_DMG,
 )
-from equipment import get_amplify_multiplier
-from job_classes import JobClass, get_main_stat_name, get_secondary_stat_name
+from game.equipment import get_amplify_multiplier
+from game.job_classes import JobClass, get_main_stat_name, get_secondary_stat_name
 from constants import is_percentage_stat
 
 st.set_page_config(page_title="Character Stats", page_icon="📊", layout="wide")
@@ -121,7 +121,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
 
     # Equipment base stats (with starforce)
     # Map stat_key to equipment base field and sub field
-    from equipment import SLOT_THIRD_MAIN_STAT
+    from game.equipment import SLOT_THIRD_MAIN_STAT
     equip_base_mapping = {
         'attack_flat': ('base_attack', 'sub_attack_flat'),
         main_flat_key: ('base_third_stat', None),  # Only for slots where third_stat is main_stat
@@ -158,10 +158,10 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
         'crit_rate': 'sub_crit_rate',
         'boss_damage': 'sub_boss_damage',
         'normal_damage': 'sub_normal_damage',
-        'skill_1st': 'sub_skill_1st',
-        'skill_2nd': 'sub_skill_2nd',
-        'skill_3rd': 'sub_skill_3rd',
-        'skill_4th': 'sub_skill_4th',
+        'skill_1st_bonus': 'sub_skill_1st',
+        'skill_2nd_bonus': 'sub_skill_2nd',
+        'skill_3rd_bonus': 'sub_skill_3rd',
+        'skill_4th_bonus': 'sub_skill_4th',
     }
     equip_sub_key = equip_sub_mapping.get(stat_key)
     if equip_sub_key:
@@ -177,7 +177,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
                 sources.append((f"{slot.title()} (Sub)", sub_val))
 
     # Equipment special stats (damage_pct, all_skills, final_damage on special items)
-    if stat_key == 'all_skills':
+    if stat_key == 'all_skills_bonus':
         for slot in EQUIPMENT_SLOTS:
             item = data.equipment_items.get(slot, {})
             if item.get('is_special', False):
@@ -218,7 +218,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
         'attack_speed': ['attack_speed'],
         'min_dmg_mult': ['min_dmg_mult'],
         'max_dmg_mult': ['max_dmg_mult'],
-        'all_skills': ['all_skills'],
+        'all_skills_bonus': ['all_skills'],
     }
 
     pot_names = pot_stat_mapping.get(stat_key, [])
@@ -226,7 +226,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
         slot_total = sum(stats.get(pn, 0) for pn in pot_names)
         if slot_total > 0:
             # Use int() for all_skills (skill levels are integers)
-            if stat_key == 'all_skills':
+            if stat_key == 'all_skills_bonus':
                 slot_total = int(slot_total)
             is_bonus = 'bonus_' in slot_key
             # Extract just the slot name (e.g., "hat" from "hat_bonus_pot" or "hat_pot")
@@ -247,10 +247,10 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
         hp_lines = data.hero_power_lines
 
     hp_stat_mapping = {
-        'damage_pct': 'damage_pct',
+        'damage_pct': 'damage',          # HP uses 'damage', not 'damage_pct'
         'boss_damage': 'boss_damage',
         'normal_damage': 'normal_damage',
-        'crit_damage': 'crit_damage',
+        'crit_rate': 'crit_rate',
         'def_pen': 'def_pen',
         'min_dmg_mult': 'min_dmg_mult',
         'max_dmg_mult': 'max_dmg_mult',
@@ -279,7 +279,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
             sources.append(("Hero Power Passives", value))
 
     # Maple Rank
-    from maple_rank import MapleRankStatType, MAPLE_RANK_STATS, get_cumulative_main_stat, MAIN_STAT_SPECIAL
+    from game.maple_rank import MapleRankStatType, MAPLE_RANK_STATS, get_cumulative_main_stat, MAIN_STAT_SPECIAL
     mr = data.maple_rank or {}
     mr_mapping = {
         main_flat_key: 'main_stat_flat',
@@ -316,18 +316,22 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
                         sources.append(("Maple Rank", value))
 
     # Companions (inventory stats use standardized names)
-    from companions import COMPANIONS
+    from game.companions import COMPANIONS
     companion_levels = data.companion_levels or {}
     comp_mapping = {
         'boss_damage': 'boss_damage',
         'normal_damage': 'normal_damage',
         'crit_rate': 'crit_rate',
+        'crit_damage': 'crit_damage',
         'min_dmg_mult': 'min_dmg_mult',
         'max_dmg_mult': 'max_dmg_mult',
         'attack_speed': 'attack_speed',
         'attack_flat': 'attack_flat',
         'damage_pct': 'damage_pct',
+        'skill_damage': 'skill_damage',
+        'basic_attack_damage': 'basic_attack_damage',
         main_flat_key: 'main_stat_flat',
+        main_pct_key: 'main_stat_pct',
     }
     comp_stat = comp_mapping.get(stat_key)
     if comp_stat:
@@ -366,7 +370,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
         art_stat_key = 'main_stat_pct'  # artifacts use generic main_stat_pct
 
     # Read from session state to ensure latest data
-    from artifacts import ARTIFACTS
+    from game.artifacts import ARTIFACTS
     _user_data = st.session_state.user_data
     artifacts_inventory = getattr(_user_data, 'artifacts_inventory', {}) or {}
     artifacts_equipped = getattr(_user_data, 'artifacts_equipped', {}) or {}
@@ -387,7 +391,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
                 equipped_artifact_keys.add(k)
                 break
 
-    from artifacts import POTENTIAL_SLOT_UNLOCKS, ArtifactTier
+    from game.artifacts import POTENTIAL_SLOT_UNLOCKS, ArtifactTier
     for art_key in equipped_artifact_keys:
         art_data = artifacts_inventory.get(art_key, {})
         if not isinstance(art_data, dict):
@@ -478,7 +482,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
     }
     art_active_stat = art_active_mapping.get(stat_key)
     if art_active_stat:
-        from artifacts import EffectType
+        from game.artifacts import EffectType
         # Use artifacts_equipped already loaded above from session state
 
         for slot_key in ['slot0', 'slot1', 'slot2', 'slot3']:
@@ -585,7 +589,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
 
     # Artifact Resonance (flat main stat)
     if stat_key == main_flat_key:
-        from artifacts import calculate_resonance_main_stat
+        from game.artifacts import calculate_resonance_main_stat
         artifacts_resonance = getattr(data, 'artifacts_resonance', {}) or {}
         resonance_level = int(artifacts_resonance.get('resonance_level', 0))
         if resonance_level > 0:
@@ -594,7 +598,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
                 sources.append(("Artifact Resonance", resonance_main))
 
     # Weapon Mastery stats (from weapon awakening levels)
-    from weapon_mastery import calculate_mastery_stages_from_weapons, calculate_mastery_stats
+    from game.weapon_mastery import calculate_mastery_stages_from_weapons, calculate_mastery_stats
     weapons_data = getattr(data, 'weapons_data', {}) or {}
     if weapons_data:
         mastery_stages = calculate_mastery_stages_from_weapons(weapons_data)
@@ -613,7 +617,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
 
     # Weapons (attack %)
     if stat_key == 'attack_pct':
-        from weapons import calculate_weapon_atk_str, get_inventory_ratio
+        from game.weapons import calculate_weapon_atk_str, get_inventory_ratio
         weapons_data = getattr(data, 'weapons_data', {}) or {}
         equipped_weapon_key = getattr(data, 'equipped_weapon_key', '') or ''
 
@@ -661,7 +665,7 @@ def get_stat_sources(stat_key: str, raw_stats: Dict, job_class: JobClass = None,
     skill_stat = skill_stat_mapping.get(stat_key)
     if skill_stat:
         try:
-            from skills import DPSCalculator, CharacterState, get_global_mastery_stats, BOWMASTER_SKILLS, SkillType
+            from game.skills import DPSCalculator, CharacterState, get_global_mastery_stats, BOWMASTER_SKILLS, SkillType
             # Use correct UserData attributes
             char_level = getattr(data, 'character_level', 100)
             all_skills_bonus = getattr(data, 'all_skills', 0)
@@ -786,11 +790,11 @@ def get_stat_definitions(job_class: JobClass = None):
         ("attack_speed", "Attack Speed %", True, False, 0),
         ("accuracy", "Accuracy", False, False, 0),
         # Skill level bonuses
-        ("skill_1st", "1st Job Skill Lvl", False, False, 0),
-        ("skill_2nd", "2nd Job Skill Lvl", False, False, 0),
-        ("skill_3rd", "3rd Job Skill Lvl", False, False, 0),
-        ("skill_4th", "4th Job Skill Lvl", False, False, 0),
-        ("all_skills", "All Skills", False, False, 0),
+        ("skill_1st_bonus", "1st Job Skill Lvl", False, False, 0),
+        ("skill_2nd_bonus", "2nd Job Skill Lvl", False, False, 0),
+        ("skill_3rd_bonus", "3rd Job Skill Lvl", False, False, 0),
+        ("skill_4th_bonus", "4th Job Skill Lvl", False, False, 0),
+        ("all_skills_bonus", "All Skills", False, False, 0),
     ]
 
 
@@ -898,20 +902,12 @@ st.markdown("---")
 st.markdown("<div class='section-header'>Basic Attack Single Line Damage</div>", unsafe_allow_html=True)
 
 # Get aggregated stats with adjustments
-from core import get_enemy_defense, ENEMY_DEFENSE_VALUES
+from core import ENEMY_DEFENSE_VALUES
 ba_stats = shared_aggregate_stats(data, apply_adjustments=True)
 
-# Get enemy defense based on current settings
+# Get enemy defense based on selected chapter
 combat_mode = getattr(data, 'combat_mode', 'stage')
-if combat_mode == 'world_boss':
-    enemy_def = ENEMY_DEFENSE_VALUES.get('World Boss', 6.527)
-else:
-    chapter_str = getattr(data, 'chapter', 'Chapter 27')
-    try:
-        chapter_num = int(chapter_str.replace('Chapter ', '').strip())
-    except (ValueError, AttributeError):
-        chapter_num = 27
-    enemy_def = get_enemy_defense(chapter_num)
+enemy_def = ENEMY_DEFENSE_VALUES.get(getattr(data, 'chapter', 'Chapter 27'), 0.752)
 
 # Calculate for mobs and boss
 ba_job_class = JobClass(data.job_class)
@@ -970,7 +966,7 @@ with col1:
 with col2:
     costume_val = st.number_input(
         "Costume Main Stat",
-        min_value=0, max_value=1500,
+        min_value=0, max_value=3000,
         value=int(data.equipment_sets.get('costume', 0)),
         help="Total main stat from costume set"
     )
@@ -1338,11 +1334,11 @@ with st.expander("🔍 **Debug: Stat Validation** (compare aggregate_stats vs ge
         ("basic_attack_damage", "Basic Attack Dmg %", False, 0),
         ("damage_amp", "Damage Amp %", False, 0),
         # Skill level bonuses
-        ("skill_1st", "1st Job Skill Lvl", False, 0),
-        ("skill_2nd", "2nd Job Skill Lvl", False, 0),
-        ("skill_3rd", "3rd Job Skill Lvl", False, 0),
-        ("skill_4th", "4th Job Skill Lvl", False, 0),
-        ("all_skills", "All Skills", False, 0),
+        ("skill_1st_bonus", "1st Job Skill Lvl", False, 0),
+        ("skill_2nd_bonus", "2nd Job Skill Lvl", False, 0),
+        ("skill_3rd_bonus", "3rd Job Skill Lvl", False, 0),
+        ("skill_4th_bonus", "4th Job Skill Lvl", False, 0),
+        ("all_skills_bonus", "All Skills", False, 0),
     ]
 
     validation_rows = []
@@ -1485,11 +1481,11 @@ with st.expander("🔬 **Debug: StatAggregator Validation** (compare new unified
             ("basic_attack_damage", "Basic Attack Dmg %", 0),
             ("damage_amp", "Damage Amp %", 0),
             # Skill level bonuses
-            ("skill_1st", "1st Job Skill Lvl", 0),
-            ("skill_2nd", "2nd Job Skill Lvl", 0),
-            ("skill_3rd", "3rd Job Skill Lvl", 0),
-            ("skill_4th", "4th Job Skill Lvl", 0),
-            ("all_skills", "All Skills", 0),
+            ("skill_1st_bonus", "1st Job Skill Lvl", 0),
+            ("skill_2nd_bonus", "2nd Job Skill Lvl", 0),
+            ("skill_3rd_bonus", "3rd Job Skill Lvl", 0),
+            ("skill_4th_bonus", "4th Job Skill Lvl", 0),
+            ("all_skills_bonus", "All Skills", 0),
         ]
 
         sa_rows = []

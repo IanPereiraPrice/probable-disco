@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Stat Analysis Tool
 =====================================
 Compares calculated stats from all modeled sources vs actual in-game stats.
@@ -13,16 +13,16 @@ import csv
 # Add the current directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from equipment import EQUIPMENT_SLOTS
-from cubes import PotentialLine, StatType, PotentialTier
-from artifacts import ArtifactConfig, ArtifactInstance
-from hero_power import HeroPowerConfig, HeroPowerLine, HeroPowerStatType, HeroPowerTier, HeroPowerPassiveConfig, HeroPowerPassiveStatType
-from guild import GuildConfig
-from companions import CompanionConfig
-from skills import get_global_mastery_stats, BOWMASTER_SKILLS, SkillType
-from maple_rank import MapleRankConfig
-from equipment_sets import EquipmentSetsConfig, MedalConfig, CostumeConfig
-from weapons import WeaponConfig, WeaponRarity
+from game.equipment import EQUIPMENT_SLOTS
+from game.cubes import PotentialLine, StatType, PotentialTier
+from game.artifacts import ArtifactConfig, ArtifactInstance
+from game.hero_power import HeroPowerConfig, HeroPowerLine, HeroPowerStatType, HeroPowerTier, HeroPowerPassiveConfig, HeroPowerPassiveStatType
+from game.guild import GuildConfig
+from game.companions import CompanionConfig
+from game.skills import get_global_mastery_stats, BOWMASTER_SKILLS, SkillType
+from game.maple_rank import MapleRankConfig
+from game.equipment_sets import EquipmentSetsConfig, MedalConfig, CostumeConfig
+from game.weapons import WeaponConfig, WeaponRarity
 
 
 # =============================================================================

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Weapon Mastery milestone rewards data.
 
 Players earn permanent stat rewards by reaching total awakening stages
@@ -69,14 +69,11 @@ WEAPON_MASTERY_REWARDS: Dict[str, List[MasteryReward]] = {
 }
 
 # Predefined weapon list: (rarity, tier) combinations
-# 27 total weapons (7 rarities × 4 tiers, minus Ancient T1 which doesn't exist)
+# 28 total weapons (7 rarities × 4 tiers)
 ALL_WEAPONS: List[tuple] = []
 RARITIES = ['normal', 'rare', 'epic', 'unique', 'legendary', 'mystic', 'ancient']
 for rarity in RARITIES:
     for tier in [1, 2, 3, 4]:
-        # Ancient T1 doesn't exist
-        if rarity == 'ancient' and tier == 1:
-            continue
         ALL_WEAPONS.append((rarity, tier))
 
 

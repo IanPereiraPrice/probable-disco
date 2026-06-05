@@ -1,4 +1,4 @@
-"""
+﻿"""
 Weapon Upgrade Optimizer
 ========================
 Analyzes weapon upgrade efficiency and provides recommendations
@@ -14,7 +14,7 @@ Key concepts:
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
-from weapons import (
+from game.weapons import (
     get_base_atk, get_level_multiplier, get_inventory_ratio,
     calculate_level_cost, DIAMONDS_TO_ENHANCERS, BASE_ATK
 )

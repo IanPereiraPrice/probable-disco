@@ -1,4 +1,4 @@
-"""
+﻿"""
 Stat Efficiency Guide Page
 Educational reference for stat values and efficiency.
 """

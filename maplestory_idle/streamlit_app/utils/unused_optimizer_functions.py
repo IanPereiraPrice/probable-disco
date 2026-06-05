@@ -1,4 +1,4 @@
-"""
+﻿"""
 UNUSED/REFERENCE CODE - Custom cube analysis functions that were replaced by the original
 cube_analyzer.py system from the Tkinter app.
 

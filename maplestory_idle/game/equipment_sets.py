@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Equipment Sets (Medals & Costumes)
 =====================================================
 Medals and Costumes provide flat main stat bonuses through inventory effects.
@@ -16,7 +16,6 @@ from enum import Enum
 # =============================================================================
 
 # Medal inventory effect provides flat main stat
-# Max: +1,500 DEX (user has 780/1,500)
 MEDAL_INVENTORY_EFFECT = {
     "max_value": 1500,
     "stat_type": "main_stat_flat",
@@ -24,11 +23,10 @@ MEDAL_INVENTORY_EFFECT = {
 }
 
 # Costume inventory effect provides flat main stat
-# Max: +1,500 DEX (user has 1,500/1,500 = MAX)
 COSTUME_INVENTORY_EFFECT = {
-    "max_value": 1500,
+    "max_value": 3000,
     "stat_type": "main_stat_flat",
-    "description": "Costume Inventory Effect: +X Main Stat (max 1,500)",
+    "description": "Costume Inventory Effect: +X Main Stat (max 3,000)",
 }
 
 

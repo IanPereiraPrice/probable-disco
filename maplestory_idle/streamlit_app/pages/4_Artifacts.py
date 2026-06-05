@@ -1,4 +1,4 @@
-"""
+﻿"""
 Artifacts Page
 Configure equipped artifacts, inventory effects, potentials, and cost calculator.
 Matches the original Tkinter app artifacts tab.
@@ -11,7 +11,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from utils.data_manager import save_user_data
-from artifacts import (
+from game.artifacts import (
     ARTIFACTS, ArtifactTier, PotentialTier, CombatScenario,
     ArtifactDefinition, ArtifactInstance, ArtifactConfig, ArtifactPotentialLine,
     POTENTIAL_SLOT_UNLOCKS, ARTIFACT_DROP_RATES, ARTIFACT_CHEST_COSTS,
@@ -21,8 +21,8 @@ from artifacts import (
     TOTAL_DUPLICATES_TO_STAR, TOTAL_DUPLICATES_BY_TIER,
     calculate_resonance_max_level, calculate_resonance_hp, calculate_resonance_main_stat,
 )
-from stat_names import get_display_name, STAT_DEFINITIONS
-from artifact_optimizer import (
+from libs.stat_names import get_display_name, STAT_DEFINITIONS
+from optimizers.artifact_optimizer import (
     calculate_chest_expected_value,
     calculate_awakening_efficiency,
     calculate_resonance_leveling_efficiency,
@@ -32,15 +32,16 @@ from artifact_optimizer import (
     ArtifactDPSScore,
     CHEST_COST_BLUE,
 )
-from stage_settings import get_fight_duration_from_string
-from utils.dps_calculator import aggregate_stats, calculate_dps as shared_calculate_dps
+from game.stage_settings import get_fight_duration_from_string
+from utils.dps_calculator import aggregate_stats, calculate_dps as shared_calculate_dps, calculate_effective_attack_speed_with_sources
+from game.artifacts import calculate_bottle_of_emotions_fd
 
 st.set_page_config(page_title="Artifacts", page_icon="💎", layout="wide")
 
 
 def calculate_dps(stats, mode='stage'):
     """Wrapper that respects user's realistic DPS setting."""
-    from job_classes import JobClass
+    from game.job_classes import JobClass
     user_data = st.session_state.user_data
     use_realistic = getattr(user_data, 'use_realistic_dps', False)
     boss_importance = getattr(user_data, 'boss_importance', 70) / 100.0
@@ -217,14 +218,14 @@ def calculate_inventory_stats():
     return stats
 
 
-def calculate_active_effects(scenario: str = "normal", fight_duration: float = 60.0):
+def calculate_active_effects(scenario: str = "normal", fight_duration: float = 60.0, total_attack_speed: float = 0.0):
     """Calculate active effects from equipped artifacts for a given scenario.
 
     Args:
         scenario: Combat scenario string (e.g., 'normal', 'boss', 'chapter_hunt')
         fight_duration: Fight duration in seconds for uptime calculations
     """
-    from artifacts import EffectType
+    from game.artifacts import EffectType
 
     effects = {
         'hex_multiplier': None,
@@ -288,8 +289,11 @@ def calculate_active_effects(scenario: str = "normal", fight_duration: float = 6
 
         # Process all active_effects
         for effect in defn.active_effects:
-            # Skip derived effects - they're calculated separately
             if effect.effect_type == EffectType.DERIVED:
+                if effect.derived_from == 'attack_speed_fd':
+                    fd_value = calculate_bottle_of_emotions_fd(stars, total_attack_speed) * uptime
+                    if fd_value > 0:
+                        effects['final_damage'] += fd_value
                 continue
 
             stat = effect.stat
@@ -408,7 +412,12 @@ with tab_config:
         # Get fight duration from user's combat mode setting
         fight_duration = get_fight_duration_from_string(data.combat_mode)
 
-        effects = calculate_active_effects(selected_scenario, fight_duration)
+        try:
+            _agg = aggregate_stats(data)
+            _total_atk_spd, _ = calculate_effective_attack_speed_with_sources(_agg.get('attack_speed_sources', []))
+        except Exception:
+            _total_atk_spd = 0.0
+        effects = calculate_active_effects(selected_scenario, fight_duration, total_attack_speed=_total_atk_spd)
 
         effect_rows = [
             ("Hex Multiplier", f"×{effects['hex_multiplier']:.2f}" if effects['hex_multiplier'] else "---"),
@@ -675,7 +684,7 @@ with tab_config:
             # POTENTIAL ANALYSIS SECTION
             st.markdown("---")
             with st.expander("📊 Potential Analysis", expanded=False):
-                from artifact_optimizer import (
+                from optimizers.artifact_optimizer import (
                     analyze_artifact_potential_scenarios,
                     ArtifactPotentialScenario,
                     ArtifactPotentialAnalysis,
@@ -726,7 +735,7 @@ with tab_config:
                     test_stats = deepcopy(agg_stats)
 
                     # Map artifact stat names to DPS calc names
-                    from stat_names import (
+                    from libs.stat_names import (
                         DAMAGE_PCT, BOSS_DAMAGE, NORMAL_DAMAGE, CRIT_RATE, DEF_PEN,
                         MIN_DMG_MULT, MAX_DMG_MULT, get_main_stat_pct_key,
                     )
@@ -745,8 +754,8 @@ with tab_config:
                         pct_key = get_main_stat_pct_key(main_type)
                         test_stats[pct_key] = test_stats.get(pct_key, 0) + value
                     elif stat_key == 'def_pen':
-                        mapped = stat_mapping.get(stat_key, stat_key)
-                        test_stats[mapped] = test_stats.get(mapped, 0) + (value / 100)
+                        test_stats['def_pen_sources'] = list(test_stats.get('def_pen_sources', []))
+                        test_stats['def_pen_sources'].append(('Artifact Potential', value / 100, 100))
                     else:
                         mapped = stat_mapping.get(stat_key, stat_key)
                         test_stats[mapped] = test_stats.get(mapped, 0) + value
@@ -794,7 +803,7 @@ with tab_config:
 
                         # Calculate DPS for all possible stat+tier combos
                         best_lines = []
-                        for stat_key in STAT_TO_POTENTIAL_KEY.keys():
+                        for stat_key in [k for k in POTENTIAL_VALUES.keys() if k not in ("damage_taken_decrease", "defense", "accuracy", "status_effect_damage")]:
                             for tier_name in ['legendary', 'mystic', 'mystic_high']:
                                 value = get_potential_value(stat_key, tier_name)
                                 if value > 0:
@@ -1179,7 +1188,7 @@ with tab_efficiency:
                 pot_lines = []
                 for i, pot in enumerate(potentials):
                     if isinstance(pot, dict):
-                        from artifacts import ArtifactPotentialLine, PotentialTier
+                        from game.artifacts import ArtifactPotentialLine, PotentialTier
                         tier_map = {
                             'rare': PotentialTier.RARE,
                             'epic': PotentialTier.EPIC,

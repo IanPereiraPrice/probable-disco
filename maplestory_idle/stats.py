@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Stat System
 =============================
 Type-safe stat classes with enforced attribute names and operator overloading.
@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from job_classes import JobClass
+    from game.job_classes import JobClass
 
 
 @dataclass(frozen=True)
@@ -155,38 +155,38 @@ class StatBlock:
 
     def get_main_stat_flat(self, job_class: 'JobClass') -> float:
         """Get the flat main stat value for a job class."""
-        from job_classes import get_main_stat_name
+        from game.job_classes import get_main_stat_name
         stat_name = get_main_stat_name(job_class)
         return getattr(self, f'{stat_name}_flat')
 
     def get_main_stat_pct(self, job_class: 'JobClass') -> float:
         """Get the percent main stat value for a job class."""
-        from job_classes import get_main_stat_name
+        from game.job_classes import get_main_stat_name
         stat_name = get_main_stat_name(job_class)
         return getattr(self, f'{stat_name}_pct')
 
     def get_secondary_stat_flat(self, job_class: 'JobClass') -> float:
         """Get the flat secondary stat value for a job class."""
-        from job_classes import get_secondary_stat_name
+        from game.job_classes import get_secondary_stat_name
         stat_name = get_secondary_stat_name(job_class)
         return getattr(self, f'{stat_name}_flat')
 
     def get_secondary_stat_pct(self, job_class: 'JobClass') -> float:
         """Get the percent secondary stat value for a job class."""
-        from job_classes import get_secondary_stat_name
+        from game.job_classes import get_secondary_stat_name
         stat_name = get_secondary_stat_name(job_class)
         return getattr(self, f'{stat_name}_pct')
 
     def with_main_stat_flat(self, job_class: 'JobClass', value: float) -> 'StatBlock':
         """Return new StatBlock with main stat flat set for job class."""
-        from job_classes import get_main_stat_name
+        from game.job_classes import get_main_stat_name
         stat_name = get_main_stat_name(job_class)
         kwargs = {f'{stat_name}_flat': value}
         return self._with_updates(**kwargs)
 
     def with_main_stat_pct(self, job_class: 'JobClass', value: float) -> 'StatBlock':
         """Return new StatBlock with main stat pct set for job class."""
-        from job_classes import get_main_stat_name
+        from game.job_classes import get_main_stat_name
         stat_name = get_main_stat_name(job_class)
         kwargs = {f'{stat_name}_pct': value}
         return self._with_updates(**kwargs)
@@ -385,7 +385,7 @@ def create_stat_block_for_job(
 
     This is a helper for sources that use generic 'main_stat' keys.
     """
-    from job_classes import get_main_stat_name
+    from game.job_classes import get_main_stat_name
     stat_name = get_main_stat_name(job_class)
 
     # Start with provided kwargs
@@ -468,7 +468,7 @@ class StatAggregator:
         This bridges the type-safe StatBlock with the existing DPS calculator.
         Uses standardized stat names from stat_names.py.
         """
-        from job_classes import get_main_stat_name, get_secondary_stat_name
+        from game.job_classes import get_main_stat_name, get_secondary_stat_name
 
         main_stat = get_main_stat_name(job_class)
         secondary_stat = get_secondary_stat_name(job_class)

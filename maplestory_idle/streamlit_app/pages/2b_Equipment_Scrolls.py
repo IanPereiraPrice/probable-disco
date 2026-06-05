@@ -1,4 +1,4 @@
-"""
+﻿"""
 Equipment Scrolls Page
 Manage scroll bonuses (damage amp, flat attack, flat main stat) per equipment slot.
 Independent system from starforce.

@@ -46,10 +46,7 @@ from .damage import (
     calculate_attack_speed,
 )
 
-from .stats import (
-    CharacterStats,
-    aggregate_stats,
-)
+from .models import CharacterModel
 
 __all__ = [
     # Constants
@@ -80,7 +77,6 @@ __all__ = [
     'calculate_defense_multiplier',
     'calculate_effective_crit_multiplier',
     'calculate_attack_speed',
-    # Stats aggregation
-    'CharacterStats',
-    'aggregate_stats',
+    # Unified character model
+    'CharacterModel',
 ]

@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Weapon System
 ===============================
 Weapon mechanics, ATK% scaling, and inventory effects.
@@ -74,10 +74,11 @@ BASE_ATK = {
     ("mystic", 3): 2154.2,
     ("mystic", 2): 2865.1,
     ("mystic", 1): 3810.6,
-    # Ancient: 1.35x from Mystic T1, only T4 exists currently
+    # Ancient: 1.35x from Mystic T1
     ("ancient", 4): 5144.3,
     ("ancient", 3): 6944.8,   # Estimated: 5144.3 × 1.35
     ("ancient", 2): 9375.5,   # Estimated: 6944.8 × 1.35
+    ("ancient", 1): 12656.9,  # Verified: 12656.9 × 1.171 (lv58 mult) = 14821.2% ✓
 }
 
 # =============================================================================
@@ -121,6 +122,8 @@ BASE_COST = {
     ("ancient", 4): 23520,
     ("ancient", 3): 70000,    # Verified from user data Jan 2026
     ("ancient", 2): 120000,   # Verified from user data Jan 2026
+    ("ancient", 1): 170000,   # Verified: ceil(170000 × 1.015^57) = 397,203 at lv58→59 ✓
+                               # NOTE: uses 1.015^(level-1) flat rate, NOT the piecewise formula
 }
 
 # Diamond to Weapon Enhancer conversion rate
@@ -257,10 +260,14 @@ def calculate_level_cost(rarity: str, tier: int, from_level: int) -> int:
     Calculate cost to level up from from_level to from_level+1.
 
     Returns cost in Weapon Enhancers (rounded up).
+    Ancient T1 uses a flat 1.015^(level-1) compound throughout (not piecewise).
     """
     import math
     base = get_base_cost(rarity, tier)
-    multiplier = get_cost_multiplier(from_level)
+    if rarity.lower() == "ancient" and tier == 1:
+        multiplier = 1.015 ** (from_level - 1)
+    else:
+        multiplier = get_cost_multiplier(from_level)
     return math.ceil(base * multiplier)
 
 

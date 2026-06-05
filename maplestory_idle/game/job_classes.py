@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Job Class System
 ===================================
 Defines all job classes with their stat type mappings.
@@ -32,6 +32,9 @@ class JobClass(Enum):
     # Thief branch (LUK/DEX)
     NIGHT_LORD = "night_lord"
     SHADOWER = "shadower"
+    # Pirate branch
+    BUCCANEER = "buccaneer"   # STR/DEX — sea serpent melee fighter
+    CORSAIR = "corsair"       # DEX/STR — gun + crew summon
 
 
 # Job class stat mappings: (main_stat, secondary_stat)
@@ -48,6 +51,9 @@ JOB_STAT_MAPPING: Dict[JobClass, Tuple[StatType, StatType]] = {
     # Thief branch (LUK/DEX)
     JobClass.NIGHT_LORD: (StatType.LUK, StatType.DEX),
     JobClass.SHADOWER: (StatType.LUK, StatType.DEX),
+    # Pirate branch
+    JobClass.BUCCANEER: (StatType.STR, StatType.DEX),
+    JobClass.CORSAIR: (StatType.DEX, StatType.STR),
 }
 
 
@@ -61,6 +67,8 @@ JOB_DISPLAY_NAMES: Dict[JobClass, str] = {
     JobClass.ARCHMAGE_ICE_LIGHTNING: "Archmage (I/L)",
     JobClass.NIGHT_LORD: "Night Lord",
     JobClass.SHADOWER: "Shadower",
+    JobClass.BUCCANEER: "Buccaneer",
+    JobClass.CORSAIR: "Corsair",
 }
 
 
@@ -70,6 +78,7 @@ JOB_GROUPS: Dict[str, list] = {
     "Warrior": [JobClass.HERO, JobClass.DARK_KNIGHT],
     "Mage": [JobClass.ARCHMAGE_FIRE_POISON, JobClass.ARCHMAGE_ICE_LIGHTNING],
     "Thief": [JobClass.NIGHT_LORD, JobClass.SHADOWER],
+    "Pirate": [JobClass.BUCCANEER, JobClass.CORSAIR],
 }
 
 

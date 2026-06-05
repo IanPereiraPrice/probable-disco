@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Passive Skills System
 =======================================
 Passive skill bonuses for each job class.

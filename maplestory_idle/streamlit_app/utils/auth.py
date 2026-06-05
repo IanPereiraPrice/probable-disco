@@ -1,4 +1,4 @@
-"""
+﻿"""
 Simple authentication system for MapleStory Idle Calculator.
 Uses hashed passwords stored in a CSV file.
 """

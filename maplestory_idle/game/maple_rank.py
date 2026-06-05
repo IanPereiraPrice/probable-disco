@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Maple Rank System
 ====================================
 Maple Rank provides significant stat bonuses through stage progression.
@@ -125,6 +125,36 @@ STAT_DISPLAY_NAMES = {
 # MAIN STAT SCALING FORMULA (VERIFIED)
 # =============================================================================
 
+def get_defense_per_point(stage: int) -> int:
+    """DEF per point = main stat per point × 3. Verified: stage 23 → 90×3 = 270."""
+    return get_main_stat_per_point(stage) * 3
+
+
+def get_max_hp_per_point(stage: int) -> int:
+    """Max HP per point = main stat per point × 50. Verified: stage 23 → 90×50 = 4500."""
+    return get_main_stat_per_point(stage) * 50
+
+
+def get_cumulative_defense(stage: int, level: int) -> int:
+    """Cumulative DEF from all completed stages plus current stage level."""
+    total = 0
+    for s in range(1, stage):
+        total += get_defense_per_point(s) * 10
+    if stage >= 1 and level > 0:
+        total += get_defense_per_point(stage) * level
+    return total
+
+
+def get_cumulative_max_hp(stage: int, level: int) -> int:
+    """Cumulative max HP from all completed stages plus current stage level."""
+    total = 0
+    for s in range(1, stage):
+        total += get_max_hp_per_point(s) * 10
+    if stage >= 1 and level > 0:
+        total += get_max_hp_per_point(stage) * level
+    return total
+
+
 def get_main_stat_per_point(stage: int) -> int:
     """
     Get main stat value per point at a given stage.
@@ -217,8 +247,10 @@ class MapleRankConfig:
     # Current highest stage unlocked
     current_stage: int = 1
 
-    # Level within current stage for main stat (0-10)
+    # Level within current stage for each pool (0-10)
     main_stat_level: int = 0
+    defense_level: int = 0
+    max_hp_level: int = 0
 
     # Special main stat points (separate pool, 0-160)
     special_main_stat_points: int = 0
@@ -254,6 +286,14 @@ class MapleRankConfig:
         """Get total regular main stat from all stages."""
         return get_cumulative_main_stat(self.current_stage, self.main_stat_level)
 
+    def get_regular_defense(self) -> int:
+        """Get total flat defense from all stages."""
+        return get_cumulative_defense(self.current_stage, self.defense_level)
+
+    def get_regular_max_hp(self) -> int:
+        """Get total max HP from all stages."""
+        return get_cumulative_max_hp(self.current_stage, self.max_hp_level)
+
     def get_special_main_stat(self) -> int:
         """Get total special main stat (base 300 + 5 per point)."""
         return MAIN_STAT_SPECIAL["base_value"] + self.special_main_stat_points * MAIN_STAT_SPECIAL["per_point"]
@@ -271,6 +311,8 @@ class MapleRankConfig:
             "main_stat_flat": float(self.get_total_main_stat()),
             "main_stat_regular": float(self.get_regular_main_stat()),
             "main_stat_special": float(self.get_special_main_stat()),
+            "defense_flat": float(self.get_regular_defense()),
+            "max_hp_flat": float(self.get_regular_max_hp()),
             "attack_speed": self.get_stat_value(MapleRankStatType.ATTACK_SPEED),
             "crit_rate": self.get_stat_value(MapleRankStatType.CRIT_RATE),
             "min_dmg_mult": self.get_stat_value(MapleRankStatType.MIN_DMG_MULT),
@@ -289,6 +331,8 @@ class MapleRankConfig:
         return {
             "current_stage": self.current_stage,
             "main_stat_level": self.main_stat_level,
+            "defense_level": self.defense_level,
+            "max_hp_level": self.max_hp_level,
             "special_main_stat_points": self.special_main_stat_points,
             "stat_levels": {
                 stat.value: level
@@ -302,6 +346,8 @@ class MapleRankConfig:
         config = cls(
             current_stage=data.get("current_stage", 1),
             main_stat_level=data.get("main_stat_level", 0),
+            defense_level=data.get("defense_level", 0),
+            max_hp_level=data.get("max_hp_level", 0),
             special_main_stat_points=data.get("special_main_stat_points", 0),
         )
         stat_data = data.get("stat_levels", {})

@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Unified Calculator App
 =========================================
 Combines Damage Calculator and Cube Tools in one tabbed interface.
@@ -18,7 +18,7 @@ import random
 import csv
 import os
 
-from cubes import (
+from game.cubes import (
     PotentialTier, CubeType, StatType, CubeSimulator, PotentialLine,
     TIER_UP_RATES, REGULAR_PITY, BONUS_PITY, SLOT_YELLOW_RATES,
     POTENTIAL_STATS, SPECIAL_POTENTIALS, SPECIAL_POTENTIAL_RATE,
@@ -36,23 +36,23 @@ from cubes import (
     # Combat mode for BA Targets valuation
     CombatMode, BA_TARGETS_MODE_MULTIPLIER,
 )
-from equipment import (
+from game.equipment import (
     EquipmentItem, EQUIPMENT_SLOTS as EQUIPMENT_SLOTS_LIST,
     STARFORCE_TABLE, get_amplify_multiplier, calculate_base_stat,
     calculate_starforce_expected_cost, SLOT_THIRD_MAIN_STAT
 )
-from skills import (
+from game.skills import (
     calculate_all_skills_value, calculate_all_skills_value_by_job,
     Job, JobSkillBonus, calculate_job_skill_value,
     get_global_mastery_stats, BOWMASTER_SKILLS, SkillType,
     DPSCalculator, create_character_at_level,
 )
-from starforce_optimizer import (
+from optimizers.starforce_optimizer import (
     find_optimal_strategy, find_optimal_per_stage_strategy,
     calculate_total_cost_markov,
     MESO_TO_DIAMOND, SCROLL_DIAMOND_COST, DESTRUCTION_FEE_DIAMONDS
 )
-from hero_power import (
+from game.hero_power import (
     HeroPowerTier, HeroPowerStatType, HeroPowerLine, HeroPowerConfig,
     HeroPowerPassiveStatType, HeroPowerPassiveConfig, HERO_POWER_PASSIVE_STATS,
     PASSIVE_STAT_DISPLAY_NAMES, create_default_passive_config, create_maxed_passive_config,
@@ -63,10 +63,10 @@ from hero_power import (
     HeroPowerLevelConfig, create_default_level_config, score_hero_power_line, get_line_score_category,
     STAT_DPS_WEIGHTS, TIER_SCORE_MULTIPLIERS
 )
-from upgrade_optimizer import (
+from optimizers.upgrade_optimizer import (
     UpgradeOptimizer, UpgradeOption, UpgradePath, UpgradeType, EquipmentSummary
 )
-from artifacts import (
+from game.artifacts import (
     ArtifactTier, PotentialTier as ArtifactPotentialTier,
     ArtifactDefinition, ArtifactInstance, ArtifactConfig, ArtifactPotentialLine,
     ARTIFACTS, POTENTIAL_TIER_RATES as ARTIFACT_POTENTIAL_RATES,
@@ -78,31 +78,31 @@ from artifacts import (
     calculate_expected_chests_for_artifact, calculate_chests_for_max_star,
     calculate_synthesis_cost, calculate_specific_legendary_cost, calculate_artifact_upgrade_efficiency
 )
-from weapons import (
+from game.weapons import (
     WeaponRarity, WeaponDefinition, WeaponInstance, WeaponConfig,
     RARITY_COLORS as WEAPON_RARITY_COLORS, MAX_LEVELS as WEAPON_MAX_LEVELS,
     calculate_weapon_atk, create_weapon_instance, get_rarity_color
 )
-from guild import (
+from game.guild import (
     GuildConfig, GuildSkillType, GUILD_SKILL_DATA, SKILL_DISPLAY_NAMES as GUILD_SKILL_NAMES
 )
-from companions import (
+from game.companions import (
     CompanionConfig, CompanionInstance, CompanionDefinition, CompanionJob,
     JobAdvancement, OnEquipStatType, COMPANIONS, create_companion_instance,
     create_full_companion_inventory
 )
 # Note: passives.py is deprecated - passive skills are now calculated from skills.py
 # The skills.py module has accurate skill data including PASSIVE_STAT skills and mastery bonuses
-from maple_rank import (
+from game.maple_rank import (
     MapleRankConfig, MapleRankStatType, MAPLE_RANK_STATS, MAIN_STAT_SPECIAL,
     STAT_DISPLAY_NAMES as MAPLE_RANK_STAT_NAMES, get_main_stat_per_point,
     get_stage_main_stat_table, get_max_maple_rank_stats
 )
-from equipment_sets import (
+from game.equipment_sets import (
     MedalConfig, CostumeConfig, EquipmentSetsConfig,
     MEDAL_INVENTORY_EFFECT, COSTUME_INVENTORY_EFFECT
 )
-from stat_efficiency_guide import (
+from libs.stat_efficiency_guide import (
     StatCategory, SystemType, StatEfficiency, SlotRecommendation,
     MAX_STAT_VALUES, EQUIPMENT_SLOT_RECOMMENDATIONS, STAT_INSIGHTS,
     get_stat_rankings, get_system_priorities, get_priority_slots,
@@ -116,25 +116,25 @@ from constants import ENEMY_DEFENSE_VALUES
 
 EQUIPMENT_SLOTS = [
     "hat", "top", "bottom", "gloves", "shoes",
-    "belt", "shoulder", "cape", "ring", "necklace", "face"
+    "belt", "shoulder", "cape", "ring", "necklace", "eye", "face"
 ]
 
 # Default save files (in same directory as script)
-POTENTIALS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "potentials_save.csv")
-EQUIPMENT_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "equipment_save.csv")
-HERO_POWER_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hero_power_save.csv")
-HERO_POWER_PRESETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hero_power_presets.csv")
-HERO_POWER_PASSIVE_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hero_power_passive_save.csv")
-HERO_POWER_LEVEL_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hero_power_level_save.csv")
-ARTIFACTS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "artifacts_save.csv")
-WEAPONS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weapons_save.csv")
-COMPANIONS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "companions_save.csv")
-MAPLE_RANK_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maple_rank_save.csv")
-RESONANCE_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resonance_save.csv")
-EQUIPMENT_SETS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "equipment_sets_save.csv")
-MANUAL_ADJUSTMENTS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manual_adjustments_save.csv")
-ACTUAL_STATS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actual_stats_save.csv")
-CHARACTER_SETTINGS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "character_settings_save.csv")
+POTENTIALS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "potentials_save.csv")
+EQUIPMENT_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "equipment_save.csv")
+HERO_POWER_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "hero_power_save.csv")
+HERO_POWER_PRESETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "hero_power_presets.csv")
+HERO_POWER_PASSIVE_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "hero_power_passive_save.csv")
+HERO_POWER_LEVEL_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "hero_power_level_save.csv")
+ARTIFACTS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "artifacts_save.csv")
+WEAPONS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "weapons_save.csv")
+COMPANIONS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "companions_save.csv")
+MAPLE_RANK_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "maple_rank_save.csv")
+RESONANCE_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "resonance_save.csv")
+EQUIPMENT_SETS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "equipment_sets_save.csv")
+MANUAL_ADJUSTMENTS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "manual_adjustments_save.csv")
+ACTUAL_STATS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "actual_stats_save.csv")
+CHARACTER_SETTINGS_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "character_settings_save.csv")
 
 
 # =============================================================================
@@ -163,7 +163,7 @@ def calculate_ba_percent_of_dps(level: int, all_skills_bonus: int = 0) -> float:
     char.attack = 1000
     char.main_stat_pct = 50
     char.damage_pct = 30
-    char.boss_damage_pct = 20
+    char.boss_damage = 20
     char.crit_rate = 70
     char.crit_damage = 200
     char.attack_speed_pct = 50
@@ -2234,10 +2234,10 @@ class MapleApp:
         char.main_stat_flat = stats["dex_flat"]
         char.main_stat_pct = stats["dex_percent"]
         char.damage_pct = stats["damage_percent"]
-        char.boss_damage_pct = stats["boss_damage"]
+        char.boss_damage = stats["boss_damage"]
         char.crit_rate = stats.get("crit_rate", 50)
         char.crit_damage = stats["crit_damage"]
-        char.defense_pen = stats["defense_pen"]
+        char.def_pen_pct = stats["defense_pen"]
         char.attack_speed_pct = stats.get("attack_speed", 0)
         # FD sources are multiplicative - calculate total as (1+a)*(1+b)*... - 1
         fd_mult = 1.0
@@ -2246,8 +2246,8 @@ class MapleApp:
         char.final_damage_pct = (fd_mult - 1) * 100
         char.min_dmg_mult = stats.get("min_dmg_mult", 0)
         char.max_dmg_mult = stats.get("max_dmg_mult", 0)
-        char.skill_damage_pct = stats.get("skill_damage", 0)
-        char.basic_attack_dmg_pct = stats.get("basic_attack_damage", 0)
+        char.skill_damage = stats.get("skill_damage", 0)
+        char.basic_attack_damage = stats.get("basic_attack_damage", 0)
 
         # Set skill CD reduction from hat special potential
         char.skill_cd_reduction = stats.get("skill_cd", 0)
@@ -2620,12 +2620,17 @@ class MapleApp:
             passive.get("skill_damage", 0)
         )
 
-        # Attack Speed (from maple rank, companions, passives)
-        attack_speed = (
-            maple_rank.get("attack_speed", 0) +
-            companion.get("attack_speed", 0) +
-            passive.get("attack_speed", 0)
-        )
+        # Attack Speed (diminishing returns - each source applied separately)
+        atk_spd_sources = []
+        mr_as = maple_rank.get("attack_speed", 0)
+        if mr_as > 0:
+            atk_spd_sources.append(("Maple Rank", mr_as))
+        comp_atk_spd_sources = self.companion_config.get_attack_speed_sources()
+        atk_spd_sources.extend(comp_atk_spd_sources)
+        passive_as = passive.get("attack_speed", 0)
+        if passive_as > 0:
+            atk_spd_sources.append(("Passive Skills", passive_as))
+        attack_speed = self._calc_attack_speed_diminishing(atk_spd_sources)
 
         # Accuracy (from maple rank, hero power passive, passives)
         accuracy = (
@@ -3310,7 +3315,7 @@ class MapleApp:
                 totals["all_skills"] += int(item.special_stat_value * sub_mult)
 
         # Sum from potentials (ALL_SKILLS stat type)
-        from cubes import StatType
+        from game.cubes import StatType
         for slot, equip in self.equipment.items():
             # Regular potential lines
             for line in equip.lines:
@@ -7692,7 +7697,7 @@ Regular Cubes:                          Bonus Cubes:
         3. What stats to aim for when rolling
         4. Thresholds for what to keep vs reroll during rolling
         """
-        from hero_power import (
+        from game.hero_power import (
             score_hero_power_line, get_line_score_category,
             calculate_line_dps_value, STAT_DISPLAY_NAMES as HP_STAT_NAMES,
             HERO_POWER_STAT_RANGES, HeroPowerTier, HeroPowerStatType,
@@ -10874,7 +10879,7 @@ Tier Scaling: Higher tiers have 1.3x multiplier per tier
         costume_entry.bind('<FocusOut>', self._on_char_stats_medal_costume_change)
         costume_entry.bind('<Return>', self._on_char_stats_medal_costume_change)
 
-        tk.Label(medal_costume_row, text="(max 1500 each)", font=('Segoe UI', 8),
+        tk.Label(medal_costume_row, text="(medal max 1500, costume max 3000)", font=('Segoe UI', 8),
                 fg='#888', bg='#2a2a4e').pack(side=tk.LEFT, padx=10)
 
         # Separator before comparison section
@@ -11704,7 +11709,7 @@ Tier Scaling: Higher tiers have 1.3x multiplier per tier
 
         try:
             costume_val = int(self.costume_inv_var.get())
-            self.equipment_sets_config.costume_config.inventory_effect = max(0, min(1500, costume_val))
+            self.equipment_sets_config.costume_config.inventory_effect = max(0, min(3000, costume_val))
         except (ValueError, AttributeError):
             pass
 
@@ -11723,7 +11728,7 @@ Tier Scaling: Higher tiers have 1.3x multiplier per tier
 
         try:
             costume_val = int(self.char_stats_costume_var.get())
-            self.equipment_sets_config.costume_config.inventory_effect = max(0, min(1500, costume_val))
+            self.equipment_sets_config.costume_config.inventory_effect = max(0, min(3000, costume_val))
         except (ValueError, AttributeError):
             pass
 

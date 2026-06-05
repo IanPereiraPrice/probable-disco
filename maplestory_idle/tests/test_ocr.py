@@ -1,17 +1,17 @@
-"""
+﻿"""
 OCR Test Script - Run this to test and improve OCR accuracy on equipment screenshots.
 """
 import sys
 from pathlib import Path
 
 # Add paths for imports
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent / "streamlit_app"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "streamlit_app"))
 
 from streamlit_app.utils.ocr_scanner import extract_and_parse, get_ocr_reader
 
 # Test photos directory
-TEST_DIR = Path(__file__).parent / "OCR_test_photos"
+TEST_DIR = Path(__file__).parent.parent / "assets" / "OCR_test_photos"
 
 
 def test_single_image(image_path: Path, verbose: bool = True):

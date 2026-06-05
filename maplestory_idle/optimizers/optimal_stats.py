@@ -1,4 +1,4 @@
-# optimal_stats.py - Optimal Stat Distribution Calculator
+﻿# optimal_stats.py - Optimal Stat Distribution Calculator
 # Calculates theoretically optimal stat allocation across all sources
 # Accounts for diminishing returns, slot exclusivity, and stat source priority
 
@@ -6,6 +6,45 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Callable, Any
 from enum import Enum
 import copy
+
+# Module-level map to avoid rebuilding on every call
+_STAT_KEY_MAP: Dict[str, str] = {
+    'damage': 'damage_percent',
+    'damage_pct': 'damage_percent',
+    'boss_damage': 'boss_damage',
+    'normal_damage': 'normal_damage',
+    'crit_damage': 'crit_damage',
+    'def_pen': 'defense_pen',
+    'dex_pct': 'dex_percent',
+    'str_pct': 'dex_percent',
+    'int_pct': 'dex_percent',
+    'luk_pct': 'dex_percent',
+    'dex_flat': 'flat_dex',
+    'str_flat': 'flat_dex',
+    'min_dmg_mult': 'min_dmg_mult',
+    'max_dmg_mult': 'max_dmg_mult',
+    'crit_rate': 'crit_rate',
+    'attack_speed': 'attack_speed',
+    'final_damage': 'final_damage',
+    'final_atk_dmg': 'final_damage',
+    'main_stat_flat': 'flat_dex',
+    'main_stat_pct': 'dex_percent',
+    'attack_pct': 'attack_percent',
+}
+
+
+def _apply_stat_to_dict(stats: Dict[str, float], stat_type: str, amount: float) -> None:
+    """Apply `amount` of `stat_type` to `stats` in-place, respecting multiplicative stacking."""
+    stats_key = _STAT_KEY_MAP.get(stat_type, stat_type)
+    category = STAT_CATEGORIES.get(stat_type, StatCategory.ADDITIVE_OTHER)
+    if category == StatCategory.MULTIPLICATIVE_DEF:
+        current_remaining = 1 - (stats.get(stats_key, 0) / 100)
+        stats[stats_key] = (1 - current_remaining * (1 - amount / 100)) * 100
+    elif category == StatCategory.MULTIPLICATIVE_FD:
+        current_mult = 1 + stats.get(stats_key, 0) / 100
+        stats[stats_key] = (current_mult * (1 + amount / 100) - 1) * 100
+    else:
+        stats[stats_key] = stats.get(stats_key, 0) + amount
 
 
 # =============================================================================
@@ -260,78 +299,20 @@ def calculate_marginal_dps_value(
     stat_type: str,
     amount: float,
     calc_dps_func: Callable,
+    baseline_dps: float = None,
 ) -> float:
     """
     Calculate the % DPS gain from adding `amount` of `stat_type`.
 
-    Args:
-        current_stats: Current aggregated stats dict
-        stat_type: The stat being added (e.g., 'damage', 'def_pen')
-        amount: Amount of stat to add
-        calc_dps_func: Function that calculates DPS from stats dict
-
-    Returns:
-        Percentage DPS gain (e.g., 2.5 means +2.5% DPS)
+    Pass `baseline_dps` to skip recomputing it when the caller already has it.
     """
-    # Calculate baseline DPS
-    baseline_dps = calc_dps_func(current_stats)
+    if baseline_dps is None:
+        baseline_dps = calc_dps_func(current_stats)
     if baseline_dps <= 0:
         return 0
-
-    # Create modified stats with the new stat added
     modified_stats = copy.deepcopy(current_stats)
-
-    # Map stat_type to the key in stats dict
-    stat_key_map = {
-        'damage': 'damage_percent',
-        'damage_pct': 'damage_percent',
-        'boss_damage': 'boss_damage',
-        'normal_damage': 'normal_damage',
-        'crit_damage': 'crit_damage',
-        'def_pen': 'defense_pen',
-        'dex_pct': 'dex_percent',
-        'str_pct': 'dex_percent',  # Assume main stat
-        'int_pct': 'dex_percent',
-        'luk_pct': 'dex_percent',
-        'dex_flat': 'flat_dex',
-        'str_flat': 'flat_dex',
-        'min_dmg_mult': 'min_dmg_mult',
-        'max_dmg_mult': 'max_dmg_mult',
-        'crit_rate': 'crit_rate',
-        'attack_speed': 'attack_speed',
-        'final_damage': 'final_damage',
-        'final_atk_dmg': 'final_damage',
-        'main_stat_flat': 'flat_dex',
-        'main_stat_pct': 'dex_percent',
-        'attack_pct': 'attack_percent',
-    }
-
-    stats_key = stat_key_map.get(stat_type, stat_type)
-
-    # Add the stat (handle multiplicative vs additive)
-    category = STAT_CATEGORIES.get(stat_type, StatCategory.ADDITIVE_OTHER)
-
-    if category == StatCategory.MULTIPLICATIVE_DEF:
-        # Defense penetration stacks multiplicatively
-        # New total = 1 - (1 - current)(1 - new)
-        current_val = modified_stats.get(stats_key, 0)
-        current_remaining = 1 - (current_val / 100)
-        new_remaining = current_remaining * (1 - amount / 100)
-        modified_stats[stats_key] = (1 - new_remaining) * 100
-    elif category == StatCategory.MULTIPLICATIVE_FD:
-        # Final damage stacks multiplicatively
-        current_val = modified_stats.get(stats_key, 0)
-        current_mult = 1 + current_val / 100
-        new_mult = current_mult * (1 + amount / 100)
-        modified_stats[stats_key] = (new_mult - 1) * 100
-    else:
-        # Additive stats just sum
-        modified_stats[stats_key] = modified_stats.get(stats_key, 0) + amount
-
-    # Calculate new DPS
+    _apply_stat_to_dict(modified_stats, stat_type, amount)
     new_dps = calc_dps_func(modified_stats)
-
-    # Return percentage gain
     return ((new_dps / baseline_dps) - 1) * 100
 
 
@@ -381,12 +362,13 @@ def calculate_slot_efficiency(
     for stat, tiers in exclusive.items():
         all_stats[stat] = tiers.get(tier, 0)
 
+    baseline_dps = calc_dps_func(current_stats)
     for stat, max_value in all_stats.items():
         if max_value <= 0:
             continue
 
         dps_gain = calculate_marginal_dps_value(
-            current_stats, stat, max_value, calc_dps_func
+            current_stats, stat, max_value, calc_dps_func, baseline_dps=baseline_dps
         )
         efficiency = dps_gain / max_value if max_value > 0 else 0
 
@@ -428,6 +410,7 @@ def calculate_source_ranking(
     sorted by max_value (highest first - best source for this stat).
     """
     results = []
+    baseline_dps = calc_dps_func(current_stats)
 
     # Check equipment slots
     for slot in EQUIPMENT_SLOTS:
@@ -445,7 +428,7 @@ def calculate_source_ranking(
 
         if max_value > 0:
             dps_gain = calculate_marginal_dps_value(
-                current_stats, stat_type, max_value, calc_dps_func
+                current_stats, stat_type, max_value, calc_dps_func, baseline_dps=baseline_dps
             )
 
             results.append({
@@ -463,7 +446,7 @@ def calculate_source_ranking(
         max_value = HERO_POWER_VALUES[stat_type].get(tier, 0)
         if max_value > 0:
             dps_gain = calculate_marginal_dps_value(
-                current_stats, stat_type, max_value, calc_dps_func
+                current_stats, stat_type, max_value, calc_dps_func, baseline_dps=baseline_dps
             )
             results.append({
                 'source_type': 'hero_power',
@@ -480,7 +463,7 @@ def calculate_source_ranking(
         max_value = ARTIFACT_POTENTIAL_VALUES[stat_type].get(tier, 0)
         if max_value > 0:
             dps_gain = calculate_marginal_dps_value(
-                current_stats, stat_type, max_value, calc_dps_func
+                current_stats, stat_type, max_value, calc_dps_func, baseline_dps=baseline_dps
             )
             results.append({
                 'source_type': 'artifact',
@@ -529,58 +512,57 @@ def calculate_optimal_distribution(
     sources = generate_all_sources(include_artifacts)
     current_stats = copy.deepcopy(base_stats)
     allocations = []
-    used_sources = set()  # Track which source_ids have been allocated
+    used_sources = set()
 
     for iteration in range(max_iterations):
+        remaining = [s for s in sources if s.source_id not in used_sources]
+        if not remaining:
+            break
+
+        # Compute baseline DPS once per iteration (shared across all sources)
+        baseline_dps = calc_dps_func(current_stats)
+        if baseline_dps <= 0:
+            break
+
+        # Collect unique stat types across remaining sources and their max reference amount.
+        # DPS-per-unit for a stat type depends only on current_stats, not on which source
+        # provides it, so we compute it once per stat type instead of once per source.
+        unique_stat_ref: Dict[str, float] = {}
+        for source in remaining:
+            for stat in source.available_stats:
+                max_val = source.get_max_value(stat, tier_mode)
+                if max_val > 0 and (stat not in unique_stat_ref or max_val > unique_stat_ref[stat]):
+                    unique_stat_ref[stat] = max_val
+
+        # ONE DPS call per unique stat type (vs. one per source × stat previously)
+        stat_dps_per_unit: Dict[str, float] = {}
+        for stat_type, ref_amount in unique_stat_ref.items():
+            modified = copy.deepcopy(current_stats)
+            _apply_stat_to_dict(modified, stat_type, ref_amount)
+            new_dps = calc_dps_func(modified)
+            gain = ((new_dps / baseline_dps) - 1) * 100
+            stat_dps_per_unit[stat_type] = gain / ref_amount if ref_amount > 0 else 0
+
+        # Rank (source, stat) pairs using pre-computed per-unit efficiency
         best_option = None
         best_efficiency = -1
-
-        for source in sources:
-            if source.source_id in used_sources:
-                continue
-
-            # For each available stat at this source
+        for source in remaining:
             for stat in source.available_stats:
-                max_value = source.get_max_value(stat, tier_mode)
-                if max_value <= 0:
+                max_val = source.get_max_value(stat, tier_mode)
+                if max_val <= 0 or stat not in stat_dps_per_unit:
                     continue
-
-                # Calculate marginal efficiency
-                efficiency = calculate_marginal_efficiency(
-                    current_stats, stat, max_value, calc_dps_func
-                )
-
-                # Boost exclusive stats (they should always go to their slot)
+                efficiency = stat_dps_per_unit[stat]
                 if stat in source.exclusive_stats:
-                    efficiency *= 1.5  # Prioritize exclusives
-
+                    efficiency *= 1.5
                 if efficiency > best_efficiency:
                     best_efficiency = efficiency
-                    best_option = (source, stat, max_value, efficiency)
+                    best_option = (source, stat, max_val, efficiency)
 
         if best_option is None:
             break
 
         source, stat, value, eff = best_option
-
-        # Apply allocation
-        dps_gain = calculate_marginal_dps_value(current_stats, stat, value, calc_dps_func)
-
-        # Update current stats
-        stat_key_map = {
-            'damage': 'damage_percent',
-            'boss_damage': 'boss_damage',
-            'crit_damage': 'crit_damage',
-            'def_pen': 'defense_pen',
-            'dex_pct': 'dex_percent',
-            'min_dmg_mult': 'min_dmg_mult',
-            'max_dmg_mult': 'max_dmg_mult',
-            'final_atk_dmg': 'final_damage',
-        }
-        stats_key = stat_key_map.get(stat, stat)
-        current_stats[stats_key] = current_stats.get(stats_key, 0) + value
-
-        # Record allocation
+        _apply_stat_to_dict(current_stats, stat, value)
         allocations.append(StatAllocation(
             source_id=source.source_id,
             source_type=source.source_type,
@@ -592,12 +574,12 @@ def calculate_optimal_distribution(
             max_possible=value,
             efficiency_score=eff,
         ))
-
         used_sources.add(source.source_id)
 
-    # Calculate total DPS gain
+    # Calculate total DPS gain (baseline computed once for all allocations)
+    base_baseline = calc_dps_func(base_stats)
     total_dps_gain = sum(
-        calculate_marginal_dps_value(base_stats, a.stat_type, a.value, calc_dps_func)
+        calculate_marginal_dps_value(base_stats, a.stat_type, a.value, calc_dps_func, baseline_dps=base_baseline)
         for a in allocations
     )
 

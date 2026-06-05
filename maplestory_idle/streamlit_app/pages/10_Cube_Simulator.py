@@ -1,4 +1,4 @@
-"""
+﻿"""
 Cube Simulator Page
 Simulate potential rolling with pity system.
 """

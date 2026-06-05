@@ -1,4 +1,4 @@
-"""
+﻿"""
 Starforce Calculator Page
 Calculate expected costs and run Monte Carlo simulations for starforce enhancement.
 Matches the original Tkinter app starforce tab.
@@ -11,8 +11,8 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from equipment import STARFORCE_TABLE, get_amplify_multiplier
-from starforce_optimizer import (
+from game.equipment import STARFORCE_TABLE, get_amplify_multiplier
+from optimizers.starforce_optimizer import (
     find_optimal_per_stage_strategy,
     find_optimal_strategy,
     calculate_total_cost_markov,
@@ -86,6 +86,7 @@ def simulate_starforce(start: int, target: int, stage_strategies: dict, iteratio
         attempts = 0
         destructions = 0
         max_attempts = 10000
+        pity = 0  # consecutive decrease counter; at 2 next attempt is guaranteed
 
         while stars < target and attempts < max_attempts:
             if stars not in STARFORCE_TABLE:
@@ -109,6 +110,12 @@ def simulate_starforce(start: int, target: int, stage_strategies: dict, iteratio
             stones += int(stage.stones * cost_mult)
             attempts += 1
 
+            # Pity: after 2 consecutive decreases, next attempt is guaranteed success
+            if pity >= 2:
+                stars += 1
+                pity = 0
+                continue
+
             # Adjust probabilities based on protection
             success_rate = stage.success_rate
             maintain_rate = stage.maintain_rate
@@ -123,14 +130,17 @@ def simulate_starforce(start: int, target: int, stage_strategies: dict, iteratio
 
             if roll < success_rate:
                 stars += 1
+                pity = 0
             elif roll < success_rate + maintain_rate:
-                pass  # Maintain
+                pity = 0  # maintain resets streak
             elif roll < success_rate + maintain_rate + decrease_rate:
                 stars = max(start, stars - 1)
+                pity += 1
             else:
                 destructions += 1
                 meso += 1_000_000  # Destruction fee
                 stars = 12  # Reset to 12
+                pity = 0
 
         results.append({
             "meso": meso, "stones": stones, "attempts": attempts,

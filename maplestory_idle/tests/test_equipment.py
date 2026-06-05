@@ -1,4 +1,4 @@
-"""
+﻿"""
 Unit tests for Equipment class bidirectional base/amplified conversion.
 
 Uses verified data from default_character.csv:
@@ -16,10 +16,10 @@ import sys
 from pathlib import Path
 
 # Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
-from equipment import Equipment, get_amplify_multiplier, STARFORCE_TABLE
+from game.equipment import Equipment, get_amplify_multiplier, STARFORCE_TABLE
 
 
 class TestAmplifyRates(unittest.TestCase):

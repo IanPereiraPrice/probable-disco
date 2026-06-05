@@ -86,48 +86,71 @@ STAT_STACKING: Dict[str, tuple] = {
 # =============================================================================
 # ENEMY DEFENSE VALUES BY CHAPTER
 # =============================================================================
-# Defense values scale approximately linearly with chapter number.
-# Based on verified data points: Maple=0, Aquarium(14)=0.388, Mu Lung(27)=0.752
-# Approximate formula: def ≈ chapter * 0.028 (rough estimate for missing data)
+# Defense values from data mine MonsterTierTable (boss tier StatRatio).
+# Formula: enemy_def = max(0, 0.028 * chapter - 0.004)
+# Ch1-3: boss tier is neutral (StatRatio=1000, no scaling) → 0.0
+# Ch4-38: linear from data mine, verified at Ch14=0.388 and Ch27=0.752
 
 ENEMY_DEFENSE_VALUES: Dict[str, float] = {
-    # Chapters 1-31
     "Chapter 1": 0.0,
-    "Chapter 2": 0.03,
-    "Chapter 3": 0.06,
-    "Chapter 4": 0.09,
-    "Chapter 5": 0.12,
-    "Chapter 6": 0.15,
-    "Chapter 7": 0.18,
-    "Chapter 8": 0.21,
-    "Chapter 9": 0.24,
-    "Chapter 10": 0.27,
-    "Chapter 11": 0.30,
-    "Chapter 12": 0.33,
-    "Chapter 13": 0.36,
+    "Chapter 2": 0.0,
+    "Chapter 3": 0.0,
+    "Chapter 4": 0.108,
+    "Chapter 5": 0.136,
+    "Chapter 6": 0.164,
+    "Chapter 7": 0.192,
+    "Chapter 8": 0.220,
+    "Chapter 9": 0.248,
+    "Chapter 10": 0.276,
+    "Chapter 11": 0.304,
+    "Chapter 12": 0.332,
+    "Chapter 13": 0.360,
     "Chapter 14": 0.388,  # Verified (Aquarium)
-    "Chapter 15": 0.41,
-    "Chapter 16": 0.44,
-    "Chapter 17": 0.47,
-    "Chapter 18": 0.50,
-    "Chapter 19": 0.53,
-    "Chapter 20": 0.56,
-    "Chapter 21": 0.59,
-    "Chapter 22": 0.62,
-    "Chapter 23": 0.65,
-    "Chapter 24": 0.68,
-    "Chapter 25": 0.71,
-    "Chapter 26": 0.74,
+    "Chapter 15": 0.416,
+    "Chapter 16": 0.444,
+    "Chapter 17": 0.472,
+    "Chapter 18": 0.500,
+    "Chapter 19": 0.528,
+    "Chapter 20": 0.556,
+    "Chapter 21": 0.584,
+    "Chapter 22": 0.612,
+    "Chapter 23": 0.640,
+    "Chapter 24": 0.668,
+    "Chapter 25": 0.696,
+    "Chapter 26": 0.724,
     "Chapter 27": 0.752,  # Verified (Mu Lung)
-    "Chapter 28": 0.78,
-    "Chapter 29": 0.81,
-    "Chapter 30": 0.84,
-    "Chapter 31": 0.87,
-    "Chapter 32": 0.90,
-    "Chapter 33": 0.93,
-    "Chapter 34": 0.96,
-    # World Boss
-    "World Boss": 6.527,  # Verified (King Castle Golem)
+    "Chapter 28": 0.780,
+    "Chapter 29": 0.808,
+    "Chapter 30": 0.836,
+    "Chapter 31": 0.864,
+    "Chapter 32": 0.892,
+    "Chapter 33": 0.920,
+    "Chapter 34": 0.948,
+    "Chapter 35": 0.976,
+    "Chapter 36": 1.004,
+    "Chapter 37": 1.032,
+    "Chapter 38": 1.060,
+    # World Boss — 20 stages, derived from data mine MonsterTierTable (calibrated vs ch14=0.388, ch27=0.752)
+    "World Boss Stage 1": 0.0,
+    "World Boss Stage 2": 0.668,
+    "World Boss Stage 3": 1.508,
+    "World Boss Stage 4": 3.356,
+    "World Boss Stage 5": 6.380,
+    "World Boss Stage 6": 11.980,
+    "World Boss Stage 7": 18.980,
+    "World Boss Stage 8": 29.508,
+    "World Boss Stage 9": 45.188,
+    "World Boss Stage 10": 33.764,
+    "World Boss Stage 11": 33.764,
+    "World Boss Stage 12": 33.764,
+    "World Boss Stage 13": 33.764,
+    "World Boss Stage 14": 33.764,
+    "World Boss Stage 15": 33.764,
+    "World Boss Stage 16": 33.764,
+    "World Boss Stage 17": 33.764,
+    "World Boss Stage 18": 33.764,
+    "World Boss Stage 19": 33.764,
+    "World Boss Stage 20": 33.764,
 }
 
 
@@ -221,6 +244,7 @@ STAT_SHORT_NAMES: Dict[str, str] = {
     "buff_duration": "Buff%",
     "main_stat_per_level": "S/Lv",
     "ba_targets": "BA+",
+    "skill_damage": "SkDmg%",
     # Defense stats
     "defense": "DEF%",
     "max_hp": "HP%",
@@ -257,6 +281,7 @@ STAT_DISPLAY_NAMES: Dict[str, str] = {
     "buff_duration": "Buff Duration %",
     "main_stat_per_level": "Main Stat per Level",
     "ba_targets": "BA Targets +",
+    "skill_damage": "Skill Damage %",
     # Defense stats
     "defense": "Defense %",
     "max_hp": "Max HP %",

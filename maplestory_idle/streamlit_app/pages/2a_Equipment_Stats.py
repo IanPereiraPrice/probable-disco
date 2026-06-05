@@ -1,4 +1,4 @@
-"""
+﻿"""
 Equipment Stats Page
 Manage equipment base stats and starforce levels.
 """
@@ -11,7 +11,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from utils.data_manager import save_user_data, EQUIPMENT_SLOTS
-from equipment import get_amplify_multiplier
+from game.equipment import get_amplify_multiplier
 
 st.set_page_config(page_title="Equipment Stats", page_icon="⭐", layout="wide")
 
@@ -72,7 +72,7 @@ SLOT_THIRD_STAT = {
     "ring": "Main Stat", "necklace": "Main Stat", "eye": "Main Stat", "face": "Main Stat",
 }
 
-SPECIAL_STAT_OPTIONS = {"damage_pct": "Damage %", "all_skills": "All Skills", "final_damage": "Final Damage %", "def_pen": "Defense Pen %"}
+SPECIAL_STAT_OPTIONS = {"damage_pct": "Damage %", "all_skills": "All Skills", "final_damage": "Final Damage %", "def_pen": "Defense Pen %", "basic_attack_dmg": "Basic Attack %"}
 
 
 def ensure_item_fields(item: dict) -> dict:

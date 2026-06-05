@@ -1,4 +1,4 @@
-# upgrade_optimizer.py - Budget-Constrained Upgrade Path Optimizer
+﻿# upgrade_optimizer.py - Budget-Constrained Upgrade Path Optimizer
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Callable
@@ -6,7 +6,7 @@ from enum import Enum
 import copy
 
 # Cube analysis imports for enhanced recommendations
-from cubes import (
+from game.cubes import (
     PotentialTier, CubeType, StatType, PotentialLine,
     POTENTIAL_STATS,
     create_item_score_result, calculate_expected_cubes_fast,
@@ -15,7 +15,7 @@ from cubes import (
 )
 
 # Artifact imports
-from artifacts import (
+from game.artifacts import (
     ArtifactTier, ArtifactConfig, ArtifactInstance, ARTIFACTS,
     ARTIFACT_DROP_RATES, ARTIFACT_CHEST_COSTS, TOTAL_DUPLICATES_TO_STAR,
     calculate_artifact_upgrade_efficiency, PotentialTier as ArtifactPotentialTier,
@@ -30,7 +30,7 @@ from artifacts import (
 )
 
 # Starforce imports - use accurate Markov chain calculations
-from starforce_optimizer import (
+from optimizers.starforce_optimizer import (
     find_optimal_per_stage_strategy,
     MESO_TO_DIAMOND as SF_MESO_TO_DIAMOND,
     SCROLL_DIAMOND_COST as SF_SCROLL_COST,
@@ -38,7 +38,7 @@ from starforce_optimizer import (
 )
 
 # Hero Power imports for intelligent recommendations
-from hero_power import (
+from game.hero_power import (
     HeroPowerConfig, HeroPowerLine, HeroPowerTier, HeroPowerStatType,
     HeroPowerLevelConfig, score_hero_power_line, get_line_score_category,
     score_hero_power_line_for_mode, score_config_for_mode,

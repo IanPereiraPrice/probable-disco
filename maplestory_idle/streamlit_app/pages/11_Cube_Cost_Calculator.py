@@ -1,4 +1,4 @@
-"""
+﻿"""
 Cube Cost Calculator Page
 Estimate cube costs for tier upgrades.
 """

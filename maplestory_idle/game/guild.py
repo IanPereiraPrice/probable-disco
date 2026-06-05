@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Guild System
 ==============================
 Guild skill bonuses and stats contribution.
@@ -19,7 +19,7 @@ from typing import Dict, Optional
 from enum import Enum
 
 # Import standardized stat names
-from stat_names import (
+from libs.stat_names import (
     FINAL_DAMAGE, DAMAGE_PCT, MAIN_STAT_PCT, CRIT_DAMAGE,
     BOSS_DAMAGE, DEF_PEN, ATTACK_FLAT, MAX_HP
 )
@@ -175,7 +175,7 @@ class GuildConfig:
             StatBlock with all guild stats (except def_pen)
         """
         from stats import create_stat_block_for_job
-        from job_classes import JobClass
+        from game.job_classes import JobClass
 
         if job_class is None:
             job_class = JobClass.BOWMASTER

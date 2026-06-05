@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Interactive Damage Calculator
 ================================================
 Adjust sliders to see real-time impact on DPS.
@@ -401,7 +401,7 @@ class DamageCalculatorApp:
             ("Maple Island", 0.0),
             ("Aquarium 14", 0.388),
             ("Mu Lung 27", 0.752),
-            ("World Boss", 6.527),
+            ("World Boss", 0.56),
         ]
         for name, defense in enemies:
             btn = tk.Button(button_frame, text=name,

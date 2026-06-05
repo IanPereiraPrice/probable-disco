@@ -1,14 +1,15 @@
-"""
+﻿"""
 Maple Rank Page
 Track Maple Rank progression, main stat accumulation, and stat bonuses.
 Uses verified main stat scaling formulas from maple_rank.py.
 """
 import streamlit as st
 from utils.data_manager import save_user_data
-from maple_rank import (
+from game.maple_rank import (
     MapleRankStatType, MapleRankConfig, MAPLE_RANK_STATS,
     STAT_DISPLAY_NAMES, MAIN_STAT_SPECIAL,
-    get_main_stat_per_point, get_cumulative_main_stat, get_stage_main_stat_table
+    get_main_stat_per_point, get_cumulative_main_stat, get_stage_main_stat_table,
+    get_defense_per_point, get_max_hp_per_point,
 )
 
 st.set_page_config(page_title="Maple Rank", page_icon="M", layout="wide")
@@ -29,6 +30,8 @@ def build_maple_rank_config() -> MapleRankConfig:
     config = MapleRankConfig(
         current_stage=data.maple_rank.get('current_stage', 1),
         main_stat_level=data.maple_rank.get('main_stat_level', 0),
+        defense_level=data.maple_rank.get('defense_level', 0),
+        max_hp_level=data.maple_rank.get('max_hp_level', 0),
         special_main_stat_points=data.maple_rank.get('special_main_stat', 0),
     )
     # Load stat levels
@@ -89,6 +92,28 @@ with tab1:
             data.maple_rank['main_stat_level'] = new_ms_level
             auto_save()
 
+        new_def_level = st.number_input(
+            "Defense Level in Current Stage",
+            min_value=0,
+            max_value=10,
+            value=data.maple_rank.get('defense_level', 0),
+            help="Defense pool progress within current stage (0-10)"
+        )
+        if new_def_level != data.maple_rank.get('defense_level', 0):
+            data.maple_rank['defense_level'] = new_def_level
+            auto_save()
+
+        new_hp_level = st.number_input(
+            "Max HP Level in Current Stage",
+            min_value=0,
+            max_value=10,
+            value=data.maple_rank.get('max_hp_level', 0),
+            help="Max HP pool progress within current stage (0-10)"
+        )
+        if new_hp_level != data.maple_rank.get('max_hp_level', 0):
+            data.maple_rank['max_hp_level'] = new_hp_level
+            auto_save()
+
         # Special Main Stat Points
         new_special = st.number_input(
             "Special Main Stat Points",
@@ -123,9 +148,21 @@ with tab1:
 
         st.metric("Total Main Stat from Maple Rank", f"+{total_ms:,}")
 
+        # DEF and Max HP
+        st.markdown("### Defense & Max HP Breakdown")
+        col_d, col_h = st.columns(2)
+        with col_d:
+            st.metric("Total Defense", f"+{config.get_regular_defense():,}")
+        with col_h:
+            st.metric("Total Max HP", f"+{config.get_regular_max_hp():,}")
+
         # Show current stage info
         per_point = get_main_stat_per_point(new_stage)
-        st.caption(f"Stage {new_stage}: +{per_point} main stat per point | {new_ms_level}/10 points invested")
+        def_per_point = get_defense_per_point(new_stage)
+        hp_per_point = get_max_hp_per_point(new_stage)
+        st.caption(
+            f"Stage {new_stage}: +{per_point} main stat | +{def_per_point} DEF | +{hp_per_point:,} max HP per point"
+        )
 
     with col2:
         st.markdown("### Main Stat Scaling Reference")

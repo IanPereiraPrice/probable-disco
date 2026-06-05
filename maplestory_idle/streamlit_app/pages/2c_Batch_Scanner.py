@@ -1,4 +1,4 @@
-"""
+﻿"""
 Batch Equipment Scanner Page
 Upload multiple equipment screenshots at once and auto-extract stats using OCR.
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from utils.data_manager import save_user_data, EQUIPMENT_SLOTS
-from equipment import get_amplify_multiplier
+from game.equipment import get_amplify_multiplier
 
 st.set_page_config(page_title="Batch Scanner", page_icon="📷", layout="wide")
 
@@ -75,7 +75,7 @@ POTENTIAL_TIERS = ["Rare", "Epic", "Unique", "Legendary", "Mystic"]
 SLOT_THIRD_STAT = {
     "hat": "Defense", "top": "Defense", "bottom": "Accuracy", "gloves": "Accuracy",
     "shoes": "Max MP", "belt": "Max MP", "shoulder": "Evasion", "cape": "Evasion",
-    "ring": "Main Stat", "necklace": "Main Stat", "face": "Main Stat",
+    "ring": "Main Stat", "necklace": "Main Stat", "eye": "Main Stat", "face": "Main Stat",
 }
 
 # Special stat options (for special gear) - min/max damage can appear together
@@ -208,14 +208,14 @@ if uploaded_files:
 
                     # Get the correct third stat based on slot type
                     # Hat/Top = Defense, Bottom/Gloves = Accuracy, Shoes/Belt = Max MP,
-                    # Shoulder/Cape = Evasion, Ring/Necklace/Face = Main Stat
+                    # Shoulder/Cape = Evasion, Ring/Necklace/Eye/Face = Main Stat
                     slot_third_stat_map = {
                         "hat": parsed.base_def, "top": parsed.base_def,
                         "bottom": parsed.base_accuracy, "gloves": parsed.base_accuracy,
                         "shoes": parsed.base_mp, "belt": parsed.base_mp,
                         "shoulder": parsed.base_evasion, "cape": parsed.base_evasion,
                         "ring": parsed.base_main_stat, "necklace": parsed.base_main_stat,
-                        "face": parsed.base_main_stat,
+                        "eye": parsed.base_main_stat, "face": parsed.base_main_stat,
                     }
 
                     # Displayed stats from OCR (include SF bonus) - this is what user sees

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Complete Starforce Mathematical Analysis
 =========================================
 Properly accounts for:
@@ -16,7 +16,7 @@ import io
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-from equipment import STARFORCE_TABLE
+from game.equipment import STARFORCE_TABLE
 
 MESO_TO_DIAMOND = 4.0 / 1000
 SCROLL_DIAMOND_COST = 350

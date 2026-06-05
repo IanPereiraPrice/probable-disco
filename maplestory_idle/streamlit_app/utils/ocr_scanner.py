@@ -1,4 +1,4 @@
-"""
+﻿"""
 Equipment Screenshot OCR Scanner
 Extracts stats from MapleStory Idle equipment screenshots using EasyOCR.
 """
@@ -226,16 +226,16 @@ SLOT_SPECIFIC_STATS: Dict[str, str] = {
     "crit_damage": "gloves",      # Crit Damage only on Gloves
     "def_pen": "shoulder",        # Defense Penetration only on Shoulder
     "all_skills": "ring",         # All Skills on Ring/Necklace (check both)
-    "final_damage": "cape",       # Final Damage on Cape/Bottom
+    "final_damage": "cape",       # Final Damage on Cape/Bottom/Face
     "buff_duration": "belt",      # Buff Duration on Belt
-    "stat_per_level": "face",     # Stat per Level on Face
+    "stat_per_level": "eye",      # Stat per Level on Eye Accessory
     "ba_targets": "top",          # BA Targets on Top
 }
 
 # Some stats can appear on multiple slots
 MULTI_SLOT_STATS: Dict[str, List[str]] = {
     "all_skills": ["ring", "necklace"],
-    "final_damage": ["cape", "bottom"],
+    "final_damage": ["cape", "bottom", "face"],
 }
 
 TIER_VOCABULARY = ["Rare", "Epic", "Unique", "Legendary", "Mystic"]
@@ -246,7 +246,8 @@ TIER_VOCABULARY = ["Rare", "Epic", "Unique", "Legendary", "Mystic"]
 EQUIPMENT_SLOT_MAP = {
     # IMPORTANT: Order matters! Longer strings must come before shorter substrings
     # e.g., "gloves" before "glove", "shoes" before "shoe"
-    "eye accessory": "face",
+    "face accessory": "face",
+    "eye accessory": "eye",
     "necklace": "necklace",
     "shoulder": "shoulder",
     "pendant": "necklace",
@@ -261,7 +262,7 @@ EQUIPMENT_SLOT_MAP = {
     "shoe": "shoes",
     "hat": "hat",
     "top": "top",
-    "eye": "face",
+    "eye": "eye",
 }
 
 

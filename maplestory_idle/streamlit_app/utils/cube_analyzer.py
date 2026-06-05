@@ -1,4 +1,4 @@
-"""
+﻿"""
 Cube Analyzer - Bridge between Streamlit data and cubes.py analysis functions.
 
 Provides cube priority recommendations using the original DPS calculation methods.
@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from copy import deepcopy
 
 # Import from the cubes module in maplestory_idle root
-from cubes import (
+from game.cubes import (
     PotentialLine,
     PotentialTier,
     StatType,
@@ -28,7 +28,7 @@ from cubes import (
     get_exact_roll_distribution,
     clear_exact_distribution_cache,
 )
-from job_classes import JobClass, get_main_stat_name
+from game.job_classes import JobClass, get_main_stat_name
 
 # Equipment slots
 EQUIPMENT_SLOTS = [
@@ -57,6 +57,7 @@ STAT_NAME_TO_TYPE = {
     "crit_damage": StatType.CRIT_DAMAGE,
     "def_pen": StatType.DEF_PEN,
     "final_damage": StatType.FINAL_DAMAGE,
+    "final_atk_dmg": StatType.FINAL_DAMAGE,  # legacy name alias
     "all_skills": StatType.ALL_SKILLS,
     "min_dmg_mult": StatType.MIN_DMG_MULT,
     "max_dmg_mult": StatType.MAX_DMG_MULT,
@@ -209,8 +210,8 @@ def convert_streamlit_lines_to_potential_lines(
 
 
 def get_tier_enum(tier_str: str) -> PotentialTier:
-    """Convert tier string to PotentialTier enum."""
-    return TIER_NAME_TO_ENUM.get(tier_str, PotentialTier.LEGENDARY)
+    """Convert tier string to PotentialTier enum (case-insensitive)."""
+    return TIER_NAME_TO_ENUM.get(tier_str.title(), PotentialTier.LEGENDARY)
 
 
 def analyze_slot_potentials(
@@ -313,12 +314,19 @@ def analyze_slot_potentials(
         val_key = f"{prefix}line{i}_value"
         yellow_key = f"{prefix}line{i}_yellow"
 
-        line_stats[i-1] = slot_pots.get(stat_key, "")
+        raw_stat = slot_pots.get(stat_key, "")
+        # Normalize legacy/alias stat names to canonical StatType.value string
+        if raw_stat:
+            canonical = STAT_NAME_TO_TYPE.get(raw_stat)
+            raw_stat = canonical.value if canonical is not None else raw_stat
+        line_stats[i-1] = raw_stat
         line_values[i-1] = float(slot_pots.get(val_key, 0))
         line_yellows[i-1] = True if i == 1 else slot_pots.get(yellow_key, True)
 
-        if i-1 < len(item_score.line_scores):
-            line_dps_gains[i-1] = item_score.line_scores[i-1]
+    # Map DPS gains by physical slot position (current_lines preserves slot attr)
+    for j, line in enumerate(current_lines):
+        if j < len(item_score.line_scores) and 1 <= line.slot <= 3:
+            line_dps_gains[line.slot - 1] = item_score.line_scores[j]
 
     return CubeRecommendation(
         slot=slot,

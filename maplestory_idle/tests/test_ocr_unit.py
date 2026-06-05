@@ -1,4 +1,4 @@
-"""
+﻿"""
 OCR Unit Tests - Validates OCR parsing against expected values for test images.
 
 Run with: python test_ocr_unit.py
@@ -7,20 +7,20 @@ import sys
 from pathlib import Path
 
 # Add paths for imports
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent / "streamlit_app"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "streamlit_app"))
 
 from streamlit_app.utils.ocr_scanner import extract_and_parse, get_ocr_reader
 
 # Test photos directory
-TEST_DIR = Path(__file__).parent / "OCR_test_photos"
+TEST_DIR = Path(__file__).parent.parent / "assets" / "OCR_test_photos"
 
 # Expected values for each test image
 # Format: filename -> expected values dict
 # base_stats_min: minimum number of non-zero base stats expected
 EXPECTED_VALUES = {
     "Screenshot 2026-01-08 231325.png": {
-        "slot": "face",
+        "slot": "eye",
         "level_min": 100,
         "level_max": 110,
         "tier": 4,

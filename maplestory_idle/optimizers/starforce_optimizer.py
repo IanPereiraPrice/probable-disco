@@ -1,4 +1,4 @@
-"""
+﻿"""
 Starforce Optimization Analysis
 ===============================
 Calculates optimal protection strategies for starforce enhancement.
@@ -28,7 +28,7 @@ if sys.platform == 'win32':
 
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
-from equipment import STARFORCE_TABLE, StarforceStage
+from game.equipment import STARFORCE_TABLE, StarforceStage
 
 # Destruction costs
 DESTRUCTION_FEE_MESO = 1_000_000  # 1M meso flat fee
@@ -114,43 +114,34 @@ def solve_markov_chain_per_stage(
     """
     Solve the Markov chain with PER-STAGE protection strategies.
 
-    Computes:
-    - P_s[stage]: Probability of reaching target from stage (without destruction)
-    - C[stage]: Expected COST from stage to target (in diamond units)
+    State: (stage, pity) where pity ∈ {0, 1, 2}.
+    After 2 consecutive decreases (pity=2) the next attempt is guaranteed to succeed.
+    Any non-decrease result (success, maintain, destroy) resets pity to 0.
 
-    The cost formulation directly incorporates stage-specific costs, avoiding
-    the need to separately track attempts per stage.
-
-    Args:
-        start_stage: Starting star level
-        target_stage: Target star level
-        stage_strategies: Dict mapping stage -> (use_decrease_prot, use_destroy_prot)
-
-    Returns:
-        C: dict mapping stage -> expected cost from that stage to target
-        P_s: dict mapping stage -> probability of success from that stage
+    Returns C and P_s keyed by stage (pity=0 values, which is always the starting state).
     """
     stages = list(range(start_stage, target_stage))
 
-    # Initialize: at target, 0 cost needed, 100% success
-    C = {target_stage: 0.0}
-    P_s = {target_stage: 1.0}
+    # State: (stage, pity). Initialize boundary: at target, done.
+    C: Dict = {(target_stage, 0): 0.0}
+    P_s: Dict = {(target_stage, 0): 1.0}
 
-    # Initialize estimates for other stages
     for stage in stages:
         data = STARFORCE_TABLE.get(stage)
         if data:
             p = data.success_rate
             cost_per_attempt = calculate_diamond_cost(data.meso, data.stones)
-            C[stage] = cost_per_attempt / p if p > 0 else float('inf')
-            P_s[stage] = 0.9
+            for pity in range(3):
+                C[(stage, pity)] = cost_per_attempt / p if p > 0 else float('inf')
+                P_s[(stage, pity)] = 0.9
         else:
-            C[stage] = 0
-            P_s[stage] = 1.0
+            for pity in range(3):
+                C[(stage, pity)] = 0.0
+                P_s[(stage, pity)] = 1.0
 
-    # Iterate until convergence
-    for iteration in range(1000):
-        max_change = 0
+    # Iterate until convergence (Gauss-Seidel over (stage, pity) states)
+    for _ in range(1000):
+        max_change = 0.0
 
         for stage in reversed(stages):
             data = STARFORCE_TABLE.get(stage)
@@ -158,45 +149,58 @@ def solve_markov_chain_per_stage(
                 continue
 
             use_decrease_prot, use_destroy_prot = stage_strategies.get(stage, (False, False))
-
-            # Destruction protection not available for last 3 stages (22, 23, 24 -> stars 23, 24, 25)
             can_use_destroy_prot = use_destroy_prot and stage not in {22, 23, 24}
 
             p = data.success_rate
-            d = 0 if use_decrease_prot else data.decrease_rate
+            d = 0.0 if use_decrease_prot else data.decrease_rate
             x = data.destroy_rate * (0.5 if can_use_destroy_prot else 1.0)
+            m = 1.0 - p - d - x  # maintain rate
 
-            # Cost multiplier for protections
             cost_mult = 1.0
             if use_decrease_prot and data.decrease_rate > 0:
                 cost_mult += 1.0
             if can_use_destroy_prot and data.destroy_rate > 0:
                 cost_mult += 1.0
+            cost = calculate_diamond_cost(data.meso * cost_mult, data.stones * cost_mult)
 
-            cost_per_attempt = calculate_diamond_cost(data.meso * cost_mult, data.stones * cost_mult)
-
-            # Where does decrease go?
             dec_target = max(start_stage, stage - 1)
+            next_stage = stage + 1
 
+            # pity=2: guaranteed success, no rolls needed
+            new_C2 = cost + C.get((next_stage, 0), 0.0)
+            new_P2 = P_s.get((next_stage, 0), 1.0)
+
+            # pity=0: maintain is self-referential (maintain → same state (stage,0))
+            # C[s,0] = (cost + p*C[s+1,0] + d*C[dec,1]) / (p+d+x)
             denom = p + d + x
             if denom > 0:
-                # C[X] = (cost + p*C[X+1] + d*C[dec_target]) / (p + d + x)
-                new_C = (cost_per_attempt + p * C.get(stage + 1, 0) + d * C.get(dec_target, C[stage])) / denom
-
-                # P_s[X] = (p*P_s[X+1] + d*P_s[dec_target]) / (p + d + x)
-                new_P_s = (p * P_s.get(stage + 1, 1) + d * P_s.get(dec_target, P_s[stage])) / denom
+                new_C0 = (cost + p * C.get((next_stage, 0), 0.0) + d * C.get((dec_target, 1), C.get((stage, 0), 0.0))) / denom
+                new_P0 = (p * P_s.get((next_stage, 0), 1.0) + d * P_s.get((dec_target, 1), P_s.get((stage, 0), 0.0))) / denom
             else:
-                new_C = float('inf')
-                new_P_s = 0
+                new_C0, new_P0 = float('inf'), 0.0
 
-            max_change = max(max_change, abs(new_C - C[stage]), abs(new_P_s - P_s[stage]))
-            C[stage] = new_C
-            P_s[stage] = new_P_s
+            # pity=1: maintain resets to (stage,0), not self-referential
+            # C[s,1] = cost + p*C[s+1,0] + d*C[dec,2] + m*C[s,0]
+            new_C1 = cost + p * C.get((next_stage, 0), 0.0) + d * C.get((dec_target, 2), 0.0) + m * new_C0
+            new_P1 = p * P_s.get((next_stage, 0), 1.0) + d * P_s.get((dec_target, 2), 0.0) + m * new_P0
+
+            for pity, new_C, new_P in ((0, new_C0, new_P0), (1, new_C1, new_P1), (2, new_C2, new_P2)):
+                max_change = max(max_change,
+                                 abs(new_C - C.get((stage, pity), 0.0)),
+                                 abs(new_P - P_s.get((stage, pity), 0.0)))
+                C[(stage, pity)] = new_C
+                P_s[(stage, pity)] = new_P
 
         if max_change < 1e-10:
             break
 
-    return C, P_s
+    # Return pity=0 values (always the starting state) for backward compatibility
+    C_out = {stage: C.get((stage, 0), 0.0) for stage in range(start_stage, target_stage + 1)}
+    P_s_out = {stage: P_s.get((stage, 0), 0.0) for stage in range(start_stage, target_stage + 1)}
+    C_out[target_stage] = 0.0
+    P_s_out[target_stage] = 1.0
+
+    return C_out, P_s_out
 
 
 def calculate_total_cost_markov(
@@ -683,6 +687,7 @@ def simulate_to_target(
         scrolls = 0
         attempts = 0
         destructions = 0
+        pity = 0  # consecutive decrease counter; at 2 next attempt is guaranteed
 
         while current < target_star:
             data = STARFORCE_TABLE.get(current)
@@ -692,10 +697,10 @@ def simulate_to_target(
             # Destruction protection not available for last 3 stages (22, 23, 24)
             can_use_destroy_prot = use_destroy_prot and current not in {22, 23, 24}
 
-            p = data.success_rate
-            d = 0 if use_decrease_prot else data.decrease_rate
-            x = data.destroy_rate * (0.5 if can_use_destroy_prot else 1.0)
-            m = 1 - p - d - x
+            p = 1.0 if pity >= 2 else data.success_rate
+            d = 0.0 if (use_decrease_prot or pity >= 2) else data.decrease_rate
+            x = 0.0 if pity >= 2 else data.destroy_rate * (0.5 if can_use_destroy_prot else 1.0)
+            m = 1.0 - p - d - x
 
             cost_mult = 1.0
             if use_decrease_prot and data.decrease_rate > 0:
@@ -710,15 +715,18 @@ def simulate_to_target(
             roll = random.random()
             if roll < p:
                 current += 1
+                pity = 0
             elif roll < p + m:
-                pass  # Maintain
+                pity = 0  # maintain resets streak
             elif roll < p + m + d:
                 current = max(start_star, current - 1)
+                pity += 1
             else:
                 # Destroyed - reset to 12
                 destructions += 1
                 meso += DESTRUCTION_FEE_MESO
                 current = DESTRUCTION_RESET_STAR
+                pity = 0
 
         total_meso += meso
         total_scrolls += scrolls

@@ -1,8 +1,8 @@
-"""
+﻿"""
 Unit tests for cubes.py - Potential system, stat calculations, and helper functions.
 """
 import pytest
-from cubes import (
+from game.cubes import (
     # Enums
     PotentialTier,
     StatType,
@@ -126,7 +126,7 @@ class TestSpecialPotentials:
 
     def test_all_special_slots_defined(self):
         """All slots with special potentials should be defined."""
-        expected_slots = ["hat", "gloves", "shoulder", "ring", "necklace", "cape", "bottom", "belt", "face", "top"]
+        expected_slots = ["hat", "gloves", "shoulder", "ring", "necklace", "cape", "bottom", "belt", "eye", "face", "top"]
         for slot in expected_slots:
             assert slot in SPECIAL_POTENTIALS
 

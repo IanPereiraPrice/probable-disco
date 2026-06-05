@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Companion System
 ==================================
 Companion mechanics, stats, and inventory effects.
@@ -10,11 +10,11 @@ Companions provide:
 - Inventory Effects: ALWAYS active (all owned companions contribute)
 
 Tier Structure:
-- Basic (Grey): 4 companions, max level 100, Inventory: Attack + HP
-- 1st Job (Blue): 8 companions, max level 50, Inventory: Attack + HP
-- 2nd Job (Purple): 8 companions, max level 30, Inventory: Flat Main Stat
-- 3rd Job: 8 companions, max level 10, Inventory: Damage %
-- 4th Job: 8 companions, max level 10, Inventory: Damage %
+- Basic (Grey): 5 companions, max level 100, Inventory: Attack + HP
+- 1st Job (Blue): 12 companions, max level 50, Inventory: Attack + HP
+- 2nd Job (Purple): 12 companions, max level 30, Inventory: Flat Main Stat
+- 3rd Job: 12 companions, max level 10, Inventory: Damage %
+- 4th Job: 12 companions, max level 10, Inventory: Damage %
 
 Last Updated: December 29, 2025
 """
@@ -39,6 +39,10 @@ class CompanionJob(Enum):
     DARK_KNIGHT = "dark_knight"
     ARCH_MAGE_FP = "arch_mage_fp"
     ARCH_MAGE_IL = "arch_mage_il"
+    BUCCANEER = "buccaneer"
+    CORSAIR = "corsair"
+    PALADIN = "paladin"
+    BISHOP = "bishop"
 
 
 class JobAdvancement(Enum):
@@ -61,6 +65,10 @@ class OnEquipStatType(Enum):
     CRIT_RATE = "crit_rate"
     STATUS_EFFECT_DMG = "status_effect_dmg"
     ACCURACY = "accuracy"
+    MAIN_STAT_PCT = "main_stat_pct"
+    CRIT_DAMAGE = "crit_damage"
+    SKILL_DAMAGE = "skill_damage"
+    BASIC_ATTACK_DAMAGE = "basic_attack_damage"
 
 
 # =============================================================================
@@ -82,13 +90,10 @@ SUB_SLOTS = 6
 TOTAL_EQUIP_SLOTS = 7
 
 # Inventory effect scaling per level by job advancement
-# From user data (Jan 2026):
-# - 2nd Job (Epic) Lv30: 601 main stat, Lv29: 577 (non-linear, need more data)
+# - 2nd Job (Epic): Lv30 = 601 main stat (data mine lookup); MaxHP = 501.1/level
 # - 3rd Job (Unique): Starts at 5% damage at Lv1, 14% at Lv10 → linear: 5 + (L-1)*1.0
-# - 4th Job (Legendary): 10% at Lv1, 16% at Lv4, 18.1% at Lv5, 20.3% at Lv6 → QUADRATIC
-#
-# 4th Job Quadratic Formula: v = 0.025*L^2 + 1.875*L + 8.1
-#   Verified: L1=10.0, L4=16.0, L5=18.1, L6=20.25 (close to 20.3)
+# - 4th Job (Legendary): lookup table from SupporterLevelStatFactorTable Factor[6]
+#   L1=10.0%, L2=12.0%, L3=14.03%, ..., L10=29.11%
 INVENTORY_SCALING = {
     JobAdvancement.BASIC: {
         "attack_per_level": 17.03,  # 1703 / 100 from Aspiring Warrior screenshot
@@ -102,7 +107,7 @@ INVENTORY_SCALING = {
         # Epic (2nd job): Lv30 = 601 main stat, Lv29 = 577
         # Using lookup table until we have more data points
         "type": "lookup",  # Flag to use lookup instead of formula
-        "max_hp_per_level": 490.5,
+        "max_hp_per_level": 501.1,  # data mine: Factor[4] base=128600 → 128600*3900/1000/1000=501.54, calibrated to 501.1
     },
     JobAdvancement.THIRD: {
         # Unique (3rd job) gives Damage % as inventory effect
@@ -112,13 +117,9 @@ INVENTORY_SCALING = {
         "damage_per_level": 1.0,
     },
     JobAdvancement.FOURTH: {
-        # Legendary (4th job) gives Damage % as inventory effect
-        # L1=10%, L4=16%, L5=18.1%, L6=20.3% → QUADRATIC formula
-        # v = a*L^2 + b*L + c where a=0.025, b=1.875, c=8.1
-        "type": "quadratic",
-        "damage_a": 0.025,
-        "damage_b": 1.875,
-        "damage_c": 8.1,
+        # Legendary (4th job) gives Damage % from Factor[6] lookup table
+        # See FOURTH_JOB_DAMAGE_TABLE / get_4th_job_damage()
+        "type": "lookup",
     },
 }
 
@@ -152,28 +153,42 @@ def get_2nd_job_main_stat(level: int) -> float:
     return (level / 30.0) * 601
 
 
+# 4th Job (Grade5) damage% lookup from SupporterLevelStatFactorTable Factor[6]
+# stat = Base(100) * Factor[6][level] / 1000 / 10
+# Exact values verified from data mine (Factor[6] at levels 1-10):
+FOURTH_JOB_DAMAGE_TABLE = [
+    0.0,    # index 0 unused
+    10.0,   # L1:  Factor=1000
+    12.0,   # L2:  Factor=1200
+    14.03,  # L3:  Factor=1403
+    16.09,  # L4:  Factor=1609
+    18.18,  # L5:  Factor=1818
+    20.30,  # L6:  Factor=2030
+    22.45,  # L7:  Factor=2245
+    24.64,  # L8:  Factor=2464
+    26.86,  # L9:  Factor=2686
+    29.11,  # L10: Factor=2911
+]
+
+
 def get_4th_job_damage(level: int) -> float:
-    """Get 4th job inventory damage % at given level.
+    """Get 4th job inventory damage % at given level (data mine lookup table)."""
+    level = max(1, min(level, 10))
+    return FOURTH_JOB_DAMAGE_TABLE[level]
 
-    Uses quadratic formula: v = 0.025*L^2 + 1.875*L + 8.1
-    Verified against: L1=10%, L4=16%, L5=18.1%, L6=20.3%
-    """
-    a = 0.025
-    b = 1.875
-    c = 8.1
-    return a * level**2 + b * level + c
-
-# On-equip scaling - CORRECTED based on user data (Jan 2026)
+# On-equip scaling - verified against SupporterLevelStatFactorTable (May 2026)
 #
-# 3rd Job (Unique): All start at 10% at Lv1, 19% at Lv10 → per_level = 1.0
-#   EXCEPTIONS: DK starts at 12% (22% at L10), MM at 16% (30.4% at L10), F/P at 6% (11.4% at L10)
+# Formula: stat = OptionBaseValue * Factor[7][level] / 1000 / 10
+# Factor[7] is linear: 1000 + (level-1)*100, so stat = base + (L-1)*base/10
 #
-# 2nd Job (Epic): All start at 10% at Lv1, 19.5% at Lv30 → per_level = 0.328
-#   EXCEPTIONS: DK starts at 12% (23% at L30), MM at 16% (31.4% at L30), F/P at 6% (11.4% at L30)
+# 3rd Job (Unique): base=10% at Lv1, 19% at Lv10 → per_level = 1.0
+#   EXCEPTIONS: DK (Accuracy) base=12%, MM (StatusEffect) base=16%, F/P (CritRate) base=6%
+#
+# 2nd Job (Epic): base=5% at Lv1, 19.5% at Lv30 → per_level = 0.500
+#   EXCEPTIONS: DK base=12% (23% at L30), MM base=8% (31.2% at L30), F/P base=3% (11.7% at L30)
+#   Note: previous code had Grade3 base 2x too high (calibrated from max-level only)
 #
 # Format: {stat_type: {advancement: (base_at_lv1, per_level)}}
-# Note: Some companions have different on-equip types. The exceptions (DK/MM/FP)
-# are handled via COMPANION_ON_EQUIP_OVERRIDES below.
 
 # Default on-equip values (used for most companions)
 ON_EQUIP_VALUES = {
@@ -184,49 +199,70 @@ ON_EQUIP_VALUES = {
         JobAdvancement.FIRST: (23.6, 23.6),   # 1180 / 50 = 23.6 per level
     },
     OnEquipStatType.ATTACK_SPEED: {
-        # Default: 10% at L1, 19.5% at L30 (2nd), 19% at L10 (3rd)
-        JobAdvancement.SECOND: (10.0, 0.328),  # (19.5-10)/29 = 0.328
-        JobAdvancement.THIRD: (10.0, 1.0),     # (19-10)/9 = 1.0
-        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
+        # 2nd: base=5%, L30=19.5% (5+29*0.5)  3rd: base=10%, L10=19%
+        JobAdvancement.SECOND: (5.0, 0.500),
+        JobAdvancement.THIRD: (10.0, 1.0),
+        JobAdvancement.FOURTH: (20.0, 2.0),
     },
     OnEquipStatType.MIN_DMG_MULT: {
-        JobAdvancement.SECOND: (10.0, 0.328),
+        JobAdvancement.SECOND: (5.0, 0.500),
         JobAdvancement.THIRD: (10.0, 1.0),
-        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
+        JobAdvancement.FOURTH: (20.0, 2.0),
     },
     OnEquipStatType.MAX_DMG_MULT: {
-        JobAdvancement.SECOND: (10.0, 0.328),
+        JobAdvancement.SECOND: (5.0, 0.500),
         JobAdvancement.THIRD: (10.0, 1.0),
-        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
+        JobAdvancement.FOURTH: (20.0, 2.0),
     },
     OnEquipStatType.BOSS_DAMAGE: {
-        JobAdvancement.SECOND: (10.0, 0.328),
+        JobAdvancement.SECOND: (5.0, 0.500),
         JobAdvancement.THIRD: (10.0, 1.0),
-        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
+        JobAdvancement.FOURTH: (20.0, 2.0),
     },
     OnEquipStatType.NORMAL_DAMAGE: {
-        JobAdvancement.SECOND: (10.0, 0.328),
+        JobAdvancement.SECOND: (5.0, 0.500),
         JobAdvancement.THIRD: (10.0, 1.0),
-        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level
+        JobAdvancement.FOURTH: (20.0, 2.0),
     },
     OnEquipStatType.CRIT_RATE: {
-        # F/P Arch Mage: 6% at L1, 11.4% at L29 (2nd), 11.4% at L10 (3rd)
-        # L29: 6 + 28*per = 11.4 → per = 0.193 ≈ 0.2
-        JobAdvancement.SECOND: (6.0, 0.2),     # 6 + 29*0.2 = 11.8% at L30
-        JobAdvancement.THIRD: (6.0, 0.6),      # (11.4-6)/9 = 0.6
-        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level (assumes same as others)
+        # F/P: base=3% at L1, L30=11.7% (3+29*0.3)  3rd: base=6%, L10=11.4%
+        JobAdvancement.SECOND: (3.0, 0.300),
+        JobAdvancement.THIRD: (6.0, 0.6),
+        JobAdvancement.FOURTH: (20.0, 2.0),
     },
     OnEquipStatType.STATUS_EFFECT_DMG: {
-        # Marksman: 16% at L1, 31.4% at L30 (2nd), 30.4% at L10 (3rd)
-        JobAdvancement.SECOND: (16.0, 0.531),  # (31.4-16)/29 = 0.531
-        JobAdvancement.THIRD: (16.0, 1.6),     # (30.4-16)/9 = 1.6
-        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level (assumes same as others)
+        # Marksman: base=8% at L1, L30=31.2% (8+29*0.8)  3rd: base=16%, L10=30.4%
+        JobAdvancement.SECOND: (8.0, 0.800),
+        JobAdvancement.THIRD: (16.0, 1.6),
+        JobAdvancement.FOURTH: (20.0, 2.0),
     },
     OnEquipStatType.ACCURACY: {
-        # Dark Knight: 12% at L1, 23% at L30 (2nd), 22% at L10 (3rd)
-        JobAdvancement.SECOND: (12.0, 0.379),  # (23-12)/29 = 0.379
-        JobAdvancement.THIRD: (12.0, 1.111),   # (22-12)/9 = 1.111
-        JobAdvancement.FOURTH: (20.0, 2.0),    # 20% at L1, +2% per level (assumes same as others)
+        # Dark Knight: base=12% at L1, L30=22.99% — pending in-game verification
+        JobAdvancement.SECOND: (12.0, 0.379),  # unchanged until verified
+        JobAdvancement.THIRD: (12.0, 1.111),
+        JobAdvancement.FOURTH: (20.0, 2.0),
+    },
+    OnEquipStatType.MAIN_STAT_PCT: {
+        JobAdvancement.SECOND: (5.0, 0.500),
+        JobAdvancement.THIRD: (10.0, 1.0),
+        JobAdvancement.FOURTH: (13.0, 0.8667),  # L1=13%, L10=20.8%
+    },
+    OnEquipStatType.CRIT_DAMAGE: {
+        JobAdvancement.SECOND: (5.0, 0.500),
+        JobAdvancement.THIRD: (10.0, 1.0),
+        JobAdvancement.FOURTH: (13.0, 0.8667),  # L1=13%, L10=20.8%
+    },
+    OnEquipStatType.SKILL_DAMAGE: {
+        # Bishop: 4th L6=12% → base=8.0; 3rd L10=8% → base≈4.211; 2nd L27=7.2% → base=2.0
+        JobAdvancement.SECOND: (2.0, 0.200),
+        JobAdvancement.THIRD: (80/19, 8/19),  # exact: (80/19)*1.9 = 8.0 at L10
+        JobAdvancement.FOURTH: (8.0, 0.800),
+    },
+    OnEquipStatType.BASIC_ATTACK_DAMAGE: {
+        # Paladin: same formula as Bishop (4th L5=11.2% → base=8.0)
+        JobAdvancement.SECOND: (2.0, 0.200),
+        JobAdvancement.THIRD: (80/19, 8/19),
+        JobAdvancement.FOURTH: (8.0, 0.800),
     },
 }
 
@@ -241,6 +277,10 @@ ON_EQUIP_DISPLAY = {
     OnEquipStatType.CRIT_RATE: "Crit Rate %",
     OnEquipStatType.STATUS_EFFECT_DMG: "Status Effect Dmg %",
     OnEquipStatType.ACCURACY: "Accuracy",
+    OnEquipStatType.MAIN_STAT_PCT: "Main Stat %",
+    OnEquipStatType.CRIT_DAMAGE: "Crit Damage %",
+    OnEquipStatType.SKILL_DAMAGE: "Skill Damage %",
+    OnEquipStatType.BASIC_ATTACK_DAMAGE: "Basic Attack Damage %",
 }
 
 TIER_DISPLAY = {
@@ -263,6 +303,9 @@ class CompanionDefinition:
     job: CompanionJob
     advancement: JobAdvancement
     on_equip_type: OnEquipStatType
+    # Override inventory stat: (stat_key, base_at_l1, per_level) for linear scaling
+    # When set, replaces the tier-default inventory stat entirely
+    inventory_stat_override: Optional[Tuple[str, float, float]] = None
 
     @property
     def max_level(self) -> int:
@@ -284,12 +327,18 @@ class CompanionDefinition:
         Returns stats using standardized stat names from stat_names.py:
         - attack_flat: Flat attack bonus
         - main_stat_flat: Flat main stat (resolved by job class)
+        - main_stat_pct: Main stat % (Buccaneer 4th)
+        - crit_damage: Crit damage % (Corsair 4th)
         - damage_pct: Damage percentage
         - max_hp: Max HP
         """
         level = max(0, min(level, self.max_level))
         if level == 0:
             return {}
+
+        if self.inventory_stat_override is not None:
+            stat_key, base, per_lv = self.inventory_stat_override
+            return {stat_key: base + (level - 1) * per_lv}
 
         stats = {}
 
@@ -397,6 +446,8 @@ class CompanionConfig:
         stats["on_equip_boss_damage"] = on_equip.get("boss_damage", 0)
         stats["on_equip_normal_damage"] = on_equip.get("normal_damage", 0)
         stats["on_equip_crit_rate"] = on_equip.get("crit_rate", 0)
+        stats["on_equip_skill_damage"] = on_equip.get("skill_damage", 0)
+        stats["on_equip_basic_attack_damage"] = on_equip.get("basic_attack_damage", 0)
 
         # Add inventory stats
         inventory = self.get_inventory_stats()
@@ -412,6 +463,8 @@ class CompanionConfig:
         stats["boss_damage"] = stats["on_equip_boss_damage"]
         stats["normal_damage"] = stats["on_equip_normal_damage"]
         stats["crit_rate"] = stats["on_equip_crit_rate"]
+        stats["skill_damage"] = stats["on_equip_skill_damage"]
+        stats["basic_attack_damage"] = stats["on_equip_basic_attack_damage"]
 
         # For backward compatibility with damage calc
         stats["flat_main_stat"] = stats["inv_main_stat"]
@@ -522,7 +575,7 @@ class CompanionConfig:
             StatBlock with all companion stats
         """
         from stats import create_stat_block_for_job
-        from job_classes import JobClass
+        from game.job_classes import JobClass
 
         if job_class is None:
             job_class = JobClass.BOWMASTER
@@ -570,6 +623,12 @@ COMPANIONS = {
     ),
     "aspiring_thief": CompanionDefinition(
         name="Aspiring Thief",
+        job=CompanionJob.BASIC,
+        advancement=JobAdvancement.BASIC,
+        on_equip_type=OnEquipStatType.FLAT_ATTACK,
+    ),
+    "aspiring_pirate": CompanionDefinition(
+        name="Aspiring Pirate",
         job=CompanionJob.BASIC,
         advancement=JobAdvancement.BASIC,
         on_equip_type=OnEquipStatType.FLAT_ATTACK,
@@ -771,6 +830,110 @@ COMPANIONS = {
     "arch_mage_il_1st": CompanionDefinition(
         name="Arch Mage I/L (1st)",
         job=CompanionJob.ARCH_MAGE_IL,
+        advancement=JobAdvancement.FIRST,
+        on_equip_type=OnEquipStatType.FLAT_ATTACK,
+    ),
+
+    # Buccaneer companions (Pirate - STR/DEX, main stat % on-equip)
+    "buccaneer_4th": CompanionDefinition(
+        name="Buccaneer (4th)",
+        job=CompanionJob.BUCCANEER,
+        advancement=JobAdvancement.FOURTH,
+        on_equip_type=OnEquipStatType.MAIN_STAT_PCT,
+    ),
+    "buccaneer_3rd": CompanionDefinition(
+        name="Buccaneer (3rd)",
+        job=CompanionJob.BUCCANEER,
+        advancement=JobAdvancement.THIRD,
+        on_equip_type=OnEquipStatType.MAIN_STAT_PCT,
+    ),
+    "buccaneer_2nd": CompanionDefinition(
+        name="Buccaneer (2nd)",
+        job=CompanionJob.BUCCANEER,
+        advancement=JobAdvancement.SECOND,
+        on_equip_type=OnEquipStatType.MAIN_STAT_PCT,
+    ),
+    "buccaneer_1st": CompanionDefinition(
+        name="Buccaneer (1st)",
+        job=CompanionJob.BUCCANEER,
+        advancement=JobAdvancement.FIRST,
+        on_equip_type=OnEquipStatType.FLAT_ATTACK,
+    ),
+
+    # Corsair companions (Pirate - DEX/STR, crit damage % on-equip)
+    "corsair_4th": CompanionDefinition(
+        name="Corsair (4th)",
+        job=CompanionJob.CORSAIR,
+        advancement=JobAdvancement.FOURTH,
+        on_equip_type=OnEquipStatType.CRIT_DAMAGE,
+    ),
+    "corsair_3rd": CompanionDefinition(
+        name="Corsair (3rd)",
+        job=CompanionJob.CORSAIR,
+        advancement=JobAdvancement.THIRD,
+        on_equip_type=OnEquipStatType.CRIT_DAMAGE,
+    ),
+    "corsair_2nd": CompanionDefinition(
+        name="Corsair (2nd)",
+        job=CompanionJob.CORSAIR,
+        advancement=JobAdvancement.SECOND,
+        on_equip_type=OnEquipStatType.CRIT_DAMAGE,
+    ),
+    "corsair_1st": CompanionDefinition(
+        name="Corsair (1st)",
+        job=CompanionJob.CORSAIR,
+        advancement=JobAdvancement.FIRST,
+        on_equip_type=OnEquipStatType.FLAT_ATTACK,
+    ),
+
+    # Bishop companions (Magician - skill damage % on-equip)
+    "bishop_4th": CompanionDefinition(
+        name="Bishop (4th)",
+        job=CompanionJob.BISHOP,
+        advancement=JobAdvancement.FOURTH,
+        on_equip_type=OnEquipStatType.SKILL_DAMAGE,
+    ),
+    "bishop_3rd": CompanionDefinition(
+        name="Bishop (3rd)",
+        job=CompanionJob.BISHOP,
+        advancement=JobAdvancement.THIRD,
+        on_equip_type=OnEquipStatType.SKILL_DAMAGE,
+    ),
+    "bishop_2nd": CompanionDefinition(
+        name="Bishop (2nd)",
+        job=CompanionJob.BISHOP,
+        advancement=JobAdvancement.SECOND,
+        on_equip_type=OnEquipStatType.SKILL_DAMAGE,
+    ),
+    "bishop_1st": CompanionDefinition(
+        name="Bishop (1st)",
+        job=CompanionJob.BISHOP,
+        advancement=JobAdvancement.FIRST,
+        on_equip_type=OnEquipStatType.FLAT_ATTACK,
+    ),
+
+    # Paladin companions (Warrior - basic attack damage % on-equip)
+    "paladin_4th": CompanionDefinition(
+        name="Paladin (4th)",
+        job=CompanionJob.PALADIN,
+        advancement=JobAdvancement.FOURTH,
+        on_equip_type=OnEquipStatType.BASIC_ATTACK_DAMAGE,
+    ),
+    "paladin_3rd": CompanionDefinition(
+        name="Paladin (3rd)",
+        job=CompanionJob.PALADIN,
+        advancement=JobAdvancement.THIRD,
+        on_equip_type=OnEquipStatType.BASIC_ATTACK_DAMAGE,
+    ),
+    "paladin_2nd": CompanionDefinition(
+        name="Paladin (2nd)",
+        job=CompanionJob.PALADIN,
+        advancement=JobAdvancement.SECOND,
+        on_equip_type=OnEquipStatType.BASIC_ATTACK_DAMAGE,
+    ),
+    "paladin_1st": CompanionDefinition(
+        name="Paladin (1st)",
+        job=CompanionJob.PALADIN,
         advancement=JobAdvancement.FIRST,
         on_equip_type=OnEquipStatType.FLAT_ATTACK,
     ),

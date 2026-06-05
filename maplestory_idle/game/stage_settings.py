@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Stage/Combat Settings
 ========================================
 Combat scenario parameters for DPS calculations.

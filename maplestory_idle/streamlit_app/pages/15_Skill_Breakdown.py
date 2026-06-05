@@ -1,4 +1,4 @@
-"""
+﻿"""
 Skill Damage Breakdown Page
 Visualize what percentage of damage comes from each skill across levels.
 
@@ -12,16 +12,18 @@ from pathlib import Path
 # Add parent directory to path for core imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from skills import (
+from game.skills import (
     DPSCalculator,
+    SkillType,
     create_default_character,
     get_skills_for_job,
     get_masteries_for_job,
     get_level_breakpoints,
     calculate_effective_cooldown,
 )
-from job_classes import JobClass, JOB_DISPLAY_NAMES
-from stage_settings import COMBAT_SCENARIO_PARAMS, CombatMode
+from libs.cooldown_calc import calculate_buff_uptime
+from game.job_classes import JobClass, JOB_DISPLAY_NAMES
+from game.stage_settings import COMBAT_SCENARIO_PARAMS, CombatMode
 
 st.set_page_config(page_title="Skill Breakdown", page_icon="📊", layout="wide")
 
@@ -36,7 +38,7 @@ st.title("📊 Skill Damage Breakdown")
 st.markdown("Visualize how damage is distributed across skills at different levels.")
 
 # Get job class from character settings
-from skills import SKILLS_BY_JOB
+from game.skills import SKILLS_BY_JOB
 
 selected_job = JobClass(data.job_class)
 
@@ -792,6 +794,118 @@ else:
 
 st.divider()
 
+# =============================================================================
+# Final Damage Buff Impact
+# =============================================================================
+st.subheader("Final Damage Buff Impact")
+st.markdown("Uptime-weighted FD contribution from each buff skill and its effect on total DPS.")
+
+_skills_dict = get_skills_for_job(selected_job)
+_buff_data = []
+
+for _sname, _skill in _skills_dict.items():
+    if not _skill.skill_bonuses or 'final_damage' not in _skill.skill_bonuses:
+        continue
+    if not char.is_skill_unlocked(_sname):
+        continue
+
+    _fd = calc.get_skill_bonus_value(_sname, 'final_damage')
+    _fd += calc.get_mastery_bonus(_sname, 'skill_final_damage')
+    if _fd <= 0:
+        continue
+
+    if _skill.skill_type == SkillType.PASSIVE_STAT:
+        _uptime = 1.0
+    elif _skill.skill_type == SkillType.PASSIVE_PROC and getattr(_skill, 'buff_downtime', 0):
+        _uptime = (_skill.cooldown - _skill.buff_downtime) / _skill.cooldown
+    elif _skill.skill_type in (SkillType.BUFF, SkillType.PASSIVE_BUFF) and _skill.cooldown and _skill.duration:
+        _eff_cd = char.get_effective_skill_cooldown(_skill.cooldown, 0)
+        _uptime = calculate_buff_uptime(_eff_cd, _skill.duration, 60.0)
+    else:
+        _uptime = 1.0
+
+    _avg_fd = _fd * _uptime
+    _dps_impact = (1 - 1 / (1 + _avg_fd / 100)) * 100
+
+    _buff_data.append({
+        'Skill': _skill.name,
+        'FD at Current Level': f"+{_fd:.1f}%",
+        'Uptime': f"{_uptime * 100:.0f}%",
+        'Avg FD': f"+{_avg_fd:.1f}%",
+        'DPS Impact': f"+{_dps_impact:.1f}%",
+    })
+
+if _buff_data:
+    st.dataframe(pd.DataFrame(_buff_data), hide_index=True, use_container_width=True)
+    st.caption(
+        "DPS Impact is the multiplicative contribution of that buff alone. "
+        "Actual impact is slightly lower when stacked with other FD sources (diminishing returns)."
+    )
+else:
+    st.info("No FD buff skills unlocked for this job at the current level.")
+
+st.divider()
+
+# =============================================================================
+# Maple Hero Compounding Growth
+# =============================================================================
+st.subheader("Maple Hero Compounding Growth")
+st.markdown(
+    "Skills enhanced by Maple Hero gain FD *on top of* their own damage scaling — "
+    "both values grow with +All Skills, compounding multiplicatively and producing a steeper growth curve."
+)
+
+_mh_skill = _skills_dict.get('maple_hero') or _skills_dict.get('maple_hero_mage')
+if _mh_skill and _mh_skill.skill_bonuses and not scaling_df.empty:
+    _enhanced_names = set(_mh_skill.skill_bonuses.keys())
+
+    # Map internal skill names → display names used in scaling_df
+    _name_map = {s.name: True for n, s in _skills_dict.items() if n in _enhanced_names}
+    _enhanced_display = {
+        _skills_dict[n].name for n in _enhanced_names if n in _skills_dict
+    }
+
+    # Tag each row
+    _growth_tagged = growth_df.copy()
+    _growth_tagged['Category'] = _growth_tagged['Skill'].apply(
+        lambda s: 'Maple Hero Enhanced' if s in _enhanced_display else 'Standard'
+    )
+
+    # Mean growth per category
+    _mean_growth = (
+        _growth_tagged.groupby(['+All Skills', 'Category'], as_index=False)['Growth %'].mean()
+    )
+
+    _mh_chart = alt.Chart(_mean_growth).mark_line(point=True).encode(
+        x=alt.X('+All Skills:Q', title='+All Skills Bonus'),
+        y=alt.Y('Growth %:Q', title='Avg DPS Growth (% vs +0 baseline)'),
+        color=alt.Color(
+            'Category:N',
+            scale=alt.Scale(
+                domain=['Maple Hero Enhanced', 'Standard'],
+                range=['#f97316', '#64748b'],
+            ),
+        ),
+        tooltip=['+All Skills', 'Category', alt.Tooltip('Growth %:Q', format='.1f')],
+    ).properties(
+        title="Maple Hero Enhanced vs Standard Skills — Growth Rate Comparison",
+        height=320,
+    ).interactive()
+
+    st.altair_chart(_mh_chart, use_container_width=True)
+
+    # Show which skills are enhanced
+    _enhanced_list = ', '.join(sorted(_enhanced_display))
+    st.caption(f"Enhanced skills: {_enhanced_list}")
+    st.caption(
+        "Enhanced skills grow faster because each +1 to All Skills raises both the skill's own "
+        "base damage AND Maple Hero's FD multiplier — two linear gains that multiply together."
+    )
+else:
+    st.info("Maple Hero not available or no scaling data for this job.")
+
+st.divider()
+
 # Passive effects section
 passive_effects = calc.get_active_passive_effects()
 
@@ -816,6 +930,276 @@ if passive_effects:
     if effects_data:
         effects_df = pd.DataFrame(effects_data)
         st.dataframe(effects_df, hide_index=True, use_container_width=True)
+
+st.divider()
+
+# =============================================================================
+# Skill Point Returns — All Skills vs Job Skill Levels
+# =============================================================================
+st.subheader("Skill Point Returns: Equipment Bonuses")
+st.markdown(
+    "Starting from **0 bonus points**, how does total DPS grow as you invest in each stat? "
+    "The left chart shows cumulative DPS gain — a bending curve means diminishing relative returns. "
+    "The right chart shows how much each additional point is worth (as % of your DPS at that moment)."
+)
+
+@st.cache_data(ttl=300, show_spinner="Calculating skill point returns...")
+def calculate_skill_point_returns_v2(
+    char_level: int,
+    job_class_name: str,
+    all_skills_bonus: int,
+    skill_1st_bonus: int,
+    skill_2nd_bonus: int,
+    skill_3rd_bonus: int,
+    skill_4th_bonus: int,
+    num_enemies: int,
+    mob_time_fraction: float,
+    max_points: int,
+    step: int,
+    skill_cd_reduction: float,
+    attack_speed_pct: float,
+) -> pd.DataFrame:
+    job_class = JobClass[job_class_name]
+
+    def _dps(as_val, s1, s2, s3, s4):
+        c = create_default_character(char_level, job_class, as_val,
+            skill_1st_bonus=s1, skill_2nd_bonus=s2,
+            skill_3rd_bonus=s3, skill_4th_bonus=s4,
+        )
+        c.skill_cd_reduction = skill_cd_reduction
+        c.attack_speed_pct = attack_speed_pct
+        bd = DPSCalculator(c, enemy_def=0.752).get_skill_damage_breakdown(
+            fight_duration=3600.0, num_enemies=num_enemies, mob_time_fraction=mob_time_fraction,
+        )
+        return sum(info['dps'] for info in bd.values())
+
+    points = list(range(0, max_points + 1, step))
+    stat_configs = [
+        ('All Skills',    lambda n: _dps(n,               skill_1st_bonus, skill_2nd_bonus, skill_3rd_bonus, skill_4th_bonus)),
+        ('1st Job Skill', lambda n: _dps(all_skills_bonus, n,              skill_2nd_bonus, skill_3rd_bonus, skill_4th_bonus)),
+        ('2nd Job Skill', lambda n: _dps(all_skills_bonus, skill_1st_bonus, n,              skill_3rd_bonus, skill_4th_bonus)),
+        ('3rd Job Skill', lambda n: _dps(all_skills_bonus, skill_1st_bonus, skill_2nd_bonus, n,              skill_4th_bonus)),
+        ('4th Job Skill', lambda n: _dps(all_skills_bonus, skill_1st_bonus, skill_2nd_bonus, skill_3rd_bonus, n)),
+    ]
+
+    rows = []
+    for stat_name, dps_fn in stat_configs:
+        dps_at = {n: dps_fn(n) for n in points}
+        baseline = dps_at[0] if dps_at[0] > 0 else 1.0
+        for i, n in enumerate(points[1:], 1):
+            prev_n = points[i - 1]
+            cumulative_pct = (dps_at[n] / baseline - 1) * 100
+            prev_dps = dps_at[prev_n] if dps_at[prev_n] > 0 else 1.0
+            marginal_pct = (dps_at[n] - dps_at[prev_n]) / prev_dps / step * 100
+            rows.append({
+                'Points Added': n,
+                'Stat': stat_name,
+                'Cumulative DPS Gain %': round(cumulative_pct, 3),
+                'Marginal DPS %/pt': round(marginal_pct, 4),
+            })
+
+    return pd.DataFrame(rows)
+
+
+_returns_df = calculate_skill_point_returns_v2(
+    char_level=level,
+    job_class_name=selected_job.name,
+    all_skills_bonus=all_skills,
+    skill_1st_bonus=skill_1st,
+    skill_2nd_bonus=skill_2nd,
+    skill_3rd_bonus=skill_3rd,
+    skill_4th_bonus=skill_4th,
+    num_enemies=num_enemies,
+    mob_time_fraction=mob_fraction,
+    max_points=200,
+    step=5,
+    skill_cd_reduction=selected_cd,
+    attack_speed_pct=float(attack_speed),
+)
+
+if not _returns_df.empty:
+    _cum_chart = alt.Chart(_returns_df).mark_line().encode(
+        x=alt.X('Points Added:Q', title='Bonus Points Added'),
+        y=alt.Y('Cumulative DPS Gain %:Q', title='Total DPS Gain %'),
+        color=alt.Color('Stat:N', legend=alt.Legend(title='Stat')),
+        tooltip=[
+            alt.Tooltip('Points Added:Q', title='Points'),
+            alt.Tooltip('Stat:N'),
+            alt.Tooltip('Cumulative DPS Gain %:Q', format='.1f', title='Total Gain %'),
+        ],
+    ).properties(title="Cumulative DPS Gain", height=320).interactive()
+
+    # Marginal: raw scatter + LOESS trend per stat
+    _scatter = alt.Chart(_returns_df).mark_point(opacity=0.25, size=20).encode(
+        x=alt.X('Points Added:Q', title='Bonus Points Added'),
+        y=alt.Y('Marginal DPS %/pt:Q', title='DPS % gained per point'),
+        color=alt.Color('Stat:N', legend=None),
+    )
+    _trend = alt.Chart(_returns_df).transform_loess(
+        'Points Added', 'Marginal DPS %/pt', groupby=['Stat'], bandwidth=0.4,
+    ).mark_line(strokeWidth=2).encode(
+        x='Points Added:Q',
+        y='Marginal DPS %/pt:Q',
+        color=alt.Color('Stat:N', legend=alt.Legend(title='Stat')),
+        tooltip=[
+            alt.Tooltip('Points Added:Q', title='Points'),
+            alt.Tooltip('Stat:N'),
+            alt.Tooltip('Marginal DPS %/pt:Q', format='.4f', title='DPS %/pt (trend)'),
+        ],
+    )
+    _marg_chart = (_scatter + _trend).properties(
+        title="Marginal DPS per Point (faint dots = raw, solid = trend)",
+        height=320,
+    ).interactive()
+
+    col_cum, col_marg = st.columns(2)
+    with col_cum:
+        st.altair_chart(_cum_chart, use_container_width=True)
+    with col_marg:
+        st.altair_chart(_marg_chart, use_container_width=True)
+    st.caption(
+        "Cumulative curve bending = diminishing relative returns (same absolute gain, growing DPS base). "
+        "Marginal trend declining = each point is worth a smaller % of your current DPS. "
+        "All Skills is worth more than a single job bonus because it boosts all tiers simultaneously."
+    )
+else:
+    st.warning("No data for skill point returns analysis")
+
+st.subheader("DPS Gained per Level (Leveling from Scratch)")
+st.markdown(
+    "Starting from level 10 with no equipment bonuses — how much does each character level's "
+    "3 skill points add, as **% of your DPS at that moment**? "
+    "The INC50 kink in Maple Hero shows as a drop in the 4th job line."
+)
+
+@st.cache_data(ttl=300, show_spinner="Calculating leveling curve...")
+def calculate_leveling_curve(
+    job_class_name: str,
+    all_skills_bonus: int,
+    num_enemies: int,
+    mob_time_fraction: float,
+    skill_cd_reduction: float,
+    attack_speed_pct: float,
+) -> pd.DataFrame:
+    job_class = JobClass[job_class_name]
+    levels = list(range(10, 141))
+
+    def _dps(lv):
+        c = create_default_character(lv, job_class, all_skills_bonus)
+        c.skill_cd_reduction = skill_cd_reduction
+        c.attack_speed_pct = attack_speed_pct
+        bd = DPSCalculator(c, enemy_def=0.752).get_skill_damage_breakdown(
+            fight_duration=3600.0, num_enemies=num_enemies, mob_time_fraction=mob_time_fraction,
+        )
+        return sum(info['dps'] for info in bd.values())
+
+    dps_at = {lv: _dps(lv) for lv in levels}
+    baseline = dps_at[10] if dps_at[10] > 0 else 1.0
+
+    def _job_label(lv):
+        if lv < 30:  return '1st Job'
+        if lv < 60:  return '2nd Job'
+        if lv < 100: return '3rd Job'
+        return '4th Job'
+
+    rows = []
+    for i in range(1, len(levels)):
+        prev_lv, curr_lv = levels[i - 1], levels[i]
+        prev_dps = dps_at[prev_lv] if dps_at[prev_lv] > 0 else 1.0
+        marginal_per_pt = (dps_at[curr_lv] - prev_dps) / prev_dps / 3 * 100
+        cumulative_pct  = (dps_at[curr_lv] / baseline - 1) * 100
+        rows.append({
+            'Character Level': curr_lv,
+            'Job Tier': _job_label(curr_lv),
+            'Marginal DPS %/pt': round(marginal_per_pt, 4),
+            'Cumulative DPS Gain %': round(cumulative_pct, 1),
+        })
+
+    return pd.DataFrame(rows)
+
+
+_lv_df = calculate_leveling_curve(
+    job_class_name=selected_job.name,
+    all_skills_bonus=all_skills,
+    num_enemies=num_enemies,
+    mob_time_fraction=mob_fraction,
+    skill_cd_reduction=selected_cd,
+    attack_speed_pct=float(attack_speed),
+)
+
+if not _lv_df.empty:
+    _kink_lv = 100 + (120 - all_skills) / 3
+    _job_sort = ['1st Job', '2nd Job', '3rd Job', '4th Job']
+
+    # Left: cumulative DPS gain coloured by job tier
+    _lv_cum = alt.Chart(_lv_df).mark_area(opacity=0.15).encode(
+        x=alt.X('Character Level:Q'),
+        y=alt.Y('Cumulative DPS Gain %:Q', title='Total DPS Gain % (vs L10)'),
+        color=alt.Color('Job Tier:N', sort=_job_sort),
+    ) + alt.Chart(_lv_df).mark_line(strokeWidth=2).encode(
+        x='Character Level:Q',
+        y='Cumulative DPS Gain %:Q',
+        color=alt.Color('Job Tier:N', sort=_job_sort,
+                        legend=alt.Legend(title='Job Tier')),
+        tooltip=['Character Level:Q', 'Job Tier:N',
+                 alt.Tooltip('Cumulative DPS Gain %:Q', format='.1f')],
+    )
+
+    # Right: marginal per point — raw + LOESS trend
+    _lv_scatter = alt.Chart(_lv_df).mark_point(opacity=0.2, size=18).encode(
+        x=alt.X('Character Level:Q'),
+        y=alt.Y('Marginal DPS %/pt:Q', title='DPS % per skill point'),
+        color=alt.Color('Job Tier:N', sort=_job_sort, legend=None),
+    )
+    _lv_trend = alt.Chart(_lv_df).transform_loess(
+        'Character Level', 'Marginal DPS %/pt', groupby=['Job Tier'], bandwidth=0.35,
+    ).mark_line(strokeWidth=2).encode(
+        x='Character Level:Q',
+        y='Marginal DPS %/pt:Q',
+        color=alt.Color('Job Tier:N', sort=_job_sort,
+                        legend=alt.Legend(title='Job Tier')),
+        tooltip=['Character Level:Q', 'Job Tier:N',
+                 alt.Tooltip('Marginal DPS %/pt:Q', format='.4f')],
+    )
+
+    # Orange kink line on marginal chart if it falls in the 4th job range
+    _kink_layer = alt.layer(_lv_scatter, _lv_trend)
+    if 100 <= _kink_lv <= 140:
+        _kink_rule = alt.Chart(pd.DataFrame({'x': [int(_kink_lv)]})).mark_rule(
+            strokeDash=[4, 4], color='orange', strokeWidth=1.5,
+        ).encode(x='x:Q')
+        _kink_layer = alt.layer(_lv_scatter, _lv_trend, _kink_rule)
+
+    _lv_marg = _kink_layer.properties(
+        title="Marginal DPS per Skill Point (faint = raw, solid = trend)",
+        height=320,
+    ).interactive()
+
+    _lv_cum_chart = _lv_cum.properties(
+        title="Cumulative DPS Growth While Leveling",
+        height=320,
+    ).interactive()
+
+    col_lv1, col_lv2 = st.columns(2)
+    with col_lv1:
+        st.altair_chart(_lv_cum_chart, use_container_width=True)
+    with col_lv2:
+        st.altair_chart(_lv_marg, use_container_width=True)
+
+    if 100 <= _kink_lv <= 140:
+        st.caption(
+            f"Orange line (~L{int(_kink_lv)}): Maple Hero's INC50 growth slows 5× here. "
+            f"With +{all_skills} All Skills this kink falls at character level ~{int(_kink_lv)}. "
+            "Raise +All Skills in the sidebar to pull the kink earlier."
+        )
+    else:
+        st.caption(
+            f"With +{all_skills} All Skills, Maple Hero's INC50 kink is outside L10–140 "
+            f"(falls at ~L{int(_kink_lv):.0f}). "
+            "Lower +All Skills to bring it into view."
+        )
+else:
+    st.warning("No leveling curve data available")
 
 st.divider()
 

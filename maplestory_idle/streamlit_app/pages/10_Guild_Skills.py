@@ -1,4 +1,4 @@
-"""
+﻿"""
 Guild Skills Page
 Configure your guild skill bonuses.
 
@@ -12,7 +12,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from guild import (
+from game.guild import (
     GuildSkillType, GUILD_SKILL_DATA, SKILL_DISPLAY_NAMES,
     GuildConfig
 )

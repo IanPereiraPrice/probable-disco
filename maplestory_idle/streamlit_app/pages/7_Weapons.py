@@ -1,15 +1,15 @@
-"""
+﻿"""
 Weapons Page - Predefined weapons with level and awakening tracking.
-All 27 weapons (7 rarities × 4 tiers, minus Ancient T1) are shown.
+All 28 weapons (7 rarities × 4 tiers) are shown.
 """
 import streamlit as st
 from utils.data_manager import save_user_data
-from weapons import calculate_weapon_atk_str, BASE_ATK
-from weapon_mastery import (
+from game.weapons import calculate_weapon_atk_str, BASE_ATK
+from game.weapon_mastery import (
     ALL_WEAPONS, WEAPON_MASTERY_REWARDS, RARITIES,
     calculate_mastery_stages_from_weapons, calculate_mastery_stats
 )
-from weapon_optimizer import (
+from optimizers.weapon_optimizer import (
     calculate_optimal_enhancer_allocation, find_best_potential_weapon,
     get_max_level
 )
@@ -88,8 +88,7 @@ with tab1:
         color = RARITY_COLORS.get(rarity, "#ffffff")
         st.markdown(f"### <span style='color:{color}'>{rarity.capitalize()}</span>", unsafe_allow_html=True)
 
-        # Get tiers for this rarity (Ancient has no T1)
-        tiers = [1, 2, 3, 4] if rarity != 'ancient' else [2, 3, 4]
+        tiers = [1, 2, 3, 4]
 
         cols = st.columns(len(tiers))
         for i, tier in enumerate(tiers):
@@ -363,7 +362,7 @@ with tab4:
         if rewards:
             max_stage = max(r.stage for r in rewards)
             # Count how many weapons of this rarity
-            num_weapons = 3 if rarity == 'ancient' else 4
+            num_weapons = 4
             max_possible = num_weapons * 5  # 5 awakening per weapon
 
             color = RARITY_COLORS.get(rarity, "#ffffff")

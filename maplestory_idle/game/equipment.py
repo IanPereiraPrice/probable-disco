@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Equipment & Starforce System
 ===============================================
 Complete equipment stat calculations, starforce enhancement,

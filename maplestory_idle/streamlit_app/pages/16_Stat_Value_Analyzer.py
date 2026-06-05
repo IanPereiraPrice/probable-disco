@@ -1,4 +1,4 @@
-"""
+﻿"""
 Stat Value Analyzer
 Visualize how much each stat contributes to DPS and see diminishing returns.
 """
@@ -15,7 +15,7 @@ from utils.dps_calculator import (
     calculate_effective_defense_pen_with_sources,
     calculate_effective_attack_speed_with_sources,
 )
-from job_classes import JobClass, get_main_stat_name
+from game.job_classes import JobClass, get_main_stat_name
 
 st.set_page_config(page_title="Stat Value", page_icon="📈", layout="wide")
 
@@ -120,7 +120,7 @@ STAT_CONFIGS = [
     },
     {
         'name': 'All Skills',
-        'key': 'all_skills',
+        'key': 'all_skills_bonus',
         'default_amount': 20,
         'max_amount': 200,
         'step': 10,
@@ -129,7 +129,7 @@ STAT_CONFIGS = [
     },
     {
         'name': '1st Job Skills',
-        'key': 'skill_1st',
+        'key': 'skill_1st_bonus',
         'default_amount': 10,
         'max_amount': 200,
         'step': 10,
@@ -138,7 +138,7 @@ STAT_CONFIGS = [
     },
     {
         'name': '2nd Job Skills',
-        'key': 'skill_2nd',
+        'key': 'skill_2nd_bonus',
         'default_amount': 10,
         'max_amount': 200,
         'step': 10,
@@ -147,7 +147,7 @@ STAT_CONFIGS = [
     },
     {
         'name': '3rd Job Skills',
-        'key': 'skill_3rd',
+        'key': 'skill_3rd_bonus',
         'default_amount': 10,
         'max_amount': 200,
         'step': 10,
@@ -156,7 +156,7 @@ STAT_CONFIGS = [
     },
     {
         'name': '4th Job Skills',
-        'key': 'skill_4th',
+        'key': 'skill_4th_bonus',
         'default_amount': 10,
         'max_amount': 200,
         'step': 10,
@@ -203,7 +203,7 @@ STAT_CONFIGS = [
     },
     {
         'name': 'Skill CD',
-        'key': 'skill_cd',
+        'key': 'skill_cd_reduction',
         'default_amount': 2,
         'max_amount': 10,
         'step': 2,

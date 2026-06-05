@@ -1,4 +1,4 @@
-"""
+﻿"""
 DPS Distribution Chart Component
 
 Creates interactive Plotly charts showing the distribution of possible DPS gains

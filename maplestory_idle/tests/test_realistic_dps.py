@@ -1,4 +1,4 @@
-"""
+﻿"""
 Test: Realistic DPS - Boss vs Normal Damage Ratios
 ==================================================
 
@@ -18,9 +18,10 @@ This test verifies:
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from skills import CharacterState, DPSCalculator, create_character_at_level
+from game.skills import CharacterState, DPSCalculator, create_character_at_level
 
 
 def test_boss_vs_normal_damage_ratio():
@@ -63,8 +64,8 @@ def test_boss_vs_normal_damage_ratio():
     boss_char.main_stat_flat = 15000
     boss_char.main_stat_pct = 100
     boss_char.damage_pct = 50
-    boss_char.boss_damage_pct = 24
-    boss_char.normal_damage_pct = 0
+    boss_char.boss_damage = 24
+    boss_char.normal_damage = 0
     boss_char.crit_rate = 100
     boss_char.crit_damage = 200
 
@@ -84,8 +85,8 @@ def test_boss_vs_normal_damage_ratio():
     normal_char.main_stat_flat = 15000
     normal_char.main_stat_pct = 100
     normal_char.damage_pct = 50
-    normal_char.boss_damage_pct = 0
-    normal_char.normal_damage_pct = 24
+    normal_char.boss_damage = 0
+    normal_char.normal_damage = 24
     normal_char.crit_rate = 100
     normal_char.crit_damage = 200
 
@@ -156,7 +157,7 @@ def test_pure_boss_mode():
     boss_char.main_stat_flat = 15000
     boss_char.main_stat_pct = 100
     boss_char.damage_pct = 50
-    boss_char.boss_damage_pct = 24
+    boss_char.boss_damage = 24
     boss_char.crit_rate = 100
     boss_char.crit_damage = 200
 
@@ -217,7 +218,7 @@ def test_chapter_hunt_mode():
     normal_char.main_stat_flat = 15000
     normal_char.main_stat_pct = 100
     normal_char.damage_pct = 50
-    normal_char.normal_damage_pct = 24
+    normal_char.normal_damage = 24
     normal_char.crit_rate = 100
     normal_char.crit_damage = 200
 

@@ -1,8 +1,9 @@
-"""Test BA targets DPS calculation."""
+﻿"""Test BA targets DPS calculation."""
 import sys
-sys.path.insert(0, '.')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from skills import create_character_at_level, DPSCalculator
+from game.skills import create_character_at_level, DPSCalculator
 
 # Test with 12 enemies (standard for stages) to see BA target effect
 NUM_ENEMIES = 12

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Damage Calculator Page
 Calculate DPS based on all configured stats.
 
@@ -20,14 +20,13 @@ from core import (
     BASE_MAX_DMG,
     EQUIPMENT_SLOTS,
     ENEMY_DEFENSE_VALUES,
-    get_enemy_defense,
 )
 from utils.data_manager import save_user_data
 from utils.dps_calculator import (
     aggregate_stats as shared_aggregate_stats,
     calculate_dps as shared_calculate_dps,
 )
-from job_classes import JobClass
+from game.job_classes import JobClass
 
 st.set_page_config(page_title="Damage Calculator", page_icon="💥", layout="wide")
 
@@ -47,16 +46,8 @@ def calculate_dps(stats, combat_mode='stage', enemy_def=None, log_actions=False)
     """Wrapper that calls shared calculate_dps with correct enemy defense."""
     # Determine enemy defense based on combat mode if not explicitly provided
     if enemy_def is None:
-        if combat_mode == 'world_boss':
-            enemy_def = ENEMY_DEFENSE_VALUES.get('World Boss', 6.527)
-        else:
-            # Get chapter number from user data
-            chapter_str = getattr(data, 'chapter', 'Chapter 27')
-            try:
-                chapter_num = int(chapter_str.replace('Chapter ', '').strip())
-            except (ValueError, AttributeError):
-                chapter_num = 27
-            enemy_def = get_enemy_defense(chapter_num)
+        chapter_str = getattr(data, 'chapter', 'Chapter 27')
+        enemy_def = ENEMY_DEFENSE_VALUES.get(chapter_str, 0.752)
 
     # Check if user has enabled realistic DPS calculation
     use_realistic_dps = getattr(data, 'use_realistic_dps', False)
@@ -80,18 +71,9 @@ st.markdown("Calculate your DPS based on all configured stats.")
 # Aggregate stats
 stats = aggregate_stats()
 
-# Get enemy defense based on combat mode
+# Get enemy defense based on selected chapter
 combat_mode = data.combat_mode
-if combat_mode == 'world_boss':
-    enemy_def = ENEMY_DEFENSE_VALUES.get('World Boss', 6.527)
-else:
-    # Get chapter number from user data
-    chapter_str = getattr(data, 'chapter', 'Chapter 27')
-    try:
-        chapter_num = int(chapter_str.replace('Chapter ', '').strip())
-    except (ValueError, AttributeError):
-        chapter_num = 27
-    enemy_def = get_enemy_defense(chapter_num)
+enemy_def = ENEMY_DEFENSE_VALUES.get(getattr(data, 'chapter', 'Chapter 27'), 0.752)
 
 # Calculate DPS (request fight log if realistic DPS is enabled)
 use_realistic_dps = getattr(data, 'use_realistic_dps', False)
@@ -357,8 +339,8 @@ if fight_log:
         st.caption("These are the damage values and DPS for each skill in mob vs boss phase")
 
         # Re-create the DPS calculator to get skill values
-        from skills import DPSCalculator, create_character_at_level
-        from stage_settings import COMBAT_SCENARIO_PARAMS, get_combat_mode_from_string
+        from game.skills import DPSCalculator, create_character_at_level
+        from game.stage_settings import COMBAT_SCENARIO_PARAMS, get_combat_mode_from_string
 
         # Get scenario params
         combat_mode_enum = get_combat_mode_from_string(combat_mode)
@@ -366,10 +348,10 @@ if fight_log:
         num_enemies = scenario_params.num_enemies if scenario_params else 5
 
         # Create character and calculator
-        level = stats.get('character_level', 140)
-        all_skills = int(stats.get('all_skills', 0))
+        level = stats.get('level', 140)
+        all_skills = int(stats.get('all_skills_bonus', 0))
 
-        from skills import create_character_at_level
+        from game.skills import create_character_at_level
         char = create_character_at_level(level, all_skills)
 
         # Set character stats from aggregated stats
@@ -377,12 +359,12 @@ if fight_log:
         char.main_stat_flat = stats.get('dex_flat', 0)
         char.main_stat_pct = stats.get('dex_pct', 0)
         char.damage_pct = stats.get('damage_pct', 0)
-        char.boss_damage_pct = stats.get('boss_damage', 0)
-        char.normal_damage_pct = stats.get('normal_damage', 0)
+        char.boss_damage = stats.get('boss_damage', 0)
+        char.normal_damage = stats.get('normal_damage', 0)
         char.crit_rate = stats.get('crit_rate', 0)
         char.crit_damage = stats.get('crit_damage', 0)
         char.final_damage_pct = (result.get('fd_mult', 1.0) - 1) * 100
-        char.ba_targets = int(stats.get('ba_targets', 0))
+        char.ba_target_bonus = int(stats.get('ba_target_bonus', 0))
 
         calc = DPSCalculator(char, enemy_def=enemy_def)
 
@@ -408,7 +390,7 @@ if fight_log:
 
         # Show detailed breakdown for active skills
         st.markdown("**Skill Calculation Breakdown:**")
-        from skills import BOWMASTER_SKILLS
+        from game.skills import BOWMASTER_SKILLS
         for skill_name in ["arrow_stream", "hurricane", "covering_fire"]:
             if skill_name not in skill_values:
                 continue
@@ -428,7 +410,7 @@ if fight_log:
             # Formula: floor(base + per_level * level)
             maple_hero_note = ""
             if char.is_skill_unlocked("maple_hero"):
-                from skills import BOWMASTER_SKILLS
+                from game.skills import BOWMASTER_SKILLS
                 mh_skill = BOWMASTER_SKILLS["maple_hero"]
                 if mh_skill.skill_bonuses and skill_name in mh_skill.skill_bonuses:
                     mh_level = char.get_effective_skill_level("maple_hero")

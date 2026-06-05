@@ -1,4 +1,4 @@
-"""
+﻿"""
 StatAggregator - Unified stat calculation with source tracking.
 
 This class replaces the separate aggregate_stats() and get_stat_sources() functions
@@ -141,7 +141,7 @@ class StatAggregator:
             job_class: JobClass enum for determining main stat
             main_stat_name: Name of main stat ('dex', 'str', 'int', 'luk')
         """
-        from job_classes import JobClass, get_main_stat_name
+        from game.job_classes import JobClass, get_main_stat_name
 
         if job_class is None:
             job_class = JobClass.BOWMASTER
@@ -304,16 +304,16 @@ def populate_from_user_data(user_data, job_class=None) -> StatAggregator:
     Returns:
         A populated StatAggregator instance
     """
-    from job_classes import JobClass, get_main_stat_name, get_secondary_stat_name
-    from equipment import EQUIPMENT_SLOTS, SLOT_THIRD_MAIN_STAT, get_amplify_multiplier
-    from companions import COMPANIONS
-    from artifacts import (
+    from game.job_classes import JobClass, get_main_stat_name, get_secondary_stat_name
+    from game.equipment import EQUIPMENT_SLOTS, SLOT_THIRD_MAIN_STAT, get_amplify_multiplier
+    from game.companions import COMPANIONS
+    from game.artifacts import (
         ARTIFACTS, ArtifactTier, EffectType, POTENTIAL_SLOT_UNLOCKS,
         calculate_hex_average_multiplier
     )
-    from weapons import calculate_weapon_atk_str
-    from weapon_mastery import calculate_mastery_stages_from_weapons, calculate_mastery_stats
-    from stage_settings import get_combat_mode_from_string, CombatMode, COMBAT_SCENARIO_PARAMS
+    from game.weapons import calculate_weapon_atk_str
+    from game.weapon_mastery import calculate_mastery_stages_from_weapons, calculate_mastery_stats
+    from game.stage_settings import get_combat_mode_from_string, CombatMode, COMBAT_SCENARIO_PARAMS
 
     # Get job class
     if job_class is None:
@@ -493,7 +493,7 @@ def populate_from_user_data(user_data, job_class=None) -> StatAggregator:
     # =========================================================================
     # Maple Rank - use correct cumulative formula
     # =========================================================================
-    from maple_rank import get_cumulative_main_stat, MAIN_STAT_SPECIAL
+    from game.maple_rank import get_cumulative_main_stat, MAIN_STAT_SPECIAL
     mr = user_data.maple_rank
     stage = mr.get('current_stage', 1)
     ms_level = mr.get('main_stat_level', 0)
@@ -830,7 +830,7 @@ def populate_from_user_data(user_data, job_class=None) -> StatAggregator:
     if artifacts_resonance:
         resonance_level = int(artifacts_resonance.get('resonance_level', 0))
         if resonance_level > 0:
-            from artifacts import calculate_resonance_main_stat
+            from game.artifacts import calculate_resonance_main_stat
             resonance_main = calculate_resonance_main_stat(resonance_level)
             if resonance_main > 0:
                 agg.add(main_flat_key, resonance_main, "Artifact Resonance")
@@ -839,7 +839,7 @@ def populate_from_user_data(user_data, job_class=None) -> StatAggregator:
     # Skill Passive Stats
     # =========================================================================
     try:
-        from skills import DPSCalculator as SkillDPSCalculator, CharacterState, get_global_mastery_stats
+        from game.skills import DPSCalculator as SkillDPSCalculator, CharacterState, get_global_mastery_stats
         char_level = getattr(user_data, 'character_level', 100)
         all_skills_bonus = getattr(user_data, 'all_skills', 0)
 

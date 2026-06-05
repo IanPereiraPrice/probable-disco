@@ -1,10 +1,10 @@
-"""
+﻿"""
 Companions Page
 Configure companion inventory levels and equipped companions.
 """
 import streamlit as st
 from utils.data_manager import save_user_data
-from companions import (
+from game.companions import (
     COMPANIONS, JobAdvancement, TIER_DISPLAY, ON_EQUIP_DISPLAY,
     MAX_LEVELS, get_companions_by_advancement
 )

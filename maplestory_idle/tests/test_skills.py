@@ -1,4 +1,4 @@
-"""
+﻿"""
 Unit tests for MapleStory Idle Skill System
 
 Run with: python -m pytest test_skills.py -v
@@ -6,7 +6,7 @@ Or simply: python test_skills.py
 """
 
 import unittest
-from skills import (
+from game.skills import (
     # Enums
     SkillType, DamageType, Job,
     # Functions
@@ -147,7 +147,7 @@ class TestDPSCalculator(unittest.TestCase):
         self.char.attack = 1000
         self.char.main_stat_pct = 50
         self.char.damage_pct = 30
-        self.char.boss_damage_pct = 20
+        self.char.boss_damage = 20
         self.char.crit_rate = 70
         self.char.crit_damage = 200
         self.char.attack_speed_pct = 50
@@ -268,7 +268,7 @@ class TestAllSkillsValue(unittest.TestCase):
             attack=1000,
             main_stat_pct=50,
             damage_pct=30,
-            boss_damage_pct=20,
+            boss_damage=20,
             crit_rate=70,
             crit_damage=200,
             attack_speed_pct=50,

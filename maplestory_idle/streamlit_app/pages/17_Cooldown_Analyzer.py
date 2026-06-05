@@ -1,4 +1,4 @@
-"""
+﻿"""
 Cooldown Reduction Analyzer
 Visualize DPS gain from skill cooldown reduction and how it shifts damage proportions.
 """
@@ -12,20 +12,16 @@ from pathlib import Path
 # Add parent directory to path for core imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from skills import DPSCalculator, create_character_at_level, SKILLS_BY_JOB
-from core import (
-    get_enemy_defense,
-    calculate_final_damage_mult,
-    BASE_MIN_DMG, BASE_MAX_DMG,
-)
-from artifacts import calculate_book_of_ancient_bonus
+from game.skills import DPSCalculator, create_character_at_level, SKILLS_BY_JOB
+from core import BASE_MIN_DMG, BASE_MAX_DMG
+from constants import ENEMY_DEFENSE_VALUES
+from game.artifacts import calculate_book_of_ancient_bonus
 from utils.dps_calculator import (
     aggregate_stats as shared_aggregate_stats,
-    calculate_effective_defense_pen_with_sources,
-    calculate_effective_attack_speed_with_sources,
+    build_character_model_from_stats,
 )
-from job_classes import JobClass, JOB_DISPLAY_NAMES, get_main_stat_name, get_secondary_stat_name
-from stage_settings import COMBAT_SCENARIO_PARAMS, CombatMode
+from game.job_classes import JobClass, JOB_DISPLAY_NAMES
+from game.stage_settings import COMBAT_SCENARIO_PARAMS, CombatMode
 
 st.set_page_config(page_title="Cooldown Analyzer", page_icon="⏱️", layout="wide")
 
@@ -77,95 +73,39 @@ if math.isinf(fight_duration):
 
 # Get enemy defense
 combat_mode_str = selected_mode.value if hasattr(selected_mode, 'value') else 'stage'
-if combat_mode_str == 'world_boss':
-    enemy_def = 6.527
-else:
-    chapter_str = getattr(data, 'chapter', 'Chapter 27')
-    try:
-        chapter_num = int(chapter_str.replace('Chapter ', '').strip())
-    except (ValueError, AttributeError):
-        chapter_num = 27
-    enemy_def = get_enemy_defense(chapter_num)
+enemy_def = ENEMY_DEFENSE_VALUES.get(getattr(data, 'chapter', 'Chapter 27'), 0.752)
 
 
 def build_character_from_stats(stats, cd_reduction_override=0.0):
-    """Build a CharacterState from aggregated stats with a specific CD reduction value.
-
-    Mirrors the character setup in calculate_dps() from dps_calculator.py.
-    """
+    """Build a CharacterState from aggregated stats with a specific CD reduction value."""
     job_class = JobClass(data.job_class)
-    main_stat_type = get_main_stat_name(job_class)
-    main_flat_key = f'{main_stat_type}_flat'
-    main_pct_key = f'{main_stat_type}_pct'
+    char_model = build_character_model_from_stats(stats, job_class)
 
-    # Multiplicative stats
-    total_defense_pen, _ = calculate_effective_defense_pen_with_sources(
-        stats.get('def_pen_sources', [])
+    # Override: use provided CD reduction instead of what was aggregated from equipment
+    char_model = char_model.model_copy(update={'skill_cd_reduction': cd_reduction_override})
+
+    # Book of Ancient: convert portion of Crit Rate to Crit Damage
+    _, cd_from_book = calculate_book_of_ancient_bonus(
+        char_model.book_of_ancient_stars, char_model.crit_rate / 100
     )
-    total_attack_speed, _ = calculate_effective_attack_speed_with_sources(
-        stats.get('attack_speed_sources', [])
-    )
+    total_crit_damage = char_model.crit_damage + cd_from_book * 100
 
-    # Final damage: filter out the existing skill_cd contribution, since we're overriding it
-    fd_sources = stats.get('final_damage_sources', [])
-    fd_mult = calculate_final_damage_mult(fd_sources)
-    fd_correction = stats.get('final_damage_correction', 1.0)
-    if fd_correction != 1.0:
-        fd_mult *= fd_correction
+    # Create CharacterState and apply all stats from the typed model
+    char = create_character_at_level(char_model.level, char_model.all_skills_bonus, job_class=job_class)
+    for k, v in char_model.to_character_state_kwargs().items():
+        setattr(char, k, v)
 
-    # Stats
-    main_stat_flat = stats.get(main_flat_key, 0)
-    main_stat_pct = stats.get(main_pct_key, 0)
-    attack_flat = max(stats.get('attack_flat', 0), 10000)
-    attack_pct = stats.get('attack_pct', 0)
-    base_atk = attack_flat * (1 + attack_pct / 100)
-    base_atk += stats.get('total_attack_adjustment', 0)
+    # Override: attack uses floor(10000) + pct bonus + manual adjustment
+    attack_flat_eff = max(char_model.attack_flat, 10000)
+    char.attack = attack_flat_eff * (1 + char_model.attack_pct / 100) + char_model.total_attack_adjustment
 
-    # Crit
-    book_of_ancient_stars = stats.get('book_of_ancient_stars', 0)
-    crit_rate = stats['crit_rate']
-    base_crit_damage = stats['crit_damage']
-    _, cd_from_book = calculate_book_of_ancient_bonus(book_of_ancient_stars, crit_rate / 100)
-    total_crit_damage = base_crit_damage + (cd_from_book * 100)
-
-    # Build character
-    level = stats.get('character_level', 140)
-    all_skills = int(stats.get('all_skills', 0))
-    char = create_character_at_level(level, all_skills, job_class=job_class)
-
-    char.attack = base_atk
-    char.main_stat_flat = main_stat_flat
-    char.main_stat_pct = main_stat_pct
-    char.main_stat_conversion = stats.get('main_stat_conversion', 0)
-
-    secondary_stat_type = get_secondary_stat_name(job_class)
-    char.secondary_stat_flat = stats.get(f'{secondary_stat_type}_flat', 0)
-    char.secondary_stat_pct = stats.get(f'{secondary_stat_type}_pct', 0)
-
-    # Use legacy mode (pre-weighted damage) for simplicity
-    char.damage_pct = stats['damage_pct'] + stats['normal_damage'] * mob_fraction + stats['boss_damage'] * (1 - mob_fraction)
-    char.boss_damage_pct = stats['boss_damage']
-    char.normal_damage_pct = 0
-
-    char.crit_rate = crit_rate
+    # Override: crit_damage with Book of Ancient bonus applied
     char.crit_damage = total_crit_damage
-    char.min_dmg_mult = stats['min_dmg_mult']
-    char.max_dmg_mult = stats['max_dmg_mult']
-    char.skill_damage_pct = stats.get('skill_damage', 0)
-    char.basic_attack_dmg_pct = stats.get('basic_attack_damage', 0)
-    char.final_damage_pct = (fd_mult - 1) * 100
-    char.defense_pen = total_defense_pen * 100
-    char.attack_speed_pct = total_attack_speed
-    char.ba_target_bonus = int(stats.get('ba_targets', 0))
 
-    # Job-specific skill level bonuses
-    char.skill_1st_bonus = int(stats.get('skill_1st', 0))
-    char.skill_2nd_bonus = int(stats.get('skill_2nd', 0))
-    char.skill_3rd_bonus = int(stats.get('skill_3rd', 0))
-    char.skill_4th_bonus = int(stats.get('skill_4th', 0))
-
-    # Override CD reduction with sweep value
-    char.skill_cd_reduction = cd_reduction_override
+    # Override: pre-weight boss/normal into damage_pct (legacy mode)
+    char.damage_pct = char_model.damage_pct + char_model.normal_damage * mob_fraction + char_model.boss_damage * (1 - mob_fraction)
+    char.boss_damage = char_model.boss_damage
+    char.normal_damage = 0
 
     return char
 
@@ -231,14 +171,14 @@ def calculate_cd_sweep(
 
 # Build a hashable cache key from stats that affect DPS
 cache_key = (
-    stats.get('character_level', 140),
+    stats.get('level', 140),
     round(stats.get('attack_flat', 0), 1),
     round(stats.get('attack_pct', 0), 1),
     round(stats['crit_rate'], 1),
     round(stats['crit_damage'], 1),
     round(stats['damage_pct'], 1),
     round(stats['boss_damage'], 1),
-    round(stats.get('all_skills', 0), 1),
+    round(stats.get('all_skills_bonus', 0), 1),
     round(stats.get('skill_damage', 0), 1),
     round(enemy_def, 4),
 )
@@ -298,7 +238,7 @@ if summary_df.empty:
     st.stop()
 
 # Current CD reduction from equipment
-current_cd = stats.get('skill_cd', 0)
+current_cd = stats.get('skill_cd_reduction', 0)
 
 # =============================================================================
 # Section 1: Total DPS vs CD Reduction
@@ -382,10 +322,10 @@ st.subheader("Skill Tier Value (+10 Levels)")
 st.markdown("DPS gain from adding +10 bonus levels to each skill tier, holding all others constant.")
 
 skill_tier_df = calculate_skill_tier_values(
-    int(stats.get('skill_1st', 0)),
-    int(stats.get('skill_2nd', 0)),
-    int(stats.get('skill_3rd', 0)),
-    int(stats.get('skill_4th', 0)),
+    int(stats.get('skill_1st_bonus', 0)),
+    int(stats.get('skill_2nd_bonus', 0)),
+    int(stats.get('skill_3rd_bonus', 0)),
+    int(stats.get('skill_4th_bonus', 0)),
     current_cd,
 )
 

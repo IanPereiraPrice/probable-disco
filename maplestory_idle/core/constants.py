@@ -129,59 +129,85 @@ STAT_STACKING: Dict[str, Tuple[StatStackingType, str]] = {
 # =============================================================================
 # ENEMY DEFENSE VALUES
 # =============================================================================
-# Defense values scale linearly: def = chapter * 0.028 (approximate)
-# Verified data points: Chapter 1=0, Chapter 14=0.388, Chapter 27=0.752
+# Formula from data mine MonsterTierTable: enemy_def = max(0, 0.028*ch - 0.004)
+# Ch1-3: boss tier StatRatio = 1000 (neutral) → 0.0
+# Ch4+: boss_raw = 1800 + 50*ch, enemy_def = 0.00056*boss_raw - 1.012 = 0.028*ch - 0.004
 
-# Linear coefficient for chapter-based defense calculation
 ENEMY_DEF_PER_CHAPTER = 0.028
+ENEMY_DEF_OFFSET = 0.004
 
 
 def get_enemy_defense(chapter: int) -> float:
-    """Get enemy defense value for a chapter (linear approximation)."""
-    return chapter * ENEMY_DEF_PER_CHAPTER
+    """Get enemy defense for a chapter from data mine formula."""
+    if chapter <= 3:
+        return 0.0
+    return max(0.0, chapter * ENEMY_DEF_PER_CHAPTER - ENEMY_DEF_OFFSET)
 
 
-# Special case: World Boss doesn't follow linear formula
-WORLD_BOSS_DEFENSE = 6.527  # King Castle Golem - verified
+# World Boss Stage 10+ endgame defense (stages 10-20 are capped at this value)
+WORLD_BOSS_DEFENSE = 33.764
 
-# Pre-computed values for all chapters (using formula: chapter * 0.028)
-# Verified data points: Chapter 1=0, Chapter 14=0.388, Chapter 27=0.752
+# Pre-computed values (formula: max(0, 0.028*ch - 0.004), 0 for Ch1-3)
 ENEMY_DEFENSE_VALUES: Dict[str, float] = {
-    "Chapter 1": 0.028,
-    "Chapter 2": 0.056,
-    "Chapter 3": 0.084,
-    "Chapter 4": 0.112,
-    "Chapter 5": 0.140,
-    "Chapter 6": 0.168,
-    "Chapter 7": 0.196,
-    "Chapter 8": 0.224,
-    "Chapter 9": 0.252,
-    "Chapter 10": 0.280,
-    "Chapter 11": 0.308,
-    "Chapter 12": 0.336,
-    "Chapter 13": 0.364,
-    "Chapter 14": 0.392,
-    "Chapter 15": 0.420,
-    "Chapter 16": 0.448,
-    "Chapter 17": 0.476,
-    "Chapter 18": 0.504,
-    "Chapter 19": 0.532,
-    "Chapter 20": 0.560,
-    "Chapter 21": 0.588,
-    "Chapter 22": 0.616,
-    "Chapter 23": 0.644,
-    "Chapter 24": 0.672,
-    "Chapter 25": 0.700,
-    "Chapter 26": 0.728,
-    "Chapter 27": 0.756,
-    "Chapter 28": 0.784,
-    "Chapter 29": 0.812,
-    "Chapter 30": 0.840,
-    "Chapter 31": 0.868,
-    "Chapter 32": 0.896,
-    "Chapter 33": 0.924,
-    "Chapter 34": 0.952,
-    "World Boss": 6.527,
+    "Chapter 1": 0.0,
+    "Chapter 2": 0.0,
+    "Chapter 3": 0.0,
+    "Chapter 4": 0.108,
+    "Chapter 5": 0.136,
+    "Chapter 6": 0.164,
+    "Chapter 7": 0.192,
+    "Chapter 8": 0.220,
+    "Chapter 9": 0.248,
+    "Chapter 10": 0.276,
+    "Chapter 11": 0.304,
+    "Chapter 12": 0.332,
+    "Chapter 13": 0.360,
+    "Chapter 14": 0.388,
+    "Chapter 15": 0.416,
+    "Chapter 16": 0.444,
+    "Chapter 17": 0.472,
+    "Chapter 18": 0.500,
+    "Chapter 19": 0.528,
+    "Chapter 20": 0.556,
+    "Chapter 21": 0.584,
+    "Chapter 22": 0.612,
+    "Chapter 23": 0.640,
+    "Chapter 24": 0.668,
+    "Chapter 25": 0.696,
+    "Chapter 26": 0.724,
+    "Chapter 27": 0.752,
+    "Chapter 28": 0.780,
+    "Chapter 29": 0.808,
+    "Chapter 30": 0.836,
+    "Chapter 31": 0.864,
+    "Chapter 32": 0.892,
+    "Chapter 33": 0.920,
+    "Chapter 34": 0.948,
+    "Chapter 35": 0.976,
+    "Chapter 36": 1.004,
+    "Chapter 37": 1.032,
+    "Chapter 38": 1.060,
+    # World Boss — 20 stages
+    "World Boss Stage 1": 0.0,
+    "World Boss Stage 2": 0.668,
+    "World Boss Stage 3": 1.508,
+    "World Boss Stage 4": 3.356,
+    "World Boss Stage 5": 6.380,
+    "World Boss Stage 6": 11.980,
+    "World Boss Stage 7": 18.980,
+    "World Boss Stage 8": 29.508,
+    "World Boss Stage 9": 45.188,
+    "World Boss Stage 10": 33.764,
+    "World Boss Stage 11": 33.764,
+    "World Boss Stage 12": 33.764,
+    "World Boss Stage 13": 33.764,
+    "World Boss Stage 14": 33.764,
+    "World Boss Stage 15": 33.764,
+    "World Boss Stage 16": 33.764,
+    "World Boss Stage 17": 33.764,
+    "World Boss Stage 18": 33.764,
+    "World Boss Stage 19": 33.764,
+    "World Boss Stage 20": 33.764,
 }
 
 

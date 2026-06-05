@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapleStory Idle - Cube System Constants & Calculations
 =======================================================
 Complete cube mechanics, probabilities, pity system, and cost calculations.
@@ -13,7 +13,7 @@ from enum import Enum
 import random
 
 if TYPE_CHECKING:
-    from job_classes import JobClass
+    from game.job_classes import JobClass
     from stats import StatBlock
 
 
@@ -55,7 +55,7 @@ class CubeType(Enum):
 
 # Import combat settings from stage_settings (single source of truth)
 # Re-export for backward compatibility
-from stage_settings import (
+from game.stage_settings import (
     CombatMode,
     CombatScenarioConfig,
     COMBAT_SCENARIO_PARAMS,
@@ -97,6 +97,7 @@ class StatType(Enum):
     ALL_SKILLS = "all_skills"
     FINAL_DAMAGE = "final_damage"
     BA_TARGETS = "ba_targets"  # Basic Attack Targets +X (for tops)
+    SKILL_DAMAGE = "skill_damage"  # Skill Damage % (for earrings)
 
 
 # =============================================================================
@@ -373,6 +374,15 @@ SPECIAL_POTENTIALS: Dict[str, SpecialPotential] = {
             PotentialTier.MYSTIC: 3,
         }
     ),
+    "earrings": SpecialPotential(
+        StatType.SKILL_DAMAGE,
+        {
+            PotentialTier.EPIC: 8.0,
+            PotentialTier.UNIQUE: 14.0,
+            PotentialTier.LEGENDARY: 21.0,
+            PotentialTier.MYSTIC: 30.0,
+        }
+    ),
 }
 
 SPECIAL_POTENTIAL_RATE = 0.01  # 1% base chance
@@ -429,6 +439,7 @@ STAT_TIER_RANKINGS = {
     StatType.DEF_PEN: "S",
     StatType.FINAL_DAMAGE: "S",
     StatType.ALL_SKILLS: "S",
+    StatType.SKILL_DAMAGE: "S",
     # A Tier - Good stats
     StatType.MAX_DMG_MULT: "A",
     StatType.MIN_DMG_MULT: "A",

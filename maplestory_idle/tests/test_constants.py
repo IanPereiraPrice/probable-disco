@@ -1,4 +1,4 @@
-"""
+﻿"""
 Unit tests for constants.py - Shared display functions, rarity colors, stat names.
 """
 import pytest

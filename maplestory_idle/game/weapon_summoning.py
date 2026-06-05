@@ -1,4 +1,4 @@
-"""
+﻿"""
 Weapon Summoning System
 =======================
 Models the weapon summoning gacha system with level-based drop rates.
@@ -893,7 +893,7 @@ def analyze_summoning_value(
     Returns:
         List of weapon analysis dicts sorted by value
     """
-    from weapons import get_base_atk, get_inventory_ratio
+    from game.weapons import get_base_atk, get_inventory_ratio
 
     results = []
     all_rates = get_all_weapon_rates(level)
@@ -1177,8 +1177,8 @@ def calculate_weapon_drop_value(
     - reason: why this drop has value
     - cascade_value: value from any promotions triggered
     """
-    from weapon_optimizer import calculate_atk_at_level, get_max_level
-    from weapons import get_inventory_ratio, get_base_atk
+    from optimizers.weapon_optimizer import calculate_atk_at_level, get_max_level
+    from game.weapons import get_inventory_ratio, get_base_atk
 
     # Use memoization to avoid recalculating the same weapon values
     if _cache is None:
@@ -1563,7 +1563,7 @@ def _calculate_mastery_dps_value(
     Returns an ATK% equivalent value based on mastery rewards.
     This is an approximation - flat stats are converted to approximate ATK% value.
     """
-    from weapon_mastery import WEAPON_MASTERY_REWARDS
+    from game.weapon_mastery import WEAPON_MASTERY_REWARDS
 
     rarity_lower = rarity.lower()
     if rarity_lower not in WEAPON_MASTERY_REWARDS:
@@ -1616,8 +1616,8 @@ def calculate_expected_value_per_summon(
     Returns:
         Dict with expected_value_per_summon, breakdown, etc.
     """
-    from weapon_optimizer import calculate_atk_at_level
-    from weapons import get_inventory_ratio
+    from optimizers.weapon_optimizer import calculate_atk_at_level
+    from game.weapons import get_inventory_ratio
 
     # =========================================================================
     # Phase 1: Calculate immediate weapon drop value at each level
