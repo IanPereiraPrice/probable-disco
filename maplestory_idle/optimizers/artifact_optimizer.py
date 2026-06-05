@@ -1,4 +1,4 @@
-"""
+﻿"""
 Artifact Optimizer - DPS efficiency calculations for artifact upgrades.
 
 Integrates with Upgrade Optimizer using same DPS% per 1000 diamonds metric
@@ -17,13 +17,13 @@ from typing import Dict, List, Optional, Any, Tuple, Callable
 from dataclasses import dataclass
 from copy import deepcopy
 
-from stat_names import (
+from libs.stat_names import (
     DAMAGE_PCT, BOSS_DAMAGE, NORMAL_DAMAGE, CRIT_RATE, DEF_PEN,
     MIN_DMG_MULT, MAX_DMG_MULT, DEFENSE, ACCURACY,
     get_main_stat_flat_key, get_main_stat_pct_key,
 )
 
-from artifacts import (
+from game.artifacts import (
     ARTIFACTS,
     ARTIFACT_DROP_RATES,
     ARTIFACT_TIER_DROP_RATES,
@@ -49,6 +49,13 @@ from artifacts import (
     calculate_resonance_max_level,
     calculate_hex_multiplier,
     calculate_book_of_ancient_bonus,
+    calculate_bottle_of_emotions_fd,
+)
+
+from streamlit_app.utils.dps_calculator import (
+    compute_phase_dps,
+    stage_weighted_gain_pct,
+    compute_stage_weighted_gain_pct,
 )
 
 
@@ -302,10 +309,6 @@ def calculate_inventory_effect_dps(
     inv_value = definition.get_inventory_value(stars)
     inv_stat = definition.inventory_stat
 
-    # Get baseline DPS
-    baseline_result = calculate_dps_func(current_stats, 'stage')
-    baseline_dps = baseline_result.get('total', 1)
-
     # Calculate DPS with this inventory effect added
     test_stats = deepcopy(current_stats)
     if inv_stat.endswith('_flat'):
@@ -347,12 +350,7 @@ def calculate_inventory_effect_dps(
 
         test_stats[mapped_stat] = test_stats.get(mapped_stat, 0) + converted_value
 
-    new_result = calculate_dps_func(test_stats, 'stage')
-    new_dps = new_result.get('total', baseline_dps)
-
-    if baseline_dps > 0:
-        return ((new_dps / baseline_dps) - 1) * 100
-    return 0.0
+    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
 
 
 def calculate_active_effect_dps(
@@ -387,10 +385,6 @@ def calculate_active_effect_dps(
     if not definition.applies_to_scenario(scenario):
         return 0.0
 
-    # Get baseline DPS
-    baseline_result = calculate_dps_func(current_stats, 'stage')
-    baseline_dps = baseline_result.get('total', 1)
-
     # Calculate uptime based on scenario duration
     fight_duration = get_scenario_duration(scenario)
     uptime = definition.get_effective_uptime(fight_duration)
@@ -412,11 +406,7 @@ def calculate_active_effect_dps(
                 test_stats['crit_rate'] = test_stats.get('crit_rate', 0) + cr_bonus
                 break
         # Calculate DPS with Book equipped
-        new_result = calculate_dps_func(test_stats, 'stage')
-        new_dps = new_result.get('total', baseline_dps)
-        if baseline_dps > 0:
-            return ((new_dps / baseline_dps) - 1) * 100
-        return 0.0
+        return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
 
     # All artifacts now use active_effects format
     if not definition.active_effects:
@@ -438,7 +428,7 @@ def calculate_active_effect_dps(
         elif effect.effect_type == EffectType.MULTIPLICATIVE:
             # Hex Necklace: Set hex_multiplier directly (DPS calc applies it separately)
             if artifact_key == 'hexagon_necklace':
-                from artifacts import calculate_hex_average_multiplier
+                from game.artifacts import calculate_hex_average_multiplier
                 fight_duration = get_scenario_duration(scenario)
                 hex_mult = calculate_hex_average_multiplier(stars, fight_duration)
                 test_stats['hex_multiplier'] = hex_mult
@@ -472,6 +462,13 @@ def calculate_active_effect_dps(
                     # Sum all sources (each value is already in percentage form)
                     total_atk_spd = sum(val for _, val in atk_spd_sources)
                     source_value = total_atk_spd / 100  # Convert to decimal
+            elif source_stat == 'attack_speed_fd':
+                # Bottle of Emotions: non-linear FD from attack speed over 60%
+                atk_spd_sources = test_stats.get('attack_speed_sources', [])
+                total_atk_spd_pct = sum(val for _, val in atk_spd_sources)
+                fd_value = calculate_bottle_of_emotions_fd(stars, total_atk_spd_pct) * uptime
+                _apply_stat_to_dict(test_stats, effect.stat, fd_value)
+                continue
             else:
                 # For other stats, use flat_values (what artifact added) + existing stats
                 source_value = flat_values.get(source_stat, 0) + test_stats.get(source_stat, 0)
@@ -479,13 +476,7 @@ def calculate_active_effect_dps(
             derived_value = conversion_rate * source_value * uptime
             _apply_stat_to_dict(test_stats, effect.stat, derived_value)
 
-    # Calculate new DPS
-    new_result = calculate_dps_func(test_stats, 'stage')
-    new_dps = new_result.get('total', baseline_dps)
-
-    if baseline_dps > 0:
-        return ((new_dps / baseline_dps) - 1) * 100
-    return 0.0
+    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
 
 
 def _apply_stat_to_dict(stats: Dict[str, Any], stat: str, value: float) -> None:
@@ -498,7 +489,7 @@ def _apply_stat_to_dict(stats: Dict[str, Any], stat: str, value: float) -> None:
 
     Uses standard stat names from stat_names.py.
     """
-    from stat_names import (
+    from libs.stat_names import (
         DAMAGE_PCT, ATTACK_PCT, CRIT_RATE, CRIT_DAMAGE, BOSS_DAMAGE,
         NORMAL_DAMAGE, MAX_DMG_MULT, MIN_DMG_MULT, DEF_PEN, FINAL_DAMAGE,
         ATTACK_SPEED, BUFF_DURATION, SKILL_CD,
@@ -589,10 +580,6 @@ def calculate_resonance_stat_value(
     new_hp = calculate_resonance_hp(current_level + levels)
     hp_gain = new_hp - old_hp
 
-    # Get baseline DPS
-    baseline_result = calculate_dps_func(current_stats, 'stage')
-    baseline_dps = baseline_result.get('total', 1)
-
     # Add resonance stats
     test_stats = deepcopy(current_stats)
     # aggregate_stats() uses 'flat_dex' for main stat (DEX for Bowmaster)
@@ -600,12 +587,7 @@ def calculate_resonance_stat_value(
     # HP doesn't directly affect DPS, but keep for completeness
     test_stats['max_hp'] = test_stats.get('max_hp', 0) + hp_gain
 
-    new_result = calculate_dps_func(test_stats, 'stage')
-    new_dps = new_result.get('total', baseline_dps)
-
-    if baseline_dps > 0:
-        return ((new_dps / baseline_dps) - 1) * 100
-    return 0.0
+    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
 
 
 def calculate_potential_slot_expected_value(
@@ -1122,7 +1104,8 @@ class ArtifactPotentialDistribution:
     def _calculate_stat_weights(
         self,
         dps_calc_func: Callable,
-        baseline_dps: float,
+        mob_b: float,
+        boss_b: float,
         current_stats: Dict[str, Any],
     ) -> Dict[Tuple[str, float], float]:
         """
@@ -1146,7 +1129,7 @@ class ArtifactPotentialDistribution:
                 if (stat_key, low_val) not in tested:
                     tested.add((stat_key, low_val))
                     gain = self._test_stat_dps_gain(
-                        stat_key, low_val, dps_calc_func, baseline_dps, current_stats
+                        stat_key, low_val, dps_calc_func, mob_b, boss_b, current_stats
                     )
                     weights[(stat_key, low_val)] = gain
 
@@ -1154,7 +1137,7 @@ class ArtifactPotentialDistribution:
                 if high_val != low_val and (stat_key, high_val) not in tested:
                     tested.add((stat_key, high_val))
                     gain = self._test_stat_dps_gain(
-                        stat_key, high_val, dps_calc_func, baseline_dps, current_stats
+                        stat_key, high_val, dps_calc_func, mob_b, boss_b, current_stats
                     )
                     weights[(stat_key, high_val)] = gain
 
@@ -1165,7 +1148,8 @@ class ArtifactPotentialDistribution:
         stat_key: str,
         value: float,
         dps_calc_func: Callable,
-        baseline_dps: float,
+        mob_b: float,
+        boss_b: float,
         current_stats: Dict[str, Any],
     ) -> float:
         """
@@ -1175,11 +1159,12 @@ class ArtifactPotentialDistribution:
             stat_key: Artifact potential stat name (e.g., 'damage', 'crit_rate')
             value: Stat value (e.g., 14.0 for 14% damage)
             dps_calc_func: Function to calculate DPS from stats dict
-            baseline_dps: DPS without this potential stat
+            mob_b: Mob-phase baseline DPS (from compute_phase_dps)
+            boss_b: Boss-phase baseline DPS (from compute_phase_dps)
             current_stats: Current character stats
 
         Returns:
-            DPS% gain from this stat
+            DPS% gain from this stat (stage-weighted: mob*0.6 + boss*0.4)
         """
         test_stats = deepcopy(current_stats)
 
@@ -1214,26 +1199,19 @@ class ArtifactPotentialDistribution:
             # main_stat_pct adds to the main stat percentage bonus
             test_stats[main_pct_key] = test_stats.get(main_pct_key, 0) + value
         elif stat_key == 'def_pen':
-            # Defense penetration is stored as decimal (0.07 = 7%)
-            mapped_stat = stat_mapping.get(stat_key, stat_key)
-            test_stats[mapped_stat] = test_stats.get(mapped_stat, 0) + (value / 100)
+            test_stats['def_pen_sources'] = list(test_stats.get('def_pen_sources', []))
+            test_stats['def_pen_sources'].append(('Artifact Potential', value / 100, 100))
         else:
             # Standard percentage stats add directly
             mapped_stat = stat_mapping.get(stat_key, stat_key)
             test_stats[mapped_stat] = test_stats.get(mapped_stat, 0) + value
 
-        # Calculate new DPS
-        new_result = dps_calc_func(test_stats, 'stage')
-        new_dps = new_result.get('total', baseline_dps)
-
-        if baseline_dps > 0:
-            return ((new_dps / baseline_dps) - 1) * 100
-        return 0.0
+        mob_t, boss_t = compute_phase_dps(test_stats, dps_calc_func)
+        return stage_weighted_gain_pct(mob_b, boss_b, mob_t, boss_t)
 
     def compute_distribution(
         self,
         dps_calc_func: Callable,
-        baseline_dps: float,
         current_stats: Dict[str, Any],
     ) -> None:
         """
@@ -1244,8 +1222,10 @@ class ArtifactPotentialDistribution:
         from itertools import product
 
         # Step 1: Pre-calculate DPS weights for all (stat, value) combinations
+        # Compute phase baselines once here; shared across all _test_stat_dps_gain calls
+        mob_b, boss_b = compute_phase_dps(current_stats, dps_calc_func)
         self._stat_weights = self._calculate_stat_weights(
-            dps_calc_func, baseline_dps, current_stats
+            dps_calc_func, mob_b, boss_b, current_stats
         )
 
         # Step 2: Build list of single-slot outcomes with probabilities
@@ -1619,7 +1599,7 @@ def analyze_artifact_potential_scenarios(
     for num_slots in range(1, max_slots + 1):
         # Create and compute distribution for this slot count
         dist = ArtifactPotentialDistribution(num_slots=num_slots)
-        dist.compute_distribution(calculate_dps_func, baseline_dps, current_stats)
+        dist.compute_distribution(calculate_dps_func, current_stats)
         distributions[num_slots] = dist
 
         # Calculate current DPS for unlocked slots only
@@ -1771,14 +1751,10 @@ def calculate_artifact_reroll_efficiency(
     # Get reroll cost in diamonds
     cost_per_reroll = get_reconfigure_diamond_cost(tier)
 
-    # Get baseline DPS (without artifact potentials)
-    # We need to calculate baseline by removing current potentials from stats
-    baseline_result = calculate_dps_func(current_stats, 'stage')
-    baseline_dps = baseline_result.get('total', 1)
-
     # Create distribution and compute with real DPS calc
+    # Phase baselines (mob/boss) are computed internally by compute_distribution
     dist = ArtifactPotentialDistribution(num_slots)
-    dist.compute_distribution(calculate_dps_func, baseline_dps, current_stats)
+    dist.compute_distribution(calculate_dps_func, current_stats)
 
     # Calculate current DPS contribution from existing potentials
     # We test each potential line using the same method as the distribution
@@ -1899,13 +1875,6 @@ def _calculate_potential_score_with_dps(
     if not potentials:
         return 0.0
 
-    # Get baseline DPS
-    baseline_result = calculate_dps_func(current_stats, 'stage')
-    baseline_dps = baseline_result.get('total', 0)
-
-    if baseline_dps <= 0:
-        return 0.0
-
     # Build test stats with potentials applied
     test_stats = deepcopy(current_stats)
 
@@ -1937,19 +1906,14 @@ def _calculate_potential_score_with_dps(
             main_pct_key = get_main_stat_pct_key(main_stat_type)
             test_stats[main_pct_key] = test_stats.get(main_pct_key, 0) + value
         elif stat_key == 'def_pen':
-            # Defense penetration is stored as decimal (0.07 = 7%)
-            mapped_stat = stat_mapping.get(stat_key, stat_key)
-            test_stats[mapped_stat] = test_stats.get(mapped_stat, 0) + (value / 100)
+            test_stats['def_pen_sources'] = list(test_stats.get('def_pen_sources', []))
+            test_stats['def_pen_sources'].append(('Artifact Potential', value / 100, 100))
         else:
             # Standard percentage stats add directly
             mapped_stat = stat_mapping.get(stat_key, stat_key)
             test_stats[mapped_stat] = test_stats.get(mapped_stat, 0) + value
 
-    # Calculate new DPS with potentials
-    new_result = calculate_dps_func(test_stats, 'stage')
-    new_dps = new_result.get('total', baseline_dps)
-
-    return ((new_dps / baseline_dps) - 1) * 100
+    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
 
 
 @dataclass

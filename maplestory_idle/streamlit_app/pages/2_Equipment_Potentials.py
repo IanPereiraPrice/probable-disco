@@ -1,4 +1,4 @@
-"""
+﻿"""
 Equipment Potentials Page - Compact Layout with Cube Priority Recommendations
 Matches original Tkinter app design with all potentials visible + DPS-based recommendations.
 """
@@ -10,10 +10,13 @@ from datetime import datetime
 # Add parent directory to path for core imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from core import ENEMY_DEFENSE_VALUES, get_enemy_defense
+from core import ENEMY_DEFENSE_VALUES
 from utils.data_manager import save_user_data, EQUIPMENT_SLOTS
 from utils.cube_analyzer import analyze_all_cube_priorities, format_stat_display, CubeRecommendation, get_distribution_data_for_slot
-from utils.dps_calculator import aggregate_stats, calculate_dps, calculate_effective_attack_speed_with_sources
+from utils.dps_calculator import (
+    aggregate_stats, calculate_dps, calculate_effective_attack_speed_with_sources,
+    compute_phase_dps, STAGE_MOB_FRACTION, STAGE_BOSS_FRACTION,
+)
 from utils.distribution_chart import (
     create_dps_distribution_chart,
     create_expanded_distribution_chart,
@@ -24,7 +27,7 @@ from utils.distribution_chart import (
 from typing import Dict, Any, List, Optional
 
 # Import cube system classes and helpers
-from cubes import (
+from game.cubes import (
     PotentialTier,
     StatType,
     POTENTIAL_STATS,
@@ -43,7 +46,7 @@ from cubes import (
     get_special_stat_for_slot,
     format_stat_value,
 )
-from job_classes import JobClass
+from game.job_classes import JobClass
 
 st.set_page_config(page_title="Equipment Potentials", page_icon="🛡️", layout="wide")
 
@@ -310,26 +313,22 @@ def aggregate_stats_for_dps() -> Dict[str, Any]:
 
 def calculate_dps_from_stats(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: float = None) -> Dict[str, Any]:
     """Wrapper that calls shared calculate_dps with correct enemy defense."""
-    # Determine enemy defense based on combat mode if not explicitly provided
     if enemy_def is None:
-        if combat_mode == 'world_boss':
-            enemy_def = ENEMY_DEFENSE_VALUES.get('World Boss', 6.527)
-        else:
-            # Get chapter number from user data
-            chapter_str = getattr(data, 'chapter', 'Chapter 27')
-            try:
-                chapter_num = int(chapter_str.replace('Chapter ', '').strip())
-            except (ValueError, AttributeError):
-                chapter_num = 27
-            enemy_def = get_enemy_defense(chapter_num)
+        enemy_def = ENEMY_DEFENSE_VALUES.get(getattr(data, 'chapter', 'Chapter 27'), 0.752)
 
-    # Check if user has enabled realistic DPS calculation
     use_realistic_dps = getattr(data, 'use_realistic_dps', False)
     boss_importance = getattr(data, 'boss_importance', 70) / 100.0
     boss_damage_multiplier = getattr(data, 'boss_damage_multiplier', 1.0)
-
-    from job_classes import JobClass
     job_class = JobClass(data.job_class)
+
+    if combat_mode == 'stage':
+        def _dps(s, mode):
+            return calculate_dps(s, mode, enemy_def, job_class=job_class,
+                                  use_realistic_dps=use_realistic_dps)
+        mob, boss = compute_phase_dps(stats, _dps)
+        weighted = mob * STAGE_MOB_FRACTION + boss * STAGE_BOSS_FRACTION
+        return {'total': weighted, 'mob_phase_dps': mob, 'boss_phase_dps': boss}
+
     return calculate_dps(
         stats, combat_mode, enemy_def,
         job_class=job_class,
