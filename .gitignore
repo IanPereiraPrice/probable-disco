@@ -5,6 +5,22 @@ __pycache__/
 # Images
 *.png
 
-# Data files
+# Data files (local user saves, never default fixtures)
 *.csv
 !maplestory_idle/streamlit_app/data/default_character.csv
+
+# Local save data directory (per-developer state)
+maplestory_idle/data/
+
+# Large game-data references kept locally only
+# data_mine: ~57MB raw datamine JSON, used as reference for fixing
+#            tables like HERO_POWER_STAT_RANGES. Documented in
+#            docs/DATAMINE_REFERENCE.md.
+# assets:    ~50MB of game screenshots, OCR test images, weapon photos.
+maplestory_idle/data_mine/
+maplestory_idle/assets/
+
+# React app (only track source; not deps or build output)
+react_app/node_modules/
+react_app/dist/
+react_app/.vite/
