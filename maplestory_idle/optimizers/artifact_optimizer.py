@@ -426,12 +426,17 @@ def calculate_active_effect_dps(
             _apply_stat_to_dict(test_stats, effect.stat, value)
 
         elif effect.effect_type == EffectType.MULTIPLICATIVE:
-            # Hex Necklace: Set hex_multiplier directly (DPS calc applies it separately)
+            # Hex Necklace: set BOTH `hex_multiplier` (legacy DPS path reads
+            # this directly as a post-multiplier) AND `hex_necklace_stars`
+            # (realistic DPS path reads stars and steps the multiplier live).
+            # Setting only one leaves the other path computing the baseline,
+            # so the active-effect evaluator under-counts hex in realistic mode.
             if artifact_key == 'hexagon_necklace':
                 from game.artifacts import calculate_hex_average_multiplier
                 fight_duration = get_scenario_duration(scenario)
                 hex_mult = calculate_hex_average_multiplier(stars, fight_duration)
                 test_stats['hex_multiplier'] = hex_mult
+                test_stats['hex_necklace_stars'] = stars
             else:
                 # Other multiplicative effects (if any)
                 fight_duration = get_scenario_duration(scenario)
