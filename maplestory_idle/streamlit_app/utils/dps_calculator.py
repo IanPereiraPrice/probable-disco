@@ -1071,6 +1071,18 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                         stats['companion_active_fd_sources'].append(raw_value)
                     continue
 
+                # Book of Ancient's DERIVED crit_damage (CR→CD conversion)
+                # is owned by calculate_dps at the final crit_mult stage,
+                # where the FULL aggregated crit_rate is available. Computing
+                # it here in the artifact loop runs against an incomplete
+                # crit_rate (baseline masteries aren't yet added at this
+                # point in aggregate_stats), under-counting the CD bonus.
+                # Skip; calculate_dps handles it.
+                if (artifact_key == 'book_of_ancient'
+                        and effect.effect_type == EffectType.DERIVED
+                        and effect.stat == 'crit_damage'):
+                    continue
+
                 effect_value = effect.get_value(stars) * uptime
 
                 if effect.effect_type == EffectType.DERIVED and effect.derived_from:

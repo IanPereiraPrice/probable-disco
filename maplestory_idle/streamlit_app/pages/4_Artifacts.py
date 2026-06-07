@@ -280,9 +280,13 @@ def calculate_active_effects(scenario: str = "normal", fight_duration: float = 6
             continue
 
         if key == 'book_of_ancient':
-            # Estimate current crit rate (simplified)
+            # Display assumes 50% baseline CR; BoA adds its own flat CR on
+            # top, and the CR→CD conversion uses the FULL crit rate (base
+            # + BoA's flat). `calculate_book_of_ancient_bonus` now expects
+            # the caller to pass the full CR; we add cr_bonus here.
             base_cr = 0.50  # 50% base assumption
-            cr_bonus, cd_bonus = calculate_book_of_ancient_bonus(stars, base_cr)
+            cr_bonus, _ = calculate_book_of_ancient_bonus(stars, 0.0)  # get cr_bonus for stars
+            _, cd_bonus = calculate_book_of_ancient_bonus(stars, base_cr + cr_bonus)
             effects['crit_rate'] += cr_bonus
             effects['crit_damage_book'] = cd_bonus
             continue

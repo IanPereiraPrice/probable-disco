@@ -1447,14 +1447,20 @@ def calculate_book_of_ancient_bonus(stars: int, crit_rate: float) -> Tuple[float
     Calculate Book of Ancient bonuses.
 
     Args:
-        stars: Awakening level
-        crit_rate: Current crit rate as decimal (1.119 for 111.9%)
+        stars: Awakening level (0-5).
+        crit_rate: Current total crit rate as decimal (e.g. 1.119 for 111.9%).
+                   IMPORTANT: this should be the player's FULL crit rate
+                   INCLUDING BoA's own flat +CR contribution. The CD bonus
+                   is computed as `crit_rate × conversion_rate` directly.
 
     Returns:
-        (crit_rate_bonus, crit_damage_bonus)
+        (crit_rate_bonus, crit_damage_bonus) — both as decimals.
+        crit_rate_bonus is BoA's own flat CR (for callers that want to
+        report it separately); crit_damage_bonus is the CD added via the
+        CR → CD conversion.
 
     Reads from `active_effects` (the modern definition format). The legacy
-    `active_base` / `conversion_rate_base` fields are not populated on the
+    `active_base` / `conversion_rate_base` fields aren't populated on the
     current BoA entry, so this used to silently return (0, 0).
     """
     book_def = ARTIFACTS["book_of_ancient"]
@@ -1466,9 +1472,11 @@ def calculate_book_of_ancient_bonus(stars: int, crit_rate: float) -> Tuple[float
         elif effect.stat == 'crit_damage' and effect.effect_type == EffectType.DERIVED:
             conversion_rate = effect.base + (stars * effect.per_star)
 
-    # CD bonus = conversion_rate * (current CR + CR bonus from artifact)
-    total_cr = crit_rate + cr_bonus
-    cd_bonus = total_cr * conversion_rate
+    # CD bonus = conversion_rate × (current CR). Caller is expected to pass
+    # the full CR including BoA's own flat bonus. Previously this function
+    # added cr_bonus internally, which double-counted when callers had
+    # already aggregated BoA's +CR into their crit_rate input.
+    cd_bonus = crit_rate * conversion_rate
 
     return (cr_bonus, cd_bonus)
 
