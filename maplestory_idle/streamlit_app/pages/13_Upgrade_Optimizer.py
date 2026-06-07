@@ -58,6 +58,14 @@ from optimizers.starforce_optimizer import (
 from game.equipment import STARFORCE_TABLE, get_amplify_multiplier
 from optimizers.weapon_optimizer import get_weapon_upgrade_for_optimizer, calculate_total_weapon_atk_percent
 from game.weapon_summoning import get_summon_recommendations_for_optimizer
+from game.companion_summoning import get_companion_ticket_recommendation_for_optimizer
+from game.companions import COMPANIONS
+from game.job_classes import JobClass
+from game.hero_power import (
+    analyze_budget as analyze_hero_power_budget,
+    HeroPowerConfig, HeroPowerLevelConfig, HeroPowerLine,
+    HeroPowerStatType, HeroPowerTier,
+)
 from optimizers.artifact_optimizer import get_artifact_recommendations_for_optimizer
 from game.artifacts import calculate_resonance_max_level
 from utils.dps_calculator import (
@@ -540,6 +548,228 @@ def calc_dps_for_optimizer(stats: Dict[str, float], mode: str = None) -> float:
         return mob * STAGE_MOB_FRACTION + boss * STAGE_BOSS_FRACTION
     return calculate_dps(stats, m)['total']
 
+
+def _build_fast_evaluator():
+    """
+    Construct a FastDPSEvaluator anchored on the current build, ONLY when
+    the realistic DPS path is active — otherwise the legacy path is already
+    fast and the wrapper would add overhead with no benefit.
+
+    Returns None when realistic DPS is disabled OR when the combat mode is
+    'stage' (the phase-weighted helper path doesn't fit the evaluator's
+    "one calc_dps call per evaluation" contract; covering it cleanly needs
+    a follow-up).
+    """
+    from utils.dps_calculator import FastDPSEvaluator
+    if not getattr(data, 'use_realistic_dps', False):
+        return None
+    if data.combat_mode == 'stage':
+        return None
+    return FastDPSEvaluator(
+        baseline_stats=current_stats,
+        combat_mode=data.combat_mode,
+        enemy_def=ENEMY_DEFENSE_VALUES.get(getattr(data, 'chapter', 'Chapter 27'), 0.752),
+        calculate_dps_fn=shared_calculate_dps,
+        extra_kwargs={
+            'job_class': JobClass(data.job_class),
+            'boss_importance': getattr(data, 'boss_importance', 70) / 100.0,
+            'boss_damage_multiplier': getattr(data, 'boss_damage_multiplier', 1.0),
+        },
+    )
+
+
+# Default budget for hero power reroll analysis — small enough to compete
+# with cubes/starforce/companion tickets on absolute cost (5000 diamonds at
+# 10 diamonds/medal), big enough that the lock cascade has room to converge.
+_HERO_POWER_REROLL_BUDGET_MEDALS = 500
+
+
+def _build_hp_config_from_data(data) -> HeroPowerConfig:
+    """Translate `data.hero_power_lines` into a HeroPowerConfig the same way
+    the Hero Power page does. Kept inline so the page doesn't need a
+    cross-module helper import."""
+    lines = []
+    raw = data.hero_power_lines or {}
+    for i in range(1, 7):
+        line_data = raw.get(f'line{i}', {})
+        stat_str = line_data.get('stat', '') or ''
+        tier_str = (line_data.get('tier', 'common') or 'common').lower()
+        value = float(line_data.get('value', 0) or 0)
+        locked = bool(line_data.get('locked', False))
+        try:
+            stat_type = HeroPowerStatType(stat_str) if stat_str else HeroPowerStatType.DAMAGE
+        except ValueError:
+            stat_type = HeroPowerStatType.DAMAGE
+        try:
+            tier = HeroPowerTier(tier_str)
+        except ValueError:
+            tier = HeroPowerTier.COMMON
+        lines.append(HeroPowerLine(
+            slot=i, stat_type=stat_type, value=value, tier=tier, is_locked=locked,
+        ))
+    return HeroPowerConfig(lines=lines)
+
+
+def _build_hp_level_config_from_data(data) -> HeroPowerLevelConfig:
+    """Translate `data.hero_power_level` into a HeroPowerLevelConfig."""
+    lc = data.hero_power_level or {}
+    return HeroPowerLevelConfig(
+        level=lc.get('level', 15),
+        mystic_rate=lc.get('mystic_rate', 0.14),
+        legendary_rate=lc.get('legendary_rate', 1.63),
+        unique_rate=lc.get('unique_rate', 3.3),
+        epic_rate=lc.get('epic_rate', 37.93),
+        rare_rate=lc.get('rare_rate', 32.0),
+        common_rate=lc.get('common_rate', 25.0),
+        base_cost=lc.get('base_cost', 89),
+    )
+
+
+def _build_hero_power_reroll_analysis(data, current_stats, current_dps):
+    """
+    Real DPS-based hero power reroll analysis. Wraps `analyze_budget` from
+    game/hero_power.py and shapes the result into the same dict keys the
+    optimizer's all_upgrades block already reads (`expected_gain`,
+    `diamond_equivalent`, `num_locks`, `lines_to_reroll`, `total_medal_cost`,
+    `estimated_rerolls`).
+
+    Returns None when the hero power state is too incomplete to analyze
+    (no lines / no level config) — caller falls back to the heuristic.
+    """
+    if not data.hero_power_lines:
+        return None
+    if current_dps <= 0:
+        return None
+
+    config = _build_hp_config_from_data(data)
+    level_config = _build_hp_level_config_from_data(data)
+
+    # analyze_budget needs (calc_dps_func, get_stats_func) callables with
+    # specific signatures. Wire them to the optimizer's existing closures.
+    result = analyze_hero_power_budget(
+        config=config,
+        level_config=level_config,
+        budget_medals=float(_HERO_POWER_REROLL_BUDGET_MEDALS),
+        calc_dps_func=calc_dps_for_optimizer,
+        get_stats_func=aggregate_stats,
+    )
+    if 'error' in result:
+        return None
+
+    medals_spent = float(result.get('expected_medals_spent', 0))
+    if medals_spent <= 0 or result.get('expected_gain_pct', 0) <= 0:
+        # Nothing worth recommending (all slots already pass thresholds).
+        return None
+
+    # Slots NOT in recommended_locks are slots the budget analysis says to
+    # reroll. User-locked slots are forced-locked inside analyze_budget so
+    # they show up in recommended_locks too.
+    recommended_locks = result.get('recommended_locks', [])
+    lines_to_reroll = [slot for slot in range(1, 7) if slot not in recommended_locks]
+    num_locks = len(recommended_locks)
+    return {
+        'preset': data.active_hero_power_preset or "1",
+        'lines': result.get('line_analysis', []),
+        'lines_to_lock': recommended_locks,
+        'lines_to_reroll': lines_to_reroll,
+        'num_locks': num_locks,
+        'cost_per_reroll': result.get('cost_per_reroll', 0),
+        'estimated_rerolls': result.get('expected_rerolls', 0),
+        'total_medal_cost': medals_spent,
+        'diamond_equivalent': medals_spent * MEDAL_TO_DIAMOND,
+        'expected_gain': result.get('expected_gain_pct', 0),
+        # Real-DPS-based: cascade detail useful for the rendering blocks.
+        'cascade': result.get('cascade', []),
+        'current_total_dps_pct': result.get('current_total_dps_pct', 0),
+        'expected_total_dps_pct': result.get('expected_total_dps_pct', 0),
+    }
+
+
+def _build_companion_ticket_recommendation(data, baseline_stats, baseline_dps):
+    """
+    Construct the optimizer's "Companion Tickets (×100)" recommendation.
+
+    Forces the legacy (closed-form) DPS path for per-candidate evaluations
+    even when the user has realistic DPS enabled. Companion level changes
+    only touch inventory stats (attack_flat / damage_pct / main_stat_flat
+    / etc.) — none of those are sequence-affecting, so the legacy path
+    preserves the relative ranking between candidates. Using realistic
+    per-candidate would multiply runtime by ~30× (the sim is much slower).
+
+    Stage mode is phase-weighted manually here (mob × 0.6 + boss × 0.4)
+    so we stay on the legacy path consistently. Returns None only when
+    baseline DPS is zero — every other case yields a recommendation.
+    """
+    if baseline_dps <= 0:
+        return None
+
+    from utils.dps_calculator import (
+        aggregate_stats as shared_aggregate_stats,
+        calculate_dps as shared_calculate_dps,
+    )
+
+    enemy_def = ENEMY_DEFENSE_VALUES.get(getattr(data, 'chapter', 'Chapter 27'), 0.752)
+    job_class_enum = JobClass(data.job_class)
+    mode = data.combat_mode
+
+    def _legacy_dps(stats, m):
+        # Force legacy path regardless of data.use_realistic_dps — inventory
+        # stat changes don't need the simulator.
+        return shared_calculate_dps(
+            stats, m, enemy_def,
+            job_class=job_class_enum,
+            use_realistic_dps=False,
+            include_companion_summon=True,
+        )['total']
+
+    def _eval_in_current_mode(stats):
+        if mode == 'stage':
+            mob, boss = compute_phase_dps(stats, _legacy_dps)
+            return mob * STAGE_MOB_FRACTION + boss * STAGE_BOSS_FRACTION
+        return _legacy_dps(stats, mode)
+
+    # We need a baseline computed via the SAME legacy path so the marginal
+    # delta is internally consistent (the user-facing `baseline_dps` may be
+    # realistic and a different number).
+    baseline_legacy_dps = _eval_in_current_mode(baseline_stats)
+
+    def _stats_with_companion_levels_overridden(overrides):
+        import copy
+        synthetic = copy.copy(data)
+        synthetic.companion_levels = dict(data.companion_levels or {})
+        for k, lvl in overrides.items():
+            if lvl <= 0:
+                synthetic.companion_levels.pop(k, None)
+            else:
+                synthetic.companion_levels[k] = lvl
+        return shared_aggregate_stats(synthetic)
+
+    _dps_cache = {}
+
+    def _dps_at(overrides):
+        key = tuple(sorted(overrides.items()))
+        if key not in _dps_cache:
+            candidate_stats = _stats_with_companion_levels_overridden(overrides)
+            _dps_cache[key] = _eval_in_current_mode(candidate_stats)
+        return _dps_cache[key]
+
+    def _marginal_dps_fn(overrides):
+        # Absolute DPS gain over the legacy baseline. We scale below
+        # against the user-facing baseline_dps so percentages match.
+        return _dps_at(overrides) - baseline_legacy_dps
+
+    user_state = {
+        'owned': {k: int(v) for k, v in (data.companion_levels or {}).items() if v > 0},
+        'equipped': list(data.equipped_companions or []),
+    }
+    return get_companion_ticket_recommendation_for_optimizer(
+        user_state=user_state,
+        marginal_dps_fn=_marginal_dps_fn,
+        baseline_dps=baseline_dps,
+        batch_size=100,
+    )
+
+
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("Current DPS", f"{current_dps:,.0f}")
@@ -587,8 +817,13 @@ if refresh_clicked:
     # Starforce analysis
     sf_analysis = analyze_starforce_detailed(current_dps)
 
-    # Hero power analysis
-    hp_analysis = analyze_hero_power_detailed()
+    # Hero power analysis. Uses analyze_budget (real DPS-based) under the
+    # hood and shapes the output to match the existing heuristic for the
+    # all_upgrades wiring downstream.
+    hp_analysis = _build_hero_power_reroll_analysis(data, current_stats, current_dps)
+    if hp_analysis is None:
+        # Fall back to heuristic if budget analysis can't run.
+        hp_analysis = analyze_hero_power_detailed()
 
     # Tier upgrade analysis
     tier_upgrade_analysis = analyze_all_tier_upgrades(
@@ -617,6 +852,18 @@ if refresh_clicked:
         )
     else:
         summon_analysis = []
+
+    # Companion ticket recommendation. Computes the expected DPS gain per
+    # batch of 100 tickets factoring in (a) direct pulls (new companion or
+    # level-up progress on an in-progress one) and (b) cascading promotion
+    # EV from maxed-companion extras. Uses the fast-path evaluator built
+    # earlier so per-candidate DPS lookups are cheap.
+    companion_ticket_rec = _build_companion_ticket_recommendation(
+        data, current_stats, current_dps,
+    )
+    if companion_ticket_rec:
+        summon_analysis = list(summon_analysis or [])
+        summon_analysis.append(companion_ticket_rec)
 
     # Artifact analysis - use the actual data attributes
     artifacts_inventory = getattr(data, 'artifacts_inventory', {}) or {}
@@ -684,8 +931,15 @@ if refresh_clicked:
     _include_artifacts = st.session_state.get('optimizer_include_artifacts', True)
     _efficiency_stats = current_stats.copy()
 
+    # Build the fast-DPS evaluator once per analysis run. Non-sequence
+    # candidates (most stats) get scored via the legacy + ratio fast path
+    # instead of re-running the realistic simulator per candidate.
+    _fast_evaluator = _build_fast_evaluator()
     st.session_state.optimizer_slot_efficiency = {
-        slot: calculate_slot_efficiency(slot, _efficiency_stats, calc_dps_for_optimizer, _tier_mode)
+        slot: calculate_slot_efficiency(
+            slot, _efficiency_stats, calc_dps_for_optimizer, _tier_mode,
+            fast_evaluator=_fast_evaluator,
+        )
         for slot in ['shoulder', 'gloves', 'cape', 'bottom', 'ring', 'necklace', 'top', 'hat']
     }
 

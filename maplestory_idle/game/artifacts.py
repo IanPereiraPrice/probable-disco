@@ -512,6 +512,13 @@ class ArtifactEffect:
     # For MULTIPLICATIVE effects with stacking (e.g., Hex)
     max_stacks: int = 1
 
+    # Effect is only active while a companion summon is currently up (Horn
+    # Flute). The realistic-DPS simulator gates the player-side bonus on
+    # `active_summons` and bakes it into the companion's snapshot once
+    # at cast time — the companion gets the boost for its full window
+    # (via the snapshot) without double-applying.
+    companion_gated: bool = False
+
     def get_value(self, stars: int, stacks: Optional[int] = None) -> float:
         """Get the value at given star level and stacks."""
         base_value = self.base + (stars * self.per_star)
@@ -1128,7 +1135,12 @@ ARTIFACTS = {
         tier=ArtifactTier.UNIQUE,
         active_description="Companion duration +X%",
         active_effects=[
-            ArtifactEffect(stat="companion_duration", base=0.20, per_star=0.04),  # 20→40% (utility, no direct DPS)
+            # 20% → 40% across stars. Routed through stats['companion_duration']
+            # and extends the companion summon's 30s window in the realistic-DPS
+            # simulator (sequence-affecting — same family as the shoes special
+            # potential). See dps_calculator.calculate_dps where the registered
+            # SkillData.duration is multiplied by (1 + companion_duration/100).
+            ArtifactEffect(stat="companion_duration", base=0.20, per_star=0.04),
         ],
         inventory_description="Attack +X (flat)",
         inventory_stat="attack_flat",
@@ -1306,9 +1318,17 @@ ARTIFACTS = {
     "horn_flute": ArtifactDefinition(
         name="Horn Flute",
         tier=ArtifactTier.LEGENDARY,
-        active_description="Your Final Damage +X% while Companion is summoned (×2 in Chapter Boss, not modeled)",
+        active_description="Your Final Damage +X% while a Companion is summoned (×2 in Chapter Boss, not modeled)",
         active_effects=[
-            ArtifactEffect(stat="final_damage", base=0.10, per_star=0.02),  # 10%→20% at ★5
+            # Companion-gated: only active during the 30s companion summon
+            # window. The realistic simulator applies this to player damage
+            # only while `active_summons` is non-empty, and bakes it into
+            # the companion's frozen snapshot at cast time so the companion
+            # benefits for its full window (no double-apply).
+            ArtifactEffect(
+                stat="final_damage", base=0.10, per_star=0.02,
+                companion_gated=True,
+            ),  # 10% → 20% at ★5
         ],
         inventory_description="Boss Monster Damage +X%",
         inventory_stat="boss_damage",
@@ -1432,10 +1452,19 @@ def calculate_book_of_ancient_bonus(stars: int, crit_rate: float) -> Tuple[float
 
     Returns:
         (crit_rate_bonus, crit_damage_bonus)
+
+    Reads from `active_effects` (the modern definition format). The legacy
+    `active_base` / `conversion_rate_base` fields are not populated on the
+    current BoA entry, so this used to silently return (0, 0).
     """
     book_def = ARTIFACTS["book_of_ancient"]
-    cr_bonus = book_def.get_active_value(stars)
-    conversion_rate = book_def.get_conversion_rate(stars)
+    cr_bonus = 0.0
+    conversion_rate = 0.0
+    for effect in book_def.active_effects:
+        if effect.stat == 'crit_rate':
+            cr_bonus = effect.base + (stars * effect.per_star)
+        elif effect.stat == 'crit_damage' and effect.effect_type == EffectType.DERIVED:
+            conversion_rate = effect.base + (stars * effect.per_star)
 
     # CD bonus = conversion_rate * (current CR + CR bonus from artifact)
     total_cr = crit_rate + cr_bonus

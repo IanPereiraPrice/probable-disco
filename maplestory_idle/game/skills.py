@@ -13,13 +13,19 @@ This module models:
 
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 import functools
 import json
 import math
 import os
 
 from game.job_classes import JobClass
+
+if TYPE_CHECKING:
+    # Forward reference for build_companion_summon_skill_data; the runtime
+    # import is local inside the function to avoid a circular import with
+    # game.companions.
+    from game.companions import JobAdvancement
 
 
 # =============================================================================
@@ -4390,6 +4396,21 @@ class CharacterState:
     # Buff Duration % — multiplies all BUFF skill durations (e.g. from items/masteries)
     buff_duration_pct: float = 0.0
 
+    # Hexagon Necklace star count (0-5). Used by the realistic-DPS simulator to
+    # step hex stacks live over the fight (see DPSCalculator._hex_stacks_at and
+    # the per-tick hex multiplier inside _simulate_fight). 0 = not equipped.
+    hex_necklace_stars: int = 0
+
+    # Companion-gated FD (Horn Flute artifact), combined as a multiplicative
+    # decimal (e.g. 0.20 = +20% FD). Realistic-DPS only:
+    #   - Applied to player damage events while a companion summon is active
+    #     (gated by `active_summons` in `_simulate_fight`).
+    #   - Baked into the companion's frozen snapshot at cast time so the
+    #     companion benefits for its full window — but only once (the
+    #     simulator does NOT re-multiply companion damage).
+    # Legacy DPS path averages this in via fight uptime instead.
+    companion_active_fd_decimal: float = 0.0
+
     # Unique stats (HeroUniqueStatOption levels, 0 = not invested)
     # Formula: bonus = (Value + AddedValue * level) / 10  (from datamine)
     unique_attack_speed_level: int = 0       # 0-20: +3.0% base, +0.2%/level (max 7.0%)
@@ -4406,6 +4427,11 @@ class CharacterState:
     # For stat matching mode: which BUFF skills are manually enabled (full stat value)
     # e.g., {"nimble_feet", "sharp_eyes"} means both buffs are active for stat display
     enabled_buffs: Set[str] = field(default_factory=set)
+
+    # Skill names that are forcibly treated as unlocked by `is_skill_unlocked`,
+    # regardless of unlock_level. Used by features that inject synthetic skills
+    # (e.g., the companion summon mechanic — see register_companion_summon).
+    _extra_unlocked_skills: Set[str] = field(default_factory=set)
 
     @functools.cached_property
     def skills(self) -> Dict[str, 'SkillData']:
@@ -4510,6 +4536,8 @@ class CharacterState:
         return get_job_for_level(self.level)
 
     def is_skill_unlocked(self, skill_name: str) -> bool:
+        if skill_name in self._extra_unlocked_skills:
+            return True
         return skill_name in self._unlocked_skills
 
     def get_active_basic_attack(self) -> str:
@@ -4607,6 +4635,51 @@ def create_default_character(
     char.def_pen_pct = 30
 
     return char
+
+
+def build_companion_summon_skill_data(
+    advancement: 'JobAdvancement',
+    level: int,
+    *,
+    name: str = "Companion Summon",
+    primary_attack_override: Optional[Dict] = None,
+) -> Optional['SkillData']:
+    """
+    Build a synthetic SkillData (SkillType.SUMMON) representing the equipped
+    main companion's attack while summoned. Returns None if the companion's
+    tier has no active attack (Basic / Grade1) or level is invalid.
+
+    Per-grade attack stats and per-level scaling come from
+    game.companions.get_companion_summon_attack (which in turn sources its
+    numbers from data_mine/TextAsset/SupporterTable.json,
+    SupporterLevelStatFactorTable.json, and SkillTable.json).
+
+    `primary_attack_override` (from `CompanionDefinition.
+    summon_primary_attack_override`) overrides specific fields on the
+    tier's primary attack — used by Bishop 4th (5 hits, 6 targets).
+    """
+    from game.companions import get_companion_summon_attack
+    attack = get_companion_summon_attack(advancement, level,
+                                         primary_attack_override=primary_attack_override)
+    if attack is None:
+        return None
+    return SkillData(
+        name=name,
+        skill_type=SkillType.SUMMON,
+        damage_type=DamageType.SKILL,
+        job=Job.BASIC,            # not a job skill — Job.BASIC = unaffected by +All Skills
+        unlock_level=1,           # always considered unlocked at L1+
+        base_damage_pct=attack["damage_pct"],
+        base_hits=attack["hits"],
+        base_targets=attack["targets"],
+        damage_per_level=0.0,     # level scaling already baked into base_damage_pct
+        level_factor_index=-1,
+        cooldown=attack["cooldown_s"],
+        duration=attack["duration_s"],
+        attack_interval=attack["attack_interval_s"],
+        scales_with_attack_speed=False,  # companion has fixed tick from datamine
+        cast_time=0.5,                   # animation only, doesn't matter much
+    )
 
 
 # =============================================================================
@@ -4714,6 +4787,129 @@ TIER_3_ROTATION_STATS = frozenset({
 })
 
 
+@dataclass(frozen=True)
+class PlayerStatSnapshot:
+    """
+    Frozen snapshot of the player's offensive stat block at a single instant.
+
+    Used by the burst-window scheduler to capture the player's "best version of
+    themselves" at the moment a companion is summoned, so that the companion's
+    30-second attack window deals damage as if the player's stats at cast time
+    persisted for the full window, regardless of how the player's own buff
+    state evolves afterward.
+
+    Values are TOTALS (`char.X + get_total_stat_bonus("X")`) — no further
+    summation in `calculate_hit_damage` when this is passed via stat_override.
+
+    See plan: C:/Users/ianpr/.claude/plans/sorted-nibbling-meteor.md (Phase 1).
+    """
+    # Core attack
+    attack: float
+
+    # Main stat (totals: flat + pct, already scaled, plus conversion)
+    main_stat_flat_total: float           # char.main_stat_flat + global("main_stat_flat")
+    main_stat_pct_total: float            # char.main_stat_pct + global_bonus("main_stat_pct")
+    main_stat_conversion: float
+    secondary_stat_flat: float
+    secondary_stat_pct: float
+
+    # Damage % bucket
+    damage_pct_total: float               # char.damage_pct + total_bonus("damage_pct")
+
+    # Phase-specific damage
+    boss_damage: float
+    normal_damage: float
+
+    # Damage-type bonuses
+    basic_attack_damage_total: float      # char.basic_attack_damage + total_bonus("basic_attack_damage")
+    skill_damage_total: float             # char.skill_damage + total_bonus("skill_damage")
+
+    # Final damage (the global one; per-skill enhancer FD is computed live since
+    # it depends on skill_name, not on player state)
+    final_damage_pct: float
+
+    # Crit (totaled: includes passive bonuses from get_total_stat_bonus)
+    crit_rate_total: float
+    crit_damage: float
+
+    # Defense penetration (used to derive _def_pen_mult)
+    def_pen_pct: float
+
+    # Attack speed (for cast-time-dependent helpers like Venom uptime)
+    attack_speed_pct: float
+
+    # Buff-duration % stat (extends snapshot's buff durations consistently)
+    buff_duration_pct: float = 0.0
+
+    # Currently active player buffs (Sharp Eyes, Smokescreen, etc.) — frozen at
+    # snapshot time so the companion's hits get the buff stat boost for its
+    # entire window even after the player's buffs decay.
+    active_buffs: frozenset = field(default_factory=frozenset)
+
+    # "Optimal pre-stack" assumptions for mechanics whose live stepping we
+    # intentionally don't model in the simulator (per Phase 4 simplification):
+    # - mortal_blow_forced: when True, treat MB as active (full FD bonus, no
+    #   uptime averaging). None = use the calculate_hit_damage default.
+    # - concentration_forced_stacks: when set, override the implicit 7-stack
+    #   assumption with this explicit value.
+    mortal_blow_forced: Optional[bool] = None
+    concentration_forced_stacks: Optional[int] = None
+
+    # External multiplier baked in at snapshot time (NOT recomputed during the
+    # 30s window, even as hex stacks would evolve on the player).
+    hex_multiplier: float = 1.0
+
+    @classmethod
+    def from_calculator(
+        cls,
+        calc: 'DPSCalculator',
+        active_buffs: Optional[Set[str]] = None,
+        hex_multiplier: float = 1.0,
+        *,
+        mortal_blow_forced: Optional[bool] = None,
+        concentration_forced_stacks: Optional[int] = None,
+    ) -> 'PlayerStatSnapshot':
+        """
+        Build a snapshot from a live `DPSCalculator`'s current state.
+
+        Pre-totals all stats with their passive bonuses so the consumer can
+        read them directly without re-summing. `active_buffs` is captured as a
+        frozenset so the snapshot is hashable and immutable.
+        """
+        char = calc.char
+        # Pre-total every stat that calculate_hit_damage normally sums on the fly.
+        main_flat_total = char.main_stat_flat + calc.get_global_stat("main_stat_flat")
+        main_pct_total = char.main_stat_pct + calc.get_total_stat_bonus("main_stat_pct")
+        damage_pct_total = char.damage_pct + calc.get_total_stat_bonus("damage_pct")
+        ba_dmg_total = char.basic_attack_damage + calc.get_total_stat_bonus("basic_attack_damage")
+        skill_dmg_total = char.skill_damage + calc.get_total_stat_bonus("skill_damage")
+        crit_rate_total = char.crit_rate + calc.get_total_stat_bonus("crit_rate")
+
+        return cls(
+            attack=char.attack,
+            main_stat_flat_total=main_flat_total,
+            main_stat_pct_total=main_pct_total,
+            main_stat_conversion=char.main_stat_conversion,
+            secondary_stat_flat=char.secondary_stat_flat,
+            secondary_stat_pct=char.secondary_stat_pct,
+            damage_pct_total=damage_pct_total,
+            boss_damage=char.boss_damage,
+            normal_damage=char.normal_damage,
+            basic_attack_damage_total=ba_dmg_total,
+            skill_damage_total=skill_dmg_total,
+            final_damage_pct=char.final_damage_pct,
+            crit_rate_total=crit_rate_total,
+            crit_damage=char.crit_damage,
+            def_pen_pct=char.def_pen_pct,
+            attack_speed_pct=char.attack_speed_pct,
+            buff_duration_pct=char.buff_duration_pct,
+            active_buffs=frozenset(active_buffs or ()),
+            mortal_blow_forced=mortal_blow_forced,
+            concentration_forced_stacks=concentration_forced_stacks,
+            hex_multiplier=hex_multiplier,
+        )
+
+
 class DPSCalculator:
     """
     Calculates DPS for any job class given character state.
@@ -4728,8 +4924,11 @@ class DPSCalculator:
     def __init__(self, char: CharacterState, enemy_def: float = 0.752):
         self.char = char
         self.enemy_def = enemy_def  # Enemy defense value (default: stage ~0.752)
-        # Cache skills and masteries for this character's job class
-        self._skills = char.skills
+        # Cache skills and masteries for this character's job class.
+        # NOTE: shallow-copy the skill dict so per-calculator mutations (e.g.,
+        # register_companion_summon injecting a synthetic SUMMON) don't leak
+        # into the module-level skill table.
+        self._skills = dict(char.skills)
         self._masteries = char.masteries
         self.mastery_bonuses = get_mastery_bonuses(char.level, self._masteries)
 
@@ -4751,9 +4950,386 @@ class DPSCalculator:
         self._skill_hits_cache: Dict[str, int] = {}
         self._skill_targets_cache: Dict[str, int] = {}
 
+        # Companion-summon stat snapshot — set when the burst-window scheduler
+        # decides to cast the companion summon, and read by the companion's
+        # per-hit damage path so that the 30-second summon window uses the
+        # player's stat block as frozen at cast time. None when no companion
+        # is currently summoned. See Phase 2 of the burst-window scheduler.
+        self._companion_snapshot: Optional[PlayerStatSnapshot] = None
+
+        # Bishop-style companion kit. Populated by `calculate_dps` after
+        # `register_companion_summon`; defaults here so non-Bishop paths
+        # don't need defensive getattr().
+        self._companion_self_buff_fd_decimal: float = 0.0
+        self._companion_player_bonuses: Dict[str, float] = {}
+        self._companion_secondary_skills: List[Any] = []
+        self._companion_proc_skill: Optional[Any] = None
+
     def get_skill(self, skill_name: str) -> Optional[SkillData]:
         """Get skill data by name for this character's job class."""
         return self._skills.get(skill_name)
+
+    def register_companion_summon(
+        self,
+        skill_data: 'SkillData',
+        skill_name: str = "companion_main_summon",
+    ) -> None:
+        """
+        Inject a synthetic SUMMON skill into the calculator so the existing
+        4 summon DPS paths (_calc_summons_dps_phased, calculate_total_dps,
+        calculate_mortal_blow_uptime, get_skill_damage_breakdown) treat it
+        like Phoenix / Arrow Platter — same uptime math, same per-hit damage
+        path, same propagation of player stats via calculate_hit_damage.
+
+        Marks the skill as unlocked on the character regardless of its
+        unlock_level (the companion's "summon" isn't a job skill the player
+        has to learn).
+        """
+        if skill_data.skill_type != SkillType.SUMMON:
+            raise ValueError(
+                f"register_companion_summon expects SkillType.SUMMON, got {skill_data.skill_type}"
+            )
+        self._skills[skill_name] = skill_data
+        self._summon_skills[skill_name] = skill_data
+        self.char._extra_unlocked_skills.add(skill_name)
+        # Track companion-summon skill_name(s) so the burst-window scheduler
+        # (realistic-DPS path) can find them and treat them as discrete
+        # castable actions rather than as a passive uptime-averaged summon.
+        if not hasattr(self, '_companion_summon_keys') or self._companion_summon_keys is None:
+            self._companion_summon_keys: Set[str] = set()
+        self._companion_summon_keys.add(skill_name)
+
+    def _hex_stacks_at(self, t: float) -> int:
+        """
+        Hexagon Necklace stack count active at simulator time `t`.
+        Matches the schedule baked into `artifacts.calculate_hex_average_multiplier`:
+        0 stacks 0-20s, 1 stack 20-40s, 2 stacks 40-60s, 3 stacks 60s+.
+        """
+        if t < 20.0:
+            return 0
+        if t < 40.0:
+            return 1
+        if t < 60.0:
+            return 2
+        return 3
+
+    def _hex_multiplier_at(self, t: float) -> float:
+        """
+        Live hex multiplier at simulator time `t`. Returns 1.0 if no necklace
+        is equipped. Memoizes the per-stack lookup since it's hit on every
+        damage event.
+        """
+        stars = getattr(self.char, 'hex_necklace_stars', 0) or 0
+        if stars <= 0:
+            return 1.0
+        stacks = self._hex_stacks_at(t)
+        if stacks <= 0:
+            return 1.0
+        cache = getattr(self, '_hex_mult_cache', None)
+        if cache is None:
+            cache = {}
+            self._hex_mult_cache = cache
+        key = (stars, stacks)
+        if key not in cache:
+            from game.artifacts import calculate_hex_multiplier
+            cache[key] = calculate_hex_multiplier(stars, stacks)
+        return cache[key]
+
+    def _get_available_summon_actions(
+        self,
+        t: float,
+        summon_cooldowns: Dict[str, float],
+    ) -> Dict[str, 'SkillData']:
+        """
+        Return registered companion summons that are castable at simulator
+        time `t`. A summon is castable iff:
+            (a) `t >= SUMMON_LOCKOUT_S` (5-second start-of-fight lockout), AND
+            (b) its own cooldown timer is `<= 0`.
+        Used by the burst-window scheduler in `_simulate_fight`.
+
+        See plan: C:/Users/ianpr/.claude/plans/sorted-nibbling-meteor.md (Phase 2).
+        """
+        from game.companions import SUMMON_LOCKOUT_S
+        if t < SUMMON_LOCKOUT_S:
+            return {}
+        keys = getattr(self, '_companion_summon_keys', None) or set()
+        return {
+            key: self._summon_skills[key]
+            for key in keys
+            if key in self._summon_skills
+            and summon_cooldowns.get(key, 0.0) <= 0.0
+        }
+
+    # Phase 4 "optimal pre-stack" defaults applied to every companion-summon
+    # snapshot. The player's own continuous damage still uses the averaged
+    # uptime / hardcoded 7-stack assumption; only the companion's frozen
+    # 30s window benefits from the enriched values.
+    _COMPANION_CONCENTRATION_FORCED_STACKS = 7
+
+    def _build_companion_snapshot(
+        self,
+        active_buffs: Optional[Set[str]] = None,
+        hex_multiplier: float = 1.0,
+    ) -> 'PlayerStatSnapshot':
+        """
+        Construct a companion-summon snapshot with the Phase 4 "optimal
+        pre-stack" enrichment: Mortal Blow forced active, Concentration at
+        max stacks. All three sites that snapshot for a companion
+        (scheduler cast, summon-scoring lookahead, delay-dominance check)
+        route through here so the enrichment stays consistent.
+
+        Horn Flute (`char.companion_active_fd_decimal`) is baked into the
+        snapshot's final_damage_pct exactly once here. The simulator does
+        NOT re-multiply companion damage by this FD — that would
+        double-count, since the companion's per-hit damage already reads
+        the boosted final_damage_pct via stat_override.
+        """
+        snapshot = PlayerStatSnapshot.from_calculator(
+            self,
+            active_buffs=active_buffs,
+            hex_multiplier=hex_multiplier,
+            mortal_blow_forced=True,
+            concentration_forced_stacks=self._COMPANION_CONCENTRATION_FORCED_STACKS,
+        )
+        # Compose two FD sources multiplicatively into the snapshot's
+        # final_damage_pct: Horn Flute (player+companion gate) and the
+        # companion's own self-buff (3rd/4th job OnStart skill, baked once
+        # at spawn). Both are stored as decimals (0.20 = +20%).
+        horn_fd = getattr(self.char, 'companion_active_fd_decimal', 0.0)
+        self_buff_fd = getattr(self, '_companion_self_buff_fd_decimal', 0.0)
+        extra_fd_mult = (1.0 + horn_fd) * (1.0 + self_buff_fd)
+        if extra_fd_mult > 1.0:
+            from dataclasses import replace as _dc_replace
+            base_fd_mult = 1.0 + snapshot.final_damage_pct / 100.0
+            boosted_fd_pct = (base_fd_mult * extra_fd_mult - 1.0) * 100.0
+            snapshot = _dc_replace(snapshot, final_damage_pct=boosted_fd_pct)
+        return snapshot
+
+    def _compose_companion_player_buff_mult(self) -> float:
+        """
+        Compose the player-damage multiplier from `_companion_player_bonuses`.
+        Returns 1.0 when no bonuses are configured (every non-Bishop main).
+
+        Per-stat composition rules (see plan: Bishop 4th, Phase 3):
+        - attack_pct, final_damage: decimals, simple `× (1 + value)`.
+        - max_dmg_mult: adjusts the damage-range avg.
+        - crit_damage: percentage points, weighted by the char's effective
+          crit rate (capped at 100%).
+        - attack_speed: NOT in here — accelerates attack cadence, not a
+          damage multiplier. Handled separately in `_simulate_fight` by
+          recomputing `current_attack_speed_mult` + `skill_values` when
+          the companion is summoned/despawns.
+
+        Applied at player-damage events in `_simulate_fight` ONLY when a
+        companion is currently summoned. Companion damage uses the snapshot
+        and does NOT pick these up — that's the point of the asymmetry.
+        """
+        bonuses = self._companion_player_bonuses
+        if not bonuses:
+            return 1.0
+        from core.constants import BASE_MIN_DMG, BASE_MAX_DMG
+        mult = 1.0
+        # attack_pct (decimal)
+        atk_pct = bonuses.get('attack_pct', 0.0)
+        if atk_pct:
+            mult *= (1.0 + atk_pct)
+        # final_damage (decimal)
+        fd = bonuses.get('final_damage', 0.0)
+        if fd:
+            mult *= (1.0 + fd)
+        # max_dmg_mult (percentage points added to BASE_MAX_DMG)
+        max_dmg_bonus = bonuses.get('max_dmg_mult', 0.0)
+        if max_dmg_bonus:
+            base_min = BASE_MIN_DMG + getattr(self.char, 'min_dmg_mult', 0.0)
+            base_max = BASE_MAX_DMG + getattr(self.char, 'max_dmg_mult', 0.0)
+            base_avg = (base_min + base_max) / 2.0
+            new_avg = (base_min + base_max + max_dmg_bonus) / 2.0
+            if base_avg > 0:
+                mult *= (new_avg / base_avg)
+        # crit_damage (percentage points, weighted by effective crit rate)
+        cd_bonus = bonuses.get('crit_damage', 0.0)
+        if cd_bonus:
+            eff_crit_rate = min(
+                self.char.crit_rate + self.get_total_stat_bonus('crit_rate'),
+                100.0,
+            )
+            # value/100 is the decimal addition to the crit multiplier;
+            # weighted by effective crit rate (also as a fraction).
+            mult *= (1.0 + (eff_crit_rate / 100.0) * (cd_bonus / 100.0))
+        return mult
+
+    def _avg_hex_between(self, t0: float, t1: float) -> float:
+        """
+        Average hex multiplier over [t0, t1], accounting for the 20s-interval
+        stack bumps. Returns 1.0 if no necklace is equipped. Used by the
+        delay-summon plan scoring to credit BA damage during the delay /
+        post-summon at the live hex stack count, not a flat 1.0x.
+        """
+        if getattr(self.char, 'hex_necklace_stars', 0) <= 0:
+            return 1.0
+        if t1 <= t0:
+            return self._hex_multiplier_at(t0)
+        breakpoints = sorted({t0, 20.0, 40.0, 60.0, t1})
+        breakpoints = [b for b in breakpoints if t0 <= b <= t1]
+        if not breakpoints or breakpoints[0] != t0:
+            breakpoints.insert(0, t0)
+        if breakpoints[-1] != t1:
+            breakpoints.append(t1)
+        total = 0.0
+        for i in range(len(breakpoints) - 1):
+            seg0, seg1 = breakpoints[i], breakpoints[i + 1]
+            if seg1 > seg0:
+                # Sample at segment midpoint — hex is constant within a segment
+                # because the breakpoints include every stack-change boundary.
+                total += (seg1 - seg0) * self._hex_multiplier_at((seg0 + seg1) / 2.0)
+        return total / (t1 - t0)
+
+    def _enumerate_hex_delay_candidates(
+        self,
+        current_t: float,
+        fight_duration: float,
+        summon_duration: float,
+    ) -> List[float]:
+        """
+        Return candidate `delay_duration` values that land the next summon
+        cast precisely at an upcoming hex stack threshold (t=20, 40, 60).
+        Skips thresholds that don't leave enough fight time for the summon
+        to pay back its delay.
+        """
+        if getattr(self.char, 'hex_necklace_stars', 0) <= 0:
+            return []
+        # Each summon window after the delayed cast must give the companion
+        # at least ~10s to attack — otherwise the delay never pays back.
+        min_post_window = min(10.0, summon_duration)
+        candidates: List[float] = []
+        for threshold_t in (20.0, 40.0, 60.0):
+            if threshold_t <= current_t:
+                continue
+            if (fight_duration - threshold_t) < min_post_window:
+                break
+            candidates.append(threshold_t - current_t)
+        return candidates
+
+    def _delay_dominates_summon_now(
+        self,
+        summon_name: str,
+        summon_skill: 'SkillData',
+        delay_duration: float,
+        current_t: float,
+        fight_duration: float,
+        best_player_dps: float,
+        current_active_buffs: Set[str],
+        current_attack_speed_mult: float,
+        num_enemies: int,
+        is_boss: bool,
+        mob_time_fraction: float,
+    ) -> bool:
+        """
+        Return True iff "wait `delay_duration`s then cast summon" outperforms
+        "cast summon now" over the longer of the two plans' windows. Used by
+        the scheduler to suppress summon-now when an imminent hex bump makes
+        delaying strictly better (e.g., the user's "save summon for hex 2"
+        rotation on chapter bosses).
+
+        Comparison method: total damage over a common horizon ending at the
+        later plan's last segment. Both plans get the same horizon. Whichever
+        total wins is the better plan over that window. Greedy "summon-now"
+        scoring (damage / plan_window) can't see this trade-off because the
+        plans have different natural windows.
+
+        See plan: C:/Users/ianpr/.claude/plans/sorted-nibbling-meteor.md (Phase 3).
+        """
+        if delay_duration <= 0:
+            return False
+        if getattr(self.char, 'hex_necklace_stars', 0) <= 0:
+            return False
+
+        cast_now_window = min(summon_skill.duration, fight_duration - current_t)
+        if cast_now_window <= 0:
+            return False
+        cast_at = current_t + delay_duration
+        cast_delayed_window = min(summon_skill.duration, fight_duration - cast_at)
+        if cast_delayed_window <= 0:
+            return False
+
+        cur_hex = self._hex_multiplier_at(current_t)
+        future_hex = self._hex_multiplier_at(cast_at)
+        if future_hex <= cur_hex:
+            return False
+
+        horizon_end = current_t + max(cast_now_window, delay_duration + cast_delayed_window)
+        horizon_end = min(horizon_end, fight_duration)
+
+        # Companion per-second damage at each hex level. Build fresh
+        # snapshots so the snapshot's stored hex_multiplier is wired to the
+        # right level; `calculate_hit_damage` reads stats from the snapshot
+        # but does not itself apply hex, so we multiply at the end.
+        def _companion_dps_per_sec(snap_hex_mult: float) -> float:
+            snap = self._build_companion_snapshot(
+                active_buffs=current_active_buffs, hex_multiplier=snap_hex_mult,
+            )
+            damage_pct = self.get_skill_damage_pct(summon_name)
+            attacks_per_sec = 1.0 / summon_skill.attack_interval
+            hits = self.get_skill_hits(summon_name)
+            dmg_boss = self.calculate_hit_damage(
+                damage_pct, summon_skill.damage_type, summon_name,
+                is_boss_phase=True, attack_speed_mult=current_attack_speed_mult,
+                active_buffs=current_active_buffs, num_enemies=1, stat_override=snap,
+            )
+            if is_boss:
+                return dmg_boss * hits * 1 * attacks_per_sec * snap_hex_mult
+            dmg_mob = self.calculate_hit_damage(
+                damage_pct, summon_skill.damage_type, summon_name,
+                is_boss_phase=False, attack_speed_mult=current_attack_speed_mult,
+                active_buffs=current_active_buffs, num_enemies=num_enemies,
+                stat_override=snap,
+            )
+            targets_mob = min(self.get_skill_targets(summon_name), num_enemies)
+            mob_part = dmg_mob * hits * targets_mob * attacks_per_sec * snap_hex_mult * mob_time_fraction
+            boss_part = dmg_boss * hits * 1 * attacks_per_sec * snap_hex_mult * (1 - mob_time_fraction)
+            return mob_part + boss_part
+
+        comp_now_dps_sec = _companion_dps_per_sec(cur_hex)
+        comp_future_dps_sec = _companion_dps_per_sec(future_hex)
+
+        # summon-now totals. The player keeps attacking DURING the summon
+        # window, so we include BA damage across the whole horizon at the
+        # live hex multiplier — the hex bump that lands mid-summon-window
+        # multiplies the player's own damage even though the snapshot
+        # freezes the companion's hex.
+        now_companion = comp_now_dps_sec * cast_now_window
+        now_summon_end = current_t + cast_now_window
+        now_ba_during_summon = (
+            best_player_dps * cast_now_window
+            * self._avg_hex_between(current_t, now_summon_end)
+        )
+        now_post_seconds = max(0.0, horizon_end - now_summon_end)
+        now_post_ba = (
+            best_player_dps * now_post_seconds
+            * self._avg_hex_between(now_summon_end, horizon_end)
+        ) if now_post_seconds > 0 else 0.0
+        now_total = now_companion + now_ba_during_summon + now_post_ba
+
+        # delay-then-summon totals — same BA-everywhere treatment so the
+        # comparison is apples-to-apples.
+        delay_pre_ba = (
+            best_player_dps * delay_duration
+            * self._avg_hex_between(current_t, cast_at)
+        )
+        delay_companion = comp_future_dps_sec * cast_delayed_window
+        delay_summon_end = cast_at + cast_delayed_window
+        delay_ba_during_summon = (
+            best_player_dps * cast_delayed_window
+            * self._avg_hex_between(cast_at, delay_summon_end)
+        )
+        delay_post_seconds = max(0.0, horizon_end - delay_summon_end)
+        delay_post_ba = (
+            best_player_dps * delay_post_seconds
+            * self._avg_hex_between(delay_summon_end, horizon_end)
+        ) if delay_post_seconds > 0 else 0.0
+        delay_total = delay_pre_ba + delay_companion + delay_ba_during_summon + delay_post_ba
+
+        return delay_total > now_total
 
     def get_mastery_bonus(self, skill_name: str, effect_type: str) -> float:
         """Get total mastery bonus for a skill and effect type."""
@@ -4866,7 +5442,11 @@ class DPSCalculator:
         base, factor_index = skill.skill_bonuses[stat_name]
         return self.calc_skill_damage_with_factor(base, factor_index, level)
 
-    def calculate_attack_speed_mult(self, active_buffs: Optional[Set[str]] = None) -> float:
+    def calculate_attack_speed_mult(
+        self,
+        active_buffs: Optional[Set[str]] = None,
+        companion_summon_active: bool = False,
+    ) -> float:
         """
         Calculate attack speed multiplier including passive skills and active buffs.
 
@@ -4876,6 +5456,11 @@ class DPSCalculator:
 
         Args:
             active_buffs: Set of currently active buff names. If None, uses char.enabled_buffs.
+            companion_summon_active: When True, add the companion's
+                attack_speed bonus from `_companion_player_bonuses`
+                (e.g. Bishop's skill 8: +20% AS at full HP). Only used
+                by the realistic-DPS simulator; the legacy stat display
+                doesn't know about companion summon state.
 
         Returns:
             Attack speed multiplier capped at 2.5 (150% bonus)
@@ -4889,6 +5474,9 @@ class DPSCalculator:
         buff_bonuses = self.get_buff_stat_bonuses(active_buffs)
         for as_value in buff_bonuses.get("attack_speed", []):
             attack_speed_pct += as_value
+
+        if companion_summon_active:
+            attack_speed_pct += self._companion_player_bonuses.get('attack_speed', 0.0)
 
         return min(1 + attack_speed_pct / 100, 2.5)
 
@@ -5290,7 +5878,13 @@ class DPSCalculator:
                 hits_per_second += skill_hits / skill_cd
 
         # Summons (contribute hits based on interval and uptime)
+        # Skip companion summons — those are managed by the burst-window
+        # scheduler and their contribution to MB is handled via the snapshot's
+        # mortal_blow_forced flag, not by averaging into player MB uptime.
+        companion_keys_mb = getattr(self, '_companion_summon_keys', None) or set()
         for skill_name, skill in self._summon_skills.items():
+            if skill_name in companion_keys_mb:
+                continue
             if not self.char.is_skill_unlocked(skill_name):
                 continue
             if skill.duration <= 0 or skill.attack_interval <= 0:
@@ -5499,6 +6093,7 @@ class DPSCalculator:
         attack_speed_mult: Optional[float] = None,
         active_buffs: Optional[Set[str]] = None,
         num_enemies: int = 1,
+        stat_override: Optional[PlayerStatSnapshot] = None,
     ) -> float:
         """Calculate damage for a single hit.
 
@@ -5515,32 +6110,83 @@ class DPSCalculator:
                          If None, no buff bonuses are applied.
             num_enemies: Number of enemies (for Steal uptime calculation).
                         Boss phase callers should pass 1.
+            stat_override: Optional snapshot of the player's offensive stats at a
+                          specific point in time. When provided, all numerical stat
+                          reads (attack, main stat, damage%, boss/normal damage,
+                          basic/skill damage, final damage, crit, def pen) are taken
+                          from the snapshot instead of self.char + live bonuses.
+                          Buff/Mortal-Blow/Smokescreen logic still uses the
+                          `active_buffs` argument and live calc state — extended
+                          consumption of the snapshot's optional fields happens in
+                          Phase 2 of the burst-window scheduler work.
+                          When None (default), behavior is unchanged from before.
         """
         if attack_speed_mult is None:
             attack_speed_mult = 1.0
-        base = self.char.attack * (skill_damage_pct / 100)
+
+        # --- Resolve "effective" stat values ----------------------------------
+        # When stat_override is provided, read pre-totaled values from the
+        # snapshot (no further summation). When None, fall back to the live
+        # char + passive-bonus aggregation that existed before this change.
+        if stat_override is not None:
+            eff_attack = stat_override.attack
+            eff_main_stat_flat = stat_override.main_stat_flat_total
+            eff_main_stat_pct = stat_override.main_stat_pct_total
+            eff_main_stat_conv = stat_override.main_stat_conversion
+            eff_secondary_flat = stat_override.secondary_stat_flat
+            eff_secondary_pct = stat_override.secondary_stat_pct
+            eff_damage_pct = stat_override.damage_pct_total
+            eff_boss_damage = stat_override.boss_damage
+            eff_normal_damage = stat_override.normal_damage
+            eff_basic_attack_damage = stat_override.basic_attack_damage_total
+            eff_skill_damage = stat_override.skill_damage_total
+            eff_final_damage_pct = stat_override.final_damage_pct
+            eff_crit_rate = stat_override.crit_rate_total
+            eff_crit_damage = stat_override.crit_damage
+            eff_def_pen_pct = stat_override.def_pen_pct
+            # Recompute def_pen multiplier since the cached one is built from char.
+            _eff_def_pen_dec = min(eff_def_pen_pct / 100, 1.0)
+            eff_def_pen_mult = 1 / (1 + self.enemy_def * (1 - _eff_def_pen_dec))
+        else:
+            eff_attack = self.char.attack
+            eff_main_stat_flat = self.char.main_stat_flat + self.get_global_stat("main_stat_flat")
+            eff_main_stat_pct = self.char.main_stat_pct + self.get_total_stat_bonus("main_stat_pct")
+            eff_main_stat_conv = self.char.main_stat_conversion
+            eff_secondary_flat = self.char.secondary_stat_flat
+            eff_secondary_pct = self.char.secondary_stat_pct
+            eff_damage_pct = self.char.damage_pct + self.get_total_stat_bonus("damage_pct")
+            eff_boss_damage = self.char.boss_damage
+            eff_normal_damage = self.char.normal_damage
+            eff_basic_attack_damage = self.char.basic_attack_damage + self.get_total_stat_bonus("basic_attack_damage")
+            eff_skill_damage = self.char.skill_damage + self.get_total_stat_bonus("skill_damage")
+            eff_final_damage_pct = self.char.final_damage_pct
+            eff_crit_rate = self.char.crit_rate
+            eff_crit_damage = self.char.crit_damage
+            eff_def_pen_pct = self.char.def_pen_pct
+            eff_def_pen_mult = self._def_pen_mult
+
+        base = eff_attack * (skill_damage_pct / 100)
 
         # Main stat (1% per point) and secondary stat (0.25% per point)
         # stat_dmg_pct = main_stat * 0.01 + secondary_stat * 0.0025
         # multiplier = 1 + (stat_dmg_pct / 100)
-        base_main_stat = self.char.main_stat_flat + self.get_global_stat("main_stat_flat")
-        total_main_stat = base_main_stat * (1 + (self.char.main_stat_pct + self.get_total_stat_bonus("main_stat_pct")) / 100)
-        total_main_stat += self.char.main_stat_conversion  # skill-converted stat (e.g. Shield Mastery), not multiplied by %
-        total_secondary_stat = self.char.secondary_stat_flat * (1 + self.char.secondary_stat_pct / 100)
+        total_main_stat = eff_main_stat_flat * (1 + eff_main_stat_pct / 100)
+        total_main_stat += eff_main_stat_conv  # skill-converted stat (e.g. Shield Mastery), not multiplied by %
+        total_secondary_stat = eff_secondary_flat * (1 + eff_secondary_pct / 100)
         main_stat_mult = 1 + (total_main_stat / 10000) + (total_secondary_stat / 40000)
 
         # Damage %
-        damage_mult = 1 + (self.char.damage_pct + self.get_total_stat_bonus("damage_pct")) / 100
+        damage_mult = 1 + eff_damage_pct / 100
 
         # Phase-specific damage multiplier (for realistic DPS calculation)
         if is_boss_phase is True:
             # Boss phase: apply global boss damage + skill-specific boss damage masteries
-            phase_dmg = self.char.boss_damage
+            phase_dmg = eff_boss_damage
             phase_dmg += self.get_mastery_bonus(skill_name, "skill_boss_damage")
             phase_mult = 1 + phase_dmg / 100
         elif is_boss_phase is False:
             # Mob phase: apply global normal damage + skill-specific normal monster damage masteries
-            phase_dmg = self.char.normal_damage
+            phase_dmg = eff_normal_damage
             phase_dmg += self.get_mastery_bonus(skill_name, "skill_normal_monster_damage")
             # Add innate normal monster damage from skill definition (e.g., Arrow Platter +200%)
             if skill_name and skill_name in self._skills:
@@ -5549,30 +6195,34 @@ class DPSCalculator:
         else:
             # Legacy behavior (is_boss_phase=None): apply boss_mult to everything
             # This preserves backward compatibility for existing calculate_total_dps()
-            boss_dmg = self.char.boss_damage
+            boss_dmg = eff_boss_damage
             boss_dmg += self.get_mastery_bonus(skill_name, "skill_boss_damage")
             phase_mult = 1 + boss_dmg / 100
 
         # Skill/Basic Attack damage type
         # Note: get_total_stat_bonus already includes global mastery bonuses
         if damage_type == DamageType.BASIC:
-            type_bonus = self.char.basic_attack_damage
-            type_bonus += self.get_total_stat_bonus("basic_attack_damage")
+            type_bonus = eff_basic_attack_damage
         else:
-            type_bonus = self.char.skill_damage
-            type_bonus += self.get_total_stat_bonus("skill_damage")
+            type_bonus = eff_skill_damage
 
         type_mult = 1 + type_bonus / 100
 
         # Final damage (multiplicative)
         # Note: Global FD from extreme_archery and armor_break should be in char.final_damage_pct
         # via apply_passive_skill_stats() - they are NOT calculated here to avoid double-counting
-        final_mult = 1 + self.char.final_damage_pct / 100
+        final_mult = 1 + eff_final_damage_pct / 100
 
-        # Mortal Blow - FD with uptime calculation (kept inline due to variable uptime)
+        # Mortal Blow - FD with uptime calculation (kept inline due to variable uptime).
+        # When a stat_override snapshot was passed with mortal_blow_forced=True
+        # (the companion-summon path: assume optimal pre-stack), credit the
+        # full FD bonus rather than averaging by player MB uptime.
         mb_fd = self.get_skill_bonus_value("mortal_blow", "final_damage")
         if mb_fd > 0:
-            mb_uptime = self.calculate_mortal_blow_uptime(attack_speed_mult)
+            if stat_override is not None and stat_override.mortal_blow_forced:
+                mb_uptime = 1.0
+            else:
+                mb_uptime = self.calculate_mortal_blow_uptime(attack_speed_mult)
             final_mult *= (1 + (mb_fd * mb_uptime) / 100)
 
         # Shadow Shifter - FD buff with downtime after counterattack trigger
@@ -5622,7 +6272,13 @@ class DPSCalculator:
             final_mult *= (1 + enhancer_fd / 100)
 
         # Crit calculation
-        crit_rate_bonus = self.get_total_stat_bonus("crit_rate")
+        # Note: when stat_override is active, eff_crit_rate / eff_crit_damage
+        # already include any passive crit bonuses baked into the snapshot, so
+        # we skip the live get_total_stat_bonus("crit_rate") addition.
+        crit_rate_bonus = (
+            0.0 if stat_override is not None
+            else self.get_total_stat_bonus("crit_rate")
+        )
         crit_dmg_bonus = 0.0
 
         # Add bonuses from active buffs (e.g., Sharp Eyes, Dark Resonance)
@@ -5639,12 +6295,18 @@ class DPSCalculator:
             for fd_value in buff_bonuses.get("final_damage", []):
                 buff_final_damage += fd_value
 
-        crit_rate = min((self.char.crit_rate + crit_rate_bonus) / 100, 1.0)
+        crit_rate = min((eff_crit_rate + crit_rate_bonus) / 100, 1.0)
 
-        # Concentration (crit damage stacks) - PASSIVE_BUFF so not in char stats
-        # 7 stacks, ~100% uptime (TODO: implement precise uptime calculation)
+        # Concentration (crit damage stacks) - PASSIVE_BUFF so not in char stats.
+        # Snapshot path can override the implicit 7-stack assumption: the
+        # companion-summon path forces max stacks ("optimal pre-stack" — see
+        # plan Phase 4) regardless of what the player can actually maintain.
         conc_per_stack = self.get_skill_bonus_value("concentration", "crit_damage")
-        crit_dmg_bonus += conc_per_stack * 7
+        if stat_override is not None and stat_override.concentration_forced_stacks is not None:
+            conc_stacks = stat_override.concentration_forced_stacks
+        else:
+            conc_stacks = 7
+        crit_dmg_bonus += conc_per_stack * conc_stacks
 
         # Smokescreen mastery: +crit damage while Smokescreen is active
         sm_crit = self.get_mastery_bonus("smokescreen", "skill_effect")
@@ -5668,23 +6330,23 @@ class DPSCalculator:
             se_pct = se_skill.self_crit_damage_pct / 100
             if active_buffs is not None:
                 if "sharp_eyes" in active_buffs:
-                    crit_dmg_bonus += se_pct * self.char.crit_damage
+                    crit_dmg_bonus += se_pct * eff_crit_damage
             else:
                 from libs.cooldown_calc import calculate_buff_uptime
                 se_cd = self.char.get_effective_skill_cooldown(se_skill.cooldown, 0)
                 se_dur = self.get_effective_buff_duration("sharp_eyes")
                 se_uptime = calculate_buff_uptime(se_cd, se_dur, 60.0)
-                crit_dmg_bonus += se_pct * self.char.crit_damage * se_uptime
+                crit_dmg_bonus += se_pct * eff_crit_damage * se_uptime
 
-        crit_damage = self.char.crit_damage + crit_dmg_bonus
+        crit_damage = eff_crit_damage + crit_dmg_bonus
         crit_mult = 1 + crit_rate * (crit_damage / 100)
 
-        def_pen_mult = self._def_pen_mult
+        def_pen_mult = eff_def_pen_mult
         # Apply def_pen from active buffs (Smokescreen)
         if active_buffs:
             buff_def_pen = sum(buff_bonuses.get("def_pen", []))
             if buff_def_pen > 0:
-                total_def_pen = min((self.char.def_pen_pct + buff_def_pen) / 100, 1.0)
+                total_def_pen = min((eff_def_pen_pct + buff_def_pen) / 100, 1.0)
                 def_pen_mult = 1 / (1 + self.enemy_def * (1 - total_def_pen))
 
         # Apply buff attack % (Hyper Body, Cross Over Chains, Dark Resonance, Dark Sight)
@@ -5938,6 +6600,187 @@ class DPSCalculator:
 
         return effective_dps
 
+    def _calculate_summon_dps_value(
+        self,
+        summon_name: str,
+        summon_skill: SkillData,
+        remaining_fight_time: float,
+        current_active_buffs: Set[str],
+        current_attack_speed_mult: float,
+        num_enemies: int,
+        is_boss: bool,
+        mob_time_fraction: float,
+        skill_values_getter: Optional[Callable[[float, Set[str]], Dict[str, 'SkillActionValue']]] = None,
+        hex_multiplier: float = 1.0,
+    ) -> float:
+        """
+        Calculate the "equivalent DPS" of casting the companion summon now.
+
+        Parallel to `_calculate_buff_dps_value` and uses the same comparison
+        unit: total damage over the summon's window divided by the window.
+        That total includes both the companion's damage (using a frozen
+        snapshot of the player's stats at cast time) AND the player's
+        continued basic-attack damage during the window after cast — so the
+        scheduler can compare summon's score directly against
+        `_calculate_buff_dps_value` and a damage skill's `dps_value`.
+
+        See plan: C:/Users/ianpr/.claude/plans/sorted-nibbling-meteor.md (Phase 2).
+        """
+        if summon_skill.duration <= 0 or summon_skill.attack_interval <= 0:
+            return 0.0
+        # Window length (capped by remaining fight time)
+        window = min(summon_skill.duration, remaining_fight_time)
+        if window <= 0:
+            return 0.0
+
+        cast_time = self.get_cast_time(
+            summon_skill.cast_time, summon_skill.scales_with_attack_speed, current_attack_speed_mult,
+        )
+        if cast_time >= window:
+            return 0.0
+
+        # Build a stat snapshot of the player as they are right now. The
+        # companion will use this snapshot for its 30s of attacks regardless
+        # of how the player's buff state evolves afterward.
+        snapshot = self._build_companion_snapshot(
+            active_buffs=current_active_buffs, hex_multiplier=hex_multiplier,
+        )
+
+        # Companion attacks per second
+        interval = summon_skill.attack_interval
+        attacks_per_sec = 1.0 / interval
+
+        # Per-hit damage in each phase, computed against the snapshot
+        damage_pct = self.get_skill_damage_pct(summon_name)
+        dmg_mob = self.calculate_hit_damage(
+            damage_pct,
+            summon_skill.damage_type,
+            summon_name,
+            is_boss_phase=False,
+            attack_speed_mult=current_attack_speed_mult,
+            active_buffs=current_active_buffs,
+            num_enemies=num_enemies,
+            stat_override=snapshot,
+        )
+        dmg_boss = self.calculate_hit_damage(
+            damage_pct,
+            summon_skill.damage_type,
+            summon_name,
+            is_boss_phase=True,
+            attack_speed_mult=current_attack_speed_mult,
+            active_buffs=current_active_buffs,
+            num_enemies=1,
+            stat_override=snapshot,
+        )
+        hits = self.get_skill_hits(summon_name)
+        targets_mob = min(self.get_skill_targets(summon_name), num_enemies)
+
+        # Companion damage over the active window, phase-split.
+        if is_boss:
+            companion_damage = dmg_boss * hits * 1 * attacks_per_sec * window
+        else:
+            mob_damage = dmg_mob * hits * targets_mob * attacks_per_sec * window * mob_time_fraction
+            boss_damage = dmg_boss * hits * 1 * attacks_per_sec * window * (1 - mob_time_fraction)
+            companion_damage = mob_damage + boss_damage
+
+        # The simulator's main loop applies the snapshot's hex multiplier to
+        # companion damage at execution time. Mirror that here so the
+        # scoring function predicts what the run will actually produce —
+        # otherwise summons would be under-scored on hex-equipped builds
+        # and the delay-vs-summon-now comparison wouldn't see hex at all.
+        companion_damage *= hex_multiplier
+
+        # Player's basic-attack damage during the post-cast portion of the
+        # window. We pull the BA DPS at the current attack-speed/buff state
+        # from the skill_values cache (so we match exactly what _simulate_fight
+        # is computing for the damage-action comparison).
+        ba_dps = 0.0
+        if skill_values_getter is not None:
+            sv = skill_values_getter(current_attack_speed_mult, current_active_buffs)
+            # Identify the basic-attack action and read its phase DPS.
+            ba_name = self.char.get_active_basic_attack()
+            if ba_name and ba_name in sv:
+                action = sv[ba_name]
+                ba_dps = action.dps_value_boss if is_boss else action.dps_value_mob
+        ba_damage = ba_dps * max(0.0, window - cast_time)
+
+        total_damage = companion_damage + ba_damage
+        return total_damage / window
+
+    def _score_buff_then_summon_plan(
+        self,
+        summon_name: str,
+        summon_skill: SkillData,
+        buff_name: str,
+        buff_skill: SkillData,
+        remaining_fight_time: float,
+        current_active_buffs: Set[str],
+        current_attack_speed_mult: float,
+        num_enemies: int,
+        is_boss: bool,
+        mob_time_fraction: float,
+        skill_values_getter: Callable[[float, Set[str]], Dict[str, 'SkillActionValue']],
+        current_t: float = 0.0,
+    ) -> float:
+        """
+        Score the 2-action plan "cast `buff_name` first, then cast `summon_name`."
+
+        Returns total damage / horizon, using the same comparison unit as
+        `_calculate_buff_dps_value` and `_calculate_summon_dps_value` so the
+        scheduler can pick the best 1- or 2-action plan at each decision point.
+
+        The whole point of this lookahead is to catch "stack buffs first, then
+        summon" — under the 1-step greedy, summon's score doesn't credit the
+        snapshot uplift it WOULD get from a soon-to-be-cast buff, so the
+        scheduler casts summon prematurely without buff coverage.
+
+        See plan: C:/Users/ianpr/.claude/plans/sorted-nibbling-meteor.md (Phase 2).
+        """
+        # Time to cast the buff (buffs don't scale with attack speed)
+        buff_cast_time = self.get_cast_time(buff_skill.cast_time, False, current_attack_speed_mult)
+        if buff_cast_time >= remaining_fight_time:
+            return -1.0
+
+        # State AFTER casting the buff: it's active. Re-evaluate attack speed
+        # and the BA reference DPS using the new buff set.
+        future_buffs = current_active_buffs | {buff_name}
+        future_as = self.calculate_attack_speed_mult(future_buffs)
+
+        # Summon score under the future (post-buff) state. This captures the
+        # snapshot uplift the buff provides to the companion's entire window.
+        # Hex stack is read at the moment the summon would actually land
+        # (current_t + buff_cast_time), not at the current decision point.
+        summon_score_post_buff = self._calculate_summon_dps_value(
+            summon_name, summon_skill,
+            remaining_fight_time - buff_cast_time,
+            future_buffs, future_as,
+            num_enemies, is_boss, mob_time_fraction,
+            skill_values_getter=skill_values_getter,
+            hex_multiplier=self._hex_multiplier_at(current_t + buff_cast_time),
+        )
+        if summon_score_post_buff <= 0:
+            return -1.0
+        summon_window = min(summon_skill.duration, remaining_fight_time - buff_cast_time)
+        if summon_window <= 0:
+            return -1.0
+        summon_total_damage = summon_score_post_buff * summon_window
+
+        # Damage during the buff's cast time = current BA dps × cast_time.
+        # (Buffs themselves deal no damage, but the player keeps BA-ing.)
+        ba_name = self.char.get_active_basic_attack()
+        ba_during_cast = 0.0
+        if ba_name:
+            cur_sv = skill_values_getter(current_attack_speed_mult, current_active_buffs)
+            if ba_name in cur_sv:
+                cur_ba_dps = cur_sv[ba_name].dps_value_boss if is_boss else cur_sv[ba_name].dps_value_mob
+                ba_during_cast = cur_ba_dps * buff_cast_time
+
+        # Total damage over the 2-action plan's window: buff cast time + summon window
+        plan_window = buff_cast_time + summon_window
+        if plan_window <= 0:
+            return -1.0
+        return (ba_during_cast + summon_total_damage) / plan_window
+
     def _simulate_fight(
         self,
         fight_duration: float,
@@ -5974,6 +6817,24 @@ class DPSCalculator:
         buff_cooldowns: Dict[str, float] = {}   # buff_name -> cooldown_remaining
         for buff_name in available_buffs:
             buff_cooldowns[buff_name] = 0.0  # All buffs start off cooldown
+
+        # Track companion-summon state. summon_cooldowns gates re-casting (gated
+        # additionally by the 5-second start-of-fight lockout inside
+        # _get_available_summon_actions). active_summons[name] = seconds the
+        # summon has left to attack. When a summon expires its entry is
+        # removed and self._companion_snapshot is cleared.
+        companion_keys = getattr(self, '_companion_summon_keys', None) or set()
+        summon_cooldowns: Dict[str, float] = {name: 0.0 for name in companion_keys}
+        active_summons: Dict[str, float] = {}
+        self._companion_snapshot = None  # Cleared at sim start in case of reuse
+        # Bishop-style secondary skill cooldowns. Reset to 0 (fires
+        # immediately) each time a companion is summoned; reset to the
+        # skill's cooldown_s when fired. Tracked across resummons.
+        secondary_cooldowns: Dict[str, float] = {
+            sk.name: 0.0 for sk in self._companion_secondary_skills
+        }
+        # Bishop proc skill ICD timer (seconds remaining until next allowed proc).
+        proc_icd_remaining: float = 0.0
 
         # Current active buffs (empty set = no buffs)
         current_active_buffs: Set[str] = set()
@@ -6017,9 +6878,15 @@ class DPSCalculator:
                     current_active_buffs.discard(buff_name)
                     buffs_changed = True
 
-            # Recalculate if buffs changed
+            # Recalculate if buffs changed. Preserve the companion AS bonus
+            # (Bishop skill 8) if a companion is currently summoned —
+            # otherwise a player buff expiring mid-summon would falsely drop
+            # AS back to the no-companion baseline.
             if buffs_changed:
-                current_attack_speed_mult = self.calculate_attack_speed_mult(current_active_buffs)
+                current_attack_speed_mult = self.calculate_attack_speed_mult(
+                    current_active_buffs,
+                    companion_summon_active=bool(active_summons),
+                )
                 skill_values = get_cached_skill_values(current_attack_speed_mult, current_active_buffs)
 
             # Find best available damage action
@@ -6057,10 +6924,146 @@ class DPSCalculator:
                     best_buff_value = buff_value
                     best_buff_name = buff_name
 
-            # Decide: cast buff or use damage skill
-            cast_buff = best_buff_name is not None and best_buff_value > best_dps_value
+            # Check if casting the companion summon is better than buff or
+            # damage action. Gated by the 5-second start-of-fight lockout and
+            # by the summon's own cooldown — both checked inside
+            # _get_available_summon_actions.
+            best_summon_name = None
+            best_summon_value = -1.0
+            for summon_name, summon_skill in self._get_available_summon_actions(t, summon_cooldowns).items():
+                if summon_name in active_summons:
+                    continue  # Already summoned; can't re-cast while active
+                summon_value = self._calculate_summon_dps_value(
+                    summon_name, summon_skill, remaining_fight_time,
+                    current_active_buffs, current_attack_speed_mult,
+                    num_enemies, is_boss, mob_time_fraction,
+                    skill_values_getter=get_cached_skill_values,
+                    hex_multiplier=self._hex_multiplier_at(t),
+                )
+                if summon_value > best_summon_value:
+                    best_summon_value = summon_value
+                    best_summon_name = summon_name
 
-            if cast_buff and best_buff_name is not None:
+            # Phase 3.E: "delay summon for hex stack" check. If a hex
+            # threshold (t=20/40/60) lands soon enough that summoning AT the
+            # threshold beats summoning now over the longer horizon, suppress
+            # the summon plan this tick. The scheduler will fall through to
+            # damage/buff plans and re-evaluate at the next tick — when the
+            # threshold finally arrives, summon-now becomes the optimal plan
+            # again (because current_t == threshold and cur_hex == future_hex).
+            if best_summon_name is not None and best_summon_value > 0:
+                summon_skill_for_delay = self._summon_skills[best_summon_name]
+                delay_candidates = self._enumerate_hex_delay_candidates(
+                    t, fight_duration, summon_skill_for_delay.duration,
+                )
+                for delay_dur in delay_candidates:
+                    if self._delay_dominates_summon_now(
+                        best_summon_name, summon_skill_for_delay,
+                        delay_dur, t, fight_duration,
+                        best_dps_value if best_dps_value > 0 else 0.0,
+                        current_active_buffs, current_attack_speed_mult,
+                        num_enemies, is_boss, mob_time_fraction,
+                    ):
+                        best_summon_value = -1.0
+                        best_summon_name = None
+                        break
+
+            # 2-step lookahead: score the "cast buff B, then cast summon"
+            # plan for every castable buff. If any beats the 1-step plans,
+            # the scheduler casts the BUFF now (not the summon) so the
+            # summon's snapshot will include this buff when cast next.
+            best_buff_then_summon_score = -1.0
+            best_buff_for_summon = None
+            if best_summon_name is not None:
+                summon_skill_for_la = self._summon_skills[best_summon_name]
+                for buff_name_la, buff_skill_la in available_buffs.items():
+                    if buff_cooldowns.get(buff_name_la, 0) > 0:
+                        continue
+                    if buff_name_la in current_active_buffs:
+                        continue
+                    plan_score = self._score_buff_then_summon_plan(
+                        best_summon_name, summon_skill_for_la,
+                        buff_name_la, buff_skill_la,
+                        remaining_fight_time,
+                        current_active_buffs, current_attack_speed_mult,
+                        num_enemies, is_boss, mob_time_fraction,
+                        skill_values_getter=get_cached_skill_values,
+                        current_t=t,
+                    )
+                    if plan_score > best_buff_then_summon_score:
+                        best_buff_then_summon_score = plan_score
+                        best_buff_for_summon = buff_name_la
+
+            # Pick the highest-scoring plan and take its FIRST action.
+            # "buff_then_summon" first action is the BUFF (not the summon).
+            plan_scores = {
+                'damage':           best_dps_value,
+                'buff':             best_buff_value,
+                'summon':           best_summon_value,
+                'buff_then_summon': best_buff_then_summon_score,
+            }
+            chosen_plan = max(plan_scores, key=lambda k: plan_scores[k])
+
+            cast_summon = chosen_plan == 'summon'
+            cast_buff = chosen_plan in ('buff', 'buff_then_summon')
+            # If buff_then_summon won, redirect the buff cast to the one we
+            # specifically chose for the lookahead.
+            if chosen_plan == 'buff_then_summon':
+                best_buff_name = best_buff_for_summon
+
+            if cast_summon and best_summon_name is not None:
+                # Cast the companion summon. Snapshot the player's stats at
+                # this instant; the companion uses that frozen snapshot for
+                # the entire 30s window even as our own buffs decay.
+                summon_skill = self._summon_skills[best_summon_name]
+                cast_time = self.get_cast_time(
+                    summon_skill.cast_time, summon_skill.scales_with_attack_speed,
+                    current_attack_speed_mult,
+                )
+                if cast_time > remaining_fight_time:
+                    time_used = remaining_fight_time
+                else:
+                    time_used = cast_time
+                    # Snapshot includes the live hex multiplier at cast time —
+                    # the companion gets this stack count for its full 30s window
+                    # even as the player's own hex stacks continue to evolve.
+                    # Phase 4 enrichment (MB / Concentration) is bundled in
+                    # via `_build_companion_snapshot`.
+                    self._companion_snapshot = self._build_companion_snapshot(
+                        active_buffs=current_active_buffs,
+                        hex_multiplier=self._hex_multiplier_at(t),
+                    )
+                    active_summons[best_summon_name] = summon_skill.duration
+                    summon_cooldowns[best_summon_name] = summon_skill.cooldown
+                    # Reset Bishop-style secondary skill / proc cooldowns so
+                    # each fresh summon starts with the secondary ready to
+                    # cast and the proc ready to trigger.
+                    for sk in self._companion_secondary_skills:
+                        secondary_cooldowns[sk.name] = 0.0
+                    proc_icd_remaining = 0.0
+                    # Companion-provided attack_speed (Bishop skill 8) actually
+                    # accelerates the player's attack cadence — recompute the
+                    # AS multiplier and refresh the skill_values cache to pick
+                    # up the boosted attacks-per-second. Reverts at despawn.
+                    if self._companion_player_bonuses.get('attack_speed', 0.0) > 0:
+                        current_attack_speed_mult = self.calculate_attack_speed_mult(
+                            current_active_buffs, companion_summon_active=True,
+                        )
+                        skill_values = get_cached_skill_values(
+                            current_attack_speed_mult, current_active_buffs,
+                        )
+
+                if log_actions:
+                    fight_log.append(FightLogEntry(
+                        time=t,
+                        skill_name=best_summon_name,
+                        phase=phase,
+                        damage=0,  # Summon damage is accumulated below per-step
+                        cast_time=time_used,
+                        reason=f"Summon value: {best_summon_value:,.0f}/s (vs buff {best_buff_value:,.0f}/s, BA {best_dps_value:,.0f}/s)",
+                    ))
+
+            elif cast_buff and best_buff_name is not None:
                 # Cast the buff
                 buff_skill = available_buffs[best_buff_name]
                 cast_time = self.get_cast_time(buff_skill.cast_time, False, current_attack_speed_mult)
@@ -6080,8 +7083,12 @@ class DPSCalculator:
                         buff_skill.cooldown, mastery_cd_reduction
                     )
 
-                    # Recalculate attack speed and damage with new buff
-                    current_attack_speed_mult = self.calculate_attack_speed_mult(current_active_buffs)
+                    # Recalculate attack speed and damage with new buff.
+                    # Preserve the companion AS bonus if a companion is up.
+                    current_attack_speed_mult = self.calculate_attack_speed_mult(
+                        current_active_buffs,
+                        companion_summon_active=bool(active_summons),
+                    )
                     skill_values = get_cached_skill_values(current_attack_speed_mult, current_active_buffs)
 
                 # Log the buff cast
@@ -6106,6 +7113,28 @@ class DPSCalculator:
                     time_used = remaining_fight_time
                 else:
                     time_used = best_action.cast_time
+
+                # Apply the live hex-stack multiplier at this point in the fight.
+                # The realistic-DPS path used to post-multiply by a single
+                # time-averaged hex multiplier; we step it here instead.
+                damage *= self._hex_multiplier_at(t)
+
+                # Horn Flute: companion-gated FD applies to player damage only
+                # while a companion summon is currently up. The companion
+                # itself gets this FD via its frozen snapshot at cast time —
+                # we deliberately do NOT re-apply it to companion damage in
+                # the per-tick accumulation below.
+                if active_summons and self.char.companion_active_fd_decimal > 0:
+                    damage *= (1.0 + self.char.companion_active_fd_decimal)
+
+                # Bishop-style player buffs (skill 2/3/5/6/8): applies to
+                # player damage only while companion is summoned. Companion
+                # damage does NOT pick this up — same player/companion
+                # asymmetry as Horn Flute, but composed across multiple
+                # stats. See `_compose_companion_player_buff_mult` for the
+                # per-stat rules.
+                if active_summons and self._companion_player_bonuses:
+                    damage *= self._compose_companion_player_buff_mult()
 
                 # Log the action if requested
                 if log_actions:
@@ -6151,20 +7180,148 @@ class DPSCalculator:
 
             else:
                 # No action available - advance time by minimum remaining cooldown
-                all_cooldowns = list(cooldowns.values()) + list(buff_cooldowns.values())
+                all_cooldowns = (
+                    list(cooldowns.values())
+                    + list(buff_cooldowns.values())
+                    + list(summon_cooldowns.values())
+                )
                 positive_cds = [cd for cd in all_cooldowns if cd > 0]
                 if not positive_cds:
                     break  # Safety: avoid infinite loop
                 min_cd = min(positive_cds)
                 time_used = min_cd
 
-            # Advance time and decrement all cooldowns
+            # Accumulate companion damage for active summons over `time_used`.
+            # Each active summon does (time_used / interval) attacks; each attack
+            # deals damage_per_hit × hits × targets, where damage_per_hit comes
+            # from the frozen player snapshot taken at cast time.
+            if active_summons and self._companion_snapshot is not None:
+                for summon_name, _remaining in active_summons.items():
+                    summon_skill = self._summon_skills.get(summon_name)
+                    if summon_skill is None or summon_skill.attack_interval <= 0:
+                        continue
+                    # Active time within this step is min(time_used, remaining)
+                    active_dt = min(time_used, _remaining)
+                    if active_dt <= 0:
+                        continue
+                    attacks = active_dt / summon_skill.attack_interval
+                    damage_pct = self.get_skill_damage_pct(summon_name)
+                    hits = self.get_skill_hits(summon_name)
+                    targets = (
+                        1 if is_boss
+                        else min(self.get_skill_targets(summon_name), num_enemies)
+                    )
+                    per_hit = self.calculate_hit_damage(
+                        damage_pct,
+                        summon_skill.damage_type,
+                        summon_name,
+                        is_boss_phase=is_boss,
+                        attack_speed_mult=current_attack_speed_mult,
+                        active_buffs=current_active_buffs,
+                        num_enemies=num_enemies,
+                        stat_override=self._companion_snapshot,
+                    )
+                    companion_dmg = per_hit * hits * targets * attacks
+                    # Apply the hex multiplier the snapshot captured at the
+                    # moment summon was cast — the companion stays at that
+                    # multiplier for its entire 30s window even as the
+                    # player's own hex stacks evolve afterwards.
+                    companion_dmg *= self._companion_snapshot.hex_multiplier
+                    total_damage += companion_dmg
+                    if is_boss:
+                        boss_damage += companion_dmg
+                    else:
+                        mob_damage += companion_dmg
+
+                    # Bishop secondary skills (e.g. skill 4: 650% × 6 × 10 / 11s CD).
+                    # Each tracks its own cooldown; fires at most once per tick.
+                    # Uses the same snapshot as the primary attack — companion
+                    # self-buff FD + Horn Flute are baked in exactly once.
+                    for sk in self._companion_secondary_skills:
+                        cd_remaining = secondary_cooldowns.get(sk.name, 0.0)
+                        if cd_remaining > 0:
+                            secondary_cooldowns[sk.name] = max(0.0, cd_remaining - active_dt)
+                            continue
+                        sec_targets = 1 if is_boss else min(sk.targets, num_enemies)
+                        sec_per_hit = self.calculate_hit_damage(
+                            sk.damage_pct,
+                            summon_skill.damage_type,
+                            summon_name,
+                            is_boss_phase=is_boss,
+                            attack_speed_mult=current_attack_speed_mult,
+                            active_buffs=current_active_buffs,
+                            num_enemies=num_enemies,
+                            stat_override=self._companion_snapshot,
+                        )
+                        sec_dmg = sec_per_hit * sk.hits * sec_targets
+                        sec_dmg *= self._companion_snapshot.hex_multiplier
+                        total_damage += sec_dmg
+                        if is_boss:
+                            boss_damage += sec_dmg
+                        else:
+                            mob_damage += sec_dmg
+                        secondary_cooldowns[sk.name] = sk.cooldown_s
+
+                    # Bishop proc skill (e.g. skill 7: 20% per attack, 3s ICD,
+                    # 2600% × 7 targets). Expected-value model: per tick,
+                    # contribute `expected_procs × per-proc damage`, capped by
+                    # ICD so we never exceed `active_dt / icd_s` procs.
+                    proc = self._companion_proc_skill
+                    if proc is not None:
+                        proc_icd_remaining = max(0.0, proc_icd_remaining - active_dt)
+                        # Procs we'd see in this tick if uncapped:
+                        proc_attempts = attacks * proc.proc_chance
+                        # ICD cap: at most `active_dt / icd_s` procs may fire
+                        # (e.g., 1s tick with 3s ICD → 0.33 cap).
+                        proc_cap = active_dt / proc.icd_s if proc.icd_s > 0 else proc_attempts
+                        expected_procs = min(proc_attempts, proc_cap)
+                        if expected_procs > 0:
+                            proc_targets = 1 if is_boss else min(proc.targets, num_enemies)
+                            proc_per_hit = self.calculate_hit_damage(
+                                proc.damage_pct,
+                                summon_skill.damage_type,
+                                summon_name,
+                                is_boss_phase=is_boss,
+                                attack_speed_mult=current_attack_speed_mult,
+                                active_buffs=current_active_buffs,
+                                num_enemies=num_enemies,
+                                stat_override=self._companion_snapshot,
+                            )
+                            proc_dmg = proc_per_hit * proc.hits * proc_targets * expected_procs
+                            proc_dmg *= self._companion_snapshot.hex_multiplier
+                            total_damage += proc_dmg
+                            if is_boss:
+                                boss_damage += proc_dmg
+                            else:
+                                mob_damage += proc_dmg
+
+            # Advance time and decrement all cooldowns / timers
             for name in cooldowns:
                 cooldowns[name] = max(0, cooldowns[name] - time_used)
             for name in buff_cooldowns:
                 buff_cooldowns[name] = max(0, buff_cooldowns[name] - time_used)
             for name in buff_timers:
                 buff_timers[name] = max(0, buff_timers[name] - time_used)
+            # Summon cooldowns decrement; active summons decrement and expire.
+            had_active_summon = bool(active_summons)
+            for name in list(summon_cooldowns.keys()):
+                summon_cooldowns[name] = max(0, summon_cooldowns[name] - time_used)
+            for name in list(active_summons.keys()):
+                active_summons[name] -= time_used
+                if active_summons[name] <= 0:
+                    del active_summons[name]
+            # If no companion is active, clear the snapshot so the next summon
+            # cast captures fresh stats. Also reset attack speed to baseline
+            # (Bishop skill 8's +20% AS only applied while the companion was up).
+            if not active_summons:
+                self._companion_snapshot = None
+                if had_active_summon and self._companion_player_bonuses.get('attack_speed', 0.0) > 0:
+                    current_attack_speed_mult = self.calculate_attack_speed_mult(
+                        current_active_buffs, companion_summon_active=False,
+                    )
+                    skill_values = get_cached_skill_values(
+                        current_attack_speed_mult, current_active_buffs,
+                    )
             t += time_used
 
         return total_damage, basic_damage, active_damage, mob_damage, boss_damage, fight_log
@@ -6196,7 +7353,15 @@ class DPSCalculator:
         total_mob_dps = 0.0
         total_boss_dps = 0.0
 
+        # Companion summons are scheduled as discrete actions by the burst-window
+        # scheduler (Phase 2 of the snapshot work) — accumulating their damage
+        # here would double-count. Skip them; the scheduler accumulates their
+        # damage into player_active_dmg / phase-specific buckets directly.
+        companion_keys = getattr(self, '_companion_summon_keys', None) or set()
+
         for skill_name, skill in self._summon_skills.items():
+            if skill_name in companion_keys:
+                continue
             if not self.char.is_skill_unlocked(skill_name):
                 continue
             if skill.duration <= 0 or skill.attack_interval <= 0:
@@ -6756,6 +7921,24 @@ class DPSCalculator:
         proc_total, proc_mob, proc_boss = self._calc_procs_dps_phased(
             fight_duration, num_enemies, mob_time_fraction, attack_speed_mult
         )
+
+        # Hex Necklace applies to non-companion summons (Phoenix, Arrow Platter)
+        # and procs (Final Attack, Mark of Assassin, etc.). The player's own
+        # damage gets hex applied per damage event inside `_simulate_fight`,
+        # and companion summons get hex via the snapshot — so those paths
+        # are already covered. _calc_summons_dps_phased / _calc_procs_dps_phased
+        # do NOT apply hex internally; we apply the time-averaged multiplier
+        # here so the realistic path's summon/proc DPS isn't under-counted.
+        hex_stars = getattr(self.char, 'hex_necklace_stars', 0) or 0
+        if hex_stars > 0:
+            from game.artifacts import calculate_hex_average_multiplier
+            hex_avg = calculate_hex_average_multiplier(hex_stars, fight_duration)
+            summon_total *= hex_avg
+            summon_mob *= hex_avg
+            summon_boss *= hex_avg
+            proc_total *= hex_avg
+            proc_mob *= hex_avg
+            proc_boss *= hex_avg
 
         # Convert player damage to DPS
         player_mob_dps = player_mob_dmg / fight_duration

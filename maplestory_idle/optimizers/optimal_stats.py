@@ -300,11 +300,17 @@ def calculate_marginal_dps_value(
     amount: float,
     calc_dps_func: Callable,
     baseline_dps: float = None,
+    fast_evaluator: Optional[Any] = None,
 ) -> float:
     """
     Calculate the % DPS gain from adding `amount` of `stat_type`.
 
     Pass `baseline_dps` to skip recomputing it when the caller already has it.
+
+    If `fast_evaluator` is provided (a `utils.dps_calculator.FastDPSEvaluator`),
+    the candidate's DPS is computed via the fast path when `stat_type` is not
+    sequence-affecting — skipping the realistic-DPS simulator entirely.
+    Otherwise behaves identically to the no-evaluator case.
     """
     if baseline_dps is None:
         baseline_dps = calc_dps_func(current_stats)
@@ -312,7 +318,10 @@ def calculate_marginal_dps_value(
         return 0
     modified_stats = copy.deepcopy(current_stats)
     _apply_stat_to_dict(modified_stats, stat_type, amount)
-    new_dps = calc_dps_func(modified_stats)
+    if fast_evaluator is not None:
+        new_dps = fast_evaluator.evaluate(modified_stats, changed_stat=stat_type)
+    else:
+        new_dps = calc_dps_func(modified_stats)
     return ((new_dps / baseline_dps) - 1) * 100
 
 
@@ -343,12 +352,17 @@ def calculate_slot_efficiency(
     calc_dps_func: Callable,
     tier: str = "mystic",
     pot_type: str = "regular",
+    fast_evaluator: Optional[Any] = None,
 ) -> List[Dict]:
     """
     Calculate efficiency of each stat option for a slot.
 
     Returns list of {stat, max_value, dps_gain, efficiency, is_exclusive}
     sorted by efficiency (highest first).
+
+    If `fast_evaluator` is provided, candidates that don't affect the action
+    sequence are evaluated via the fast (legacy + scaling) path. Sequence-
+    affecting candidates still run the realistic simulator.
     """
     results = []
 
@@ -368,7 +382,8 @@ def calculate_slot_efficiency(
             continue
 
         dps_gain = calculate_marginal_dps_value(
-            current_stats, stat, max_value, calc_dps_func, baseline_dps=baseline_dps
+            current_stats, stat, max_value, calc_dps_func,
+            baseline_dps=baseline_dps, fast_evaluator=fast_evaluator,
         )
         efficiency = dps_gain / max_value if max_value > 0 else 0
 

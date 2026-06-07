@@ -16,7 +16,7 @@ All special potentials are properly handled:
 import functools
 import sys
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import streamlit as st
 
 # Add parent directory to path for imports (maplestory_idle root)
@@ -476,6 +476,10 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
         'all_skills_bonus': 0,
         'skill_cd_reduction': 0,
         'buff_duration': 0,
+        # Extra seconds added to the companion summon's 30s base duration
+        # (shoes special potential, Glass Slipper artifact). Read by the
+        # realistic-DPS simulator; sequence-affecting.
+        'companion_duration': 0,
         'skill_1st_bonus': 0,
         'skill_2nd_bonus': 0,
         'skill_3rd_bonus': 0,
@@ -493,6 +497,11 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
         # Multiplicative stats - stored as lists for stacking calculation
         'def_pen_sources': [],       # List of (source_name, value, priority) tuples
         'final_damage_sources': [],  # List of decimal values (e.g., 0.10 for 10%)
+        # Decimal values of FD sources gated on "companion is currently summoned"
+        # (Horn Flute). Multiplied through, applied only when active_summons
+        # is non-empty in _simulate_fight. NOT added to final_damage_sources
+        # because that path treats sources as always-on.
+        'companion_active_fd_sources': [],
         'attack_speed_sources': [],  # List of (source_name, value) tuples
         # Special artifact tracking
         'hex_necklace_stars': 0,     # Hexagon Necklace stars (for time-weighted calculation)
@@ -626,6 +635,11 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
             return
         if stat_name == 'buff_duration':
             stats['buff_duration'] += value
+            return
+        if stat_name == 'companion_duration':
+            # Shoe special potential / glass slipper artifact: extends the
+            # companion summon's 30s base duration by N seconds.
+            stats['companion_duration'] += value
             return
 
         # Stat name aliases - map potential stat names to stats dict keys
@@ -835,6 +849,34 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
     equipped_companions = getattr(user_data, 'equipped_companions', []) or []
     companion_levels = getattr(user_data, 'companion_levels', {}) or {}
 
+    # MAIN slot (index 0) companion summon mechanic — record (advancement, level)
+    # so calculate_dps can inject a synthetic SUMMON skill into the calculator.
+    # See game/companions.py SUMMON MECHANIC section for the model.
+    # Also record the companion's self-buff FD (3rd/4th job get +75% by default);
+    # baked into the companion's snapshot at cast time so every companion
+    # attack during the 30s window benefits.
+    main_comp_key = equipped_companions[0] if equipped_companions else None
+    if main_comp_key and main_comp_key in COMPANIONS:
+        main_level = companion_levels.get(main_comp_key, 0)
+        if main_level > 0:
+            stats['_main_companion_summon'] = (
+                COMPANIONS[main_comp_key].advancement,
+                main_level,
+            )
+            # Level-scaled self-buff FD (+25% at each of L5/L8/L10 for 3rd/4th
+            # job companions). At level 1-4 this returns 0; at max level, +75%.
+            stats['_main_companion_self_buff_fd_decimal'] = (
+                COMPANIONS[main_comp_key].get_self_buff_fd_decimal(main_level)
+            )
+            # Per-companion kit data — empty for non-Bishop today; populated
+            # for Bishop 4th (player buffs, primary attack override,
+            # secondary skill, proc). Routed into the calculator below.
+            _main_comp = COMPANIONS[main_comp_key]
+            stats['_main_companion_player_bonuses'] = dict(_main_comp.summon_active_player_bonuses)
+            stats['_main_companion_primary_attack_override'] = _main_comp.summon_primary_attack_override
+            stats['_main_companion_secondary_skills'] = list(_main_comp.summon_secondary_skills)
+            stats['_main_companion_proc_skill'] = _main_comp.summon_proc_skill
+
     # On-equip stats from equipped companions
     for comp_key in equipped_companions:
         if not comp_key or comp_key not in COMPANIONS:
@@ -1019,6 +1061,16 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                 continue  # Skip standard effect loop for this artifact
 
             for effect in defn.active_effects:
+                # Companion-gated effects (Horn Flute): route raw value (no
+                # uptime averaging) into a dedicated source list. The
+                # realistic-DPS simulator gates them on actual summon-active
+                # state; the legacy path averages them in below.
+                if effect.companion_gated and effect.stat == 'final_damage':
+                    raw_value = effect.get_value(stars)
+                    if raw_value > 0:
+                        stats['companion_active_fd_sources'].append(raw_value)
+                    continue
+
                 effect_value = effect.get_value(stars) * uptime
 
                 if effect.effect_type == EffectType.DERIVED and effect.derived_from:
@@ -1094,9 +1146,16 @@ def aggregate_stats(user_data, star_overrides: Dict[str, int] = None, apply_adju
                 elif stat == 'buff_duration':
                     # Buff duration: decimal → percentage points; extends buff uptime
                     stats['buff_duration'] += effect_value * 100
+                elif stat == 'companion_duration':
+                    # +X% to the companion summon window. Stored as percentage
+                    # points so the simulator can do `base * (1 + pct/100)`.
+                    # Hero-power values arrive as a decimal (0.20 = +20%) so
+                    # scale × 100, matching how other percent stats convert.
+                    # Sequence-affecting in the realistic simulator.
+                    stats['companion_duration'] += effect_value * 100
                 # Utility stats (no DPS impact) - silently skip
                 elif stat in ('hp_recovery', 'hp_mp_recovery',
-                              'companion_duration', 'cooldown_reduction', 'utility'):
+                              'cooldown_reduction', 'utility'):
                     pass
 
     # Artifact inventory effects (passive bonuses from all owned artifacts)
@@ -1666,7 +1725,8 @@ def calculate_basic_attack_damage(stats: Dict[str, Any], enemy_def: float = 0.75
 def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: float = 0.752,
                    job_class: JobClass = None, use_realistic_dps: bool = False,
                    boss_importance: float = 0.7, log_actions: bool = False,
-                   boss_damage_multiplier: float = 1.0) -> Dict[str, Any]:
+                   boss_damage_multiplier: float = 1.0,
+                   include_companion_summon: bool = True) -> Dict[str, Any]:
     """
     Calculate DPS using the full skill rotation model.
 
@@ -1717,6 +1777,23 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     fd_correction = stats.get('final_damage_correction', 1.0)
     if fd_correction != 1.0:
         fd_mult *= fd_correction
+
+    # Companion-gated FD (Horn Flute): the artifact only applies its FD bonus
+    # while a companion summon is currently up. We split paths here:
+    #   - Realistic: store the raw combined decimal on the character; the
+    #     simulator gates it on `active_summons` and bakes it into the
+    #     companion snapshot at cast time.
+    #   - Legacy:    no simulator to gate timing, so average the FD bonus by
+    #     the companion's flat duty cycle (30s on / 90s cooldown ≈ 33%).
+    companion_gated_fd_sources = stats.get('companion_active_fd_sources', [])
+    companion_gated_fd_mult = calculate_final_damage_mult(companion_gated_fd_sources)
+    companion_active_fd_decimal = companion_gated_fd_mult - 1.0  # +0.20 = +20% FD
+    if not use_realistic_dps and companion_active_fd_decimal > 0:
+        from game.companions import SUMMON_DURATION_S, SUMMON_COOLDOWN_S
+        # Cap at 1.0 in case a companion_duration potential ever pushes the
+        # window past the cooldown cycle.
+        companion_uptime = min(1.0, SUMMON_DURATION_S / SUMMON_COOLDOWN_S)
+        fd_mult *= (1 + companion_active_fd_decimal * companion_uptime)
 
     # Main stat calculation (with manual adjustment if present)
     main_stat_flat = stats.get(main_flat_key, 0)
@@ -1790,6 +1867,16 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     char.ba_target_bonus = int(stats.get('ba_target_bonus', 0))
     char.skill_cd_reduction = stats.get('skill_cd_reduction', 0)
     char.buff_duration_pct = stats.get('buff_duration', 0)
+    # Hex necklace star count — the simulator steps stacks live, so the
+    # realistic path needs the star count to look up per-stack multipliers.
+    char.hex_necklace_stars = int(stats.get('hex_necklace_stars', 0))
+    # Companion-gated FD (Horn Flute), combined as a multiplicative decimal.
+    # Realistic-DPS only: applied to player damage events while a companion
+    # is summoned, AND baked into the companion's snapshot once at cast time.
+    # Legacy mode already folded this into fd_mult above (averaged by uptime).
+    char.companion_active_fd_decimal = (
+        companion_active_fd_decimal if use_realistic_dps else 0.0
+    )
 
     # Job-specific skill level bonuses from equipment
     char.skill_1st_bonus = int(stats.get('skill_1st_bonus', 0))
@@ -1829,6 +1916,44 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     # Calculate DPS using full skill rotation model
     calc = DPSCalculator(char, enemy_def=enemy_def)
 
+    # Inject the main-slot companion as a synthetic SUMMON if there is one.
+    # See game/companions.py SUMMON MECHANIC + game/skills.py
+    # build_companion_summon_skill_data / DPSCalculator.register_companion_summon.
+    main_companion_summon = stats.get('_main_companion_summon')
+    if include_companion_summon and main_companion_summon is not None:
+        from game.skills import build_companion_summon_skill_data
+        from dataclasses import replace as _dc_replace
+        advancement, comp_level = main_companion_summon
+        primary_override = stats.get('_main_companion_primary_attack_override')
+        companion_skill = build_companion_summon_skill_data(
+            advancement, comp_level,
+            primary_attack_override=primary_override,
+        )
+        if companion_skill is not None:
+            # Apply +X% companion duration (shoes special, Glass Shoes artifact)
+            # by extending the skill's duration before registering. The scheduler
+            # then reads this longer window naturally; nothing downstream needs
+            # to know about the stat.
+            companion_duration_pct = stats.get('companion_duration', 0)
+            if companion_duration_pct > 0:
+                companion_skill = _dc_replace(
+                    companion_skill,
+                    duration=companion_skill.duration * (1 + companion_duration_pct / 100),
+                )
+            calc.register_companion_summon(companion_skill)
+            # Companion self-buff FD (3rd/4th job auto-cast OnStart): baked
+            # into the snapshot at cast time so all companion hits during
+            # the 30s window benefit. Doesn't affect player damage.
+            self_buff_fd = stats.get('_main_companion_self_buff_fd_decimal', 0.0)
+            if self_buff_fd > 0:
+                calc._companion_self_buff_fd_decimal = self_buff_fd
+            # Bishop-style player buffs + secondary skill + proc. Empty/None
+            # for non-Bishop companions today; the simulator only acts when
+            # these are populated.
+            calc._companion_player_bonuses = stats.get('_main_companion_player_bonuses', {})
+            calc._companion_secondary_skills = stats.get('_main_companion_secondary_skills', [])
+            calc._companion_proc_skill = stats.get('_main_companion_proc_skill', None)
+
     if use_realistic_dps:
         # Phase-aware simulation: proper boss/normal damage separation
         dps_result = calc.calculate_realistic_dps(
@@ -1848,8 +1973,12 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
         )
 
     # Apply damage range multiplier (not handled by DPSCalculator)
-    # Apply Hex Necklace multiplier (calculated during aggregation, varies by scenario)
-    hex_mult = stats.get('hex_multiplier', 1.0)
+    # Apply Hex Necklace multiplier. In LEGACY mode this is a time-averaged
+    # post-multiplier baked at aggregation time. In REALISTIC mode the
+    # simulator already stepped hex stacks live per damage event (see
+    # DPSCalculator._hex_multiplier_at and the per-tick multiplication in
+    # _simulate_fight), so we must NOT re-apply it here.
+    hex_mult = stats.get('hex_multiplier', 1.0) if not use_realistic_dps else 1.0
     final_total = dps_result.total_dps * dmg_range_mult * hex_mult
 
     # Also calculate old-style result for breakdown display (single-target reference)
@@ -1909,6 +2038,139 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
         # Fight simulation log (only populated when log_actions=True)
         'fight_log': dps_result.fight_log,
     }
+
+
+# =============================================================================
+# Fast-path DPS evaluation for the optimizer
+# =============================================================================
+#
+# The realistic simulator is slow per candidate evaluation. Most optimizer
+# candidates only change stats that multiply through the damage chain
+# (attack, crit, damage %, FD, def pen, etc.) — those don't affect WHICH
+# actions get cast, only the damage each action deals. For those candidates
+# we can evaluate via the closed-form legacy path and scale the result by
+# a one-time baseline ratio.
+#
+# A handful of stats DO change the action sequence (when buffs/summons fire,
+# how long they stay up). Candidates touching those must re-run the sim.
+
+# Keys are stat-dict names (what aggregate_stats populates) and the matching
+# potential-name aliases (what some optimizer code paths key by). Either form
+# triggers the sequence-aware re-sim.
+SEQUENCE_AFFECTING_STAT_KEYS = frozenset({
+    # Stats-dict keys (populated by aggregate_stats)
+    'skill_cd_reduction',     # Hat special potential, hero power
+    'buff_duration',          # Belt special potential, hero power, artifacts
+    'companion_duration',     # Shoes special potential, Glass Shoes artifact
+    # Potential-name aliases (used by some optimizer call sites)
+    'skill_cd',
+})
+
+
+def is_sequence_affecting(stat_name: str) -> bool:
+    """
+    True iff a candidate touching `stat_name` requires re-running the
+    realistic simulator. Everything else can use the legacy + ratio
+    fast path in `FastDPSEvaluator.evaluate`.
+    """
+    return stat_name in SEQUENCE_AFFECTING_STAT_KEYS
+
+
+class FastDPSEvaluator:
+    """
+    Optimizer helper that scales legacy-path candidate evaluations to
+    match a realistic baseline. Reduces per-candidate cost from "run the
+    full simulator" to "run the closed-form formula and multiply by a
+    precomputed ratio" for candidates that don't change the action
+    sequence.
+
+    Usage:
+        evaluator = FastDPSEvaluator(
+            baseline_stats=current_stats,
+            combat_mode=data.combat_mode,
+            enemy_def=enemy_def,
+            calculate_dps_fn=calculate_dps,
+            extra_kwargs={'job_class': job_class, 'boss_importance': 0.7},
+        )
+        # For each candidate:
+        candidate_dps = evaluator.evaluate(
+            candidate_stats,
+            changed_stat='damage_pct',   # non-sequence -> fast path
+        )
+
+    When `changed_stat` is sequence-affecting (or None / unknown), the
+    evaluator runs the realistic simulator. Otherwise it runs the legacy
+    path and multiplies by `baseline_realistic_dps / baseline_legacy_dps`.
+    """
+
+    def __init__(
+        self,
+        baseline_stats: Dict[str, Any],
+        combat_mode: str,
+        enemy_def: float,
+        calculate_dps_fn,
+        extra_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        self._calculate_dps = calculate_dps_fn
+        self._combat_mode = combat_mode
+        self._enemy_def = enemy_def
+        self._extra_kwargs = dict(extra_kwargs or {})
+
+        # Strip use_realistic_dps from extra kwargs — we control it.
+        self._extra_kwargs.pop('use_realistic_dps', None)
+        self._extra_kwargs.pop('log_actions', None)
+
+        # Baseline realistic (with sim) — used as the anchor everything else
+        # is scaled toward.
+        self._baseline_realistic = self._calculate_dps(
+            baseline_stats, combat_mode, enemy_def,
+            use_realistic_dps=True, log_actions=False,
+            **self._extra_kwargs,
+        )
+        # Baseline legacy (closed-form) — used to compute the scaling ratio.
+        baseline_legacy = self._calculate_dps(
+            baseline_stats, combat_mode, enemy_def,
+            use_realistic_dps=False, log_actions=False,
+            **self._extra_kwargs,
+        )
+
+        real_dps = self._baseline_realistic.get('total', 0.0)
+        legacy_dps = baseline_legacy.get('total', 0.0)
+        # Ratio of "what the realistic sim produces" to "what the legacy
+        # formula produces" at the baseline. For non-sequence candidates the
+        # legacy path scales identically with stat changes, so this ratio
+        # transfers from baseline to candidate.
+        self._ratio = (real_dps / legacy_dps) if legacy_dps > 0 else 1.0
+
+    @property
+    def baseline_realistic_dps(self) -> float:
+        return self._baseline_realistic.get('total', 0.0)
+
+    @property
+    def ratio(self) -> float:
+        """realistic / legacy DPS at the baseline. Public for diagnostics."""
+        return self._ratio
+
+    def evaluate(
+        self,
+        candidate_stats: Dict[str, Any],
+        changed_stat: Optional[str] = None,
+    ) -> float:
+        """
+        Predicted realistic-path DPS for `candidate_stats`.
+
+        - `changed_stat`: hint about which stat differs from baseline. If
+          sequence-affecting (or None/unknown), we re-run the realistic
+          sim. Otherwise we run legacy and scale.
+        """
+        needs_sim = changed_stat is None or is_sequence_affecting(changed_stat)
+        result = self._calculate_dps(
+            candidate_stats, self._combat_mode, self._enemy_def,
+            use_realistic_dps=needs_sim, log_actions=False,
+            **self._extra_kwargs,
+        )
+        dps = result.get('total', 0.0)
+        return dps if needs_sim else dps * self._ratio
 
 
 # =============================================================================

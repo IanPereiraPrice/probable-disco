@@ -4,10 +4,14 @@ Configure companion inventory levels and equipped companions.
 """
 import streamlit as st
 from utils.data_manager import save_user_data
+from utils.dps_calculator import aggregate_stats, calculate_dps
+from core import ENEMY_DEFENSE_VALUES
 from game.companions import (
     COMPANIONS, JobAdvancement, TIER_DISPLAY, ON_EQUIP_DISPLAY,
-    MAX_LEVELS, get_companions_by_advancement
+    MAX_LEVELS, get_companions_by_advancement,
+    get_companion_summon_attack, SUMMON_DURATION_S, SUMMON_COOLDOWN_S,
 )
+from game.job_classes import JobClass
 
 st.set_page_config(page_title="Companions", page_icon="🐾", layout="wide")
 
@@ -41,7 +45,7 @@ st.info("""
 """)
 
 # Create tabs for Inventory and Equipped
-tab1, tab2, tab3 = st.tabs(["Companion Inventory", "Equipped Companions", "Stats Summary"])
+tab1, tab2, tab3, tab4 = st.tabs(["Companion Inventory", "Equipped Companions", "Stats Summary", "Summon DPS"])
 
 with tab1:
     st.subheader("Companion Inventory")
@@ -262,3 +266,99 @@ with tab3:
             st.markdown(f"- **{stat_name}**: +{value:.1f}")
     else:
         st.info("No companions equipped yet.")
+
+
+with tab4:
+    st.subheader("Companion Summon DPS")
+    st.caption(
+        f"Your equipped MAIN-slot companion can be summoned for "
+        f"{SUMMON_DURATION_S:.0f}s every {SUMMON_COOLDOWN_S:.0f}s (uptime "
+        f"{SUMMON_DURATION_S / SUMMON_COOLDOWN_S * 100:.1f}%). While summoned "
+        f"it attacks independently using the player's stats. "
+        f"Sub-slot companions stay passive (on-equip + inventory only)."
+    )
+
+    main_key = data.equipped_companions[0] if data.equipped_companions else None
+    if not main_key or main_key not in COMPANIONS:
+        st.info("No main-slot companion equipped (slot 1 is empty). Equip one on the 'Equipped Companions' tab.")
+    else:
+        cdef = COMPANIONS[main_key]
+        comp_level = data.companion_levels.get(main_key, 0)
+        if comp_level <= 0:
+            st.warning(f"Main companion {cdef.name} is not owned (level 0).")
+        else:
+            attack = get_companion_summon_attack(cdef.advancement, comp_level)
+
+            col_id, col_dur, col_cd = st.columns(3)
+            with col_id:
+                st.metric("Main companion", f"{cdef.name}", delta=f"Lv {comp_level} ({TIER_DISPLAY.get(cdef.advancement, '?')})")
+            with col_dur:
+                st.metric("Summon duration", f"{SUMMON_DURATION_S:.0f}s")
+            with col_cd:
+                st.metric("Cooldown", f"{SUMMON_COOLDOWN_S:.0f}s")
+
+            if attack is None:
+                st.info(
+                    f"**{cdef.name}** is at the Basic tier — it can be summoned but has "
+                    f"no active attack (per the datamine), so it contributes 0 DPS while "
+                    f"summoned. Higher-tier (1st-Job and above) companions deal damage."
+                )
+            else:
+                st.markdown("##### Per-hit specs at current level")
+                col_dmg, col_hits, col_int = st.columns(3)
+                with col_dmg:
+                    st.metric("Damage per hit", f"{attack['damage_pct']:.1f}% of attack")
+                with col_hits:
+                    st.metric("Hits / attack", f"{attack['hits']}")
+                with col_int:
+                    st.metric("Attack interval", f"{attack['attack_interval_s']:.2f}s")
+
+                st.markdown("##### Value of summoning")
+                with st.spinner("Calculating DPS with and without main companion summon..."):
+                    try:
+                        chapter_str = getattr(data, 'chapter', 'Chapter 27')
+                        enemy_def = ENEMY_DEFENSE_VALUES.get(chapter_str, 0.752)
+                        job_class = JobClass(data.job_class)
+                        combat_mode = getattr(data, 'combat_mode', 'stage')
+                        use_realistic = getattr(data, 'use_realistic_dps', False)
+                        boss_importance = getattr(data, 'boss_importance', 70) / 100.0
+                        boss_damage_multiplier = getattr(data, 'boss_damage_multiplier', 1.0)
+                        stats = aggregate_stats(data)
+
+                        common_kwargs = dict(
+                            combat_mode=combat_mode,
+                            enemy_def=enemy_def,
+                            job_class=job_class,
+                            use_realistic_dps=use_realistic,
+                            boss_importance=boss_importance,
+                            boss_damage_multiplier=boss_damage_multiplier,
+                        )
+                        r_with = calculate_dps(stats, include_companion_summon=True, **common_kwargs)
+                        r_without = calculate_dps(stats, include_companion_summon=False, **common_kwargs)
+                    except Exception as exc:
+                        st.error(f"Could not compute DPS comparison: {exc}")
+                        r_with = r_without = None
+
+                if r_with is not None and r_without is not None:
+                    total_with = r_with.get('total', 0)
+                    total_without = r_without.get('total', 0)
+                    delta = total_with - total_without
+                    delta_pct = (total_with / total_without - 1) * 100 if total_without > 0 else 0
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("DPS without summon", f"{total_without:,.0f}")
+                    with col2:
+                        st.metric("DPS with summon", f"{total_with:,.0f}")
+                    with col3:
+                        st.metric(
+                            "Companion contribution",
+                            f"+{delta:,.0f}",
+                            delta=f"+{delta_pct:.2f}%",
+                        )
+
+                    st.caption(
+                        f"Combat mode: **{combat_mode}**, "
+                        f"engine: **{'realistic' if use_realistic else 'legacy'}**, "
+                        f"enemy defense: **{enemy_def:.3f}** ({chapter_str})."
+                    )

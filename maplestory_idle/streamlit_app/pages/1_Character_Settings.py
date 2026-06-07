@@ -11,6 +11,10 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from utils.data_manager import save_user_data, export_user_data_csv, import_user_data_csv, EQUIPMENT_SLOTS
+from utils.dps_calculator import (
+    aggregate_stats as shared_aggregate_stats,
+    calculate_dps as shared_calculate_dps,
+)
 from constants import ENEMY_DEFENSE_VALUES
 from game.equipment import get_amplify_multiplier
 from game.job_classes import JobClass, JOB_DISPLAY_NAMES, get_job_stats, get_main_stat_name, get_secondary_stat_name
@@ -380,6 +384,104 @@ with summary_col3:
     st.metric("Combat Mode", data.combat_mode.replace("_", " ").title())
 with summary_col4:
     st.metric("Chapter", data.chapter.replace("Chapter ", ""))
+
+st.divider()
+
+# ============================================================================
+# FIGHT ACTION SUMMARY
+# ============================================================================
+# Surfaces the simulator's action log on this page so the user can see at a
+# glance what the scheduler does with their build — when companion summon
+# fires, when buffs go up, which skills dominate damage. Full per-action log
+# remains on the Damage Calculator page; here we keep it short.
+
+st.subheader("Fight Action Summary")
+
+_use_realistic = getattr(data, 'use_realistic_dps', False)
+if not _use_realistic:
+    st.info(
+        "Enable **Realistic DPS** in the Damage Calculator page to populate "
+        "this section. The summary reflects how the scheduler sequences your "
+        "skills, buffs, and companion summon during a simulated fight."
+    )
+else:
+    _stats = shared_aggregate_stats(data)
+    _enemy_def = ENEMY_DEFENSE_VALUES.get(getattr(data, 'chapter', 'Chapter 27'), 0.752)
+    _boss_importance = getattr(data, 'boss_importance', 70) / 100.0
+    _boss_dmg_mult = getattr(data, 'boss_damage_multiplier', 1.0)
+    _job_class = JobClass(data.job_class)
+
+    _result = shared_calculate_dps(
+        _stats, data.combat_mode, _enemy_def,
+        job_class=_job_class,
+        use_realistic_dps=True,
+        boss_importance=_boss_importance,
+        log_actions=True,
+        boss_damage_multiplier=_boss_dmg_mult,
+    )
+    _fight_log = _result.get('fight_log') or []
+
+    if not _fight_log:
+        st.caption("Simulator produced no action log (fight had no available skills).")
+    else:
+        _total_damage = sum(e.damage for e in _fight_log)
+        _mob_actions = [e for e in _fight_log if e.phase == 'mob']
+        _boss_actions = [e for e in _fight_log if e.phase == 'boss']
+
+        _hi_cols = st.columns(4)
+        with _hi_cols[0]:
+            st.metric("Total Actions", len(_fight_log))
+        with _hi_cols[1]:
+            st.metric("Mob / Boss", f"{len(_mob_actions)} / {len(_boss_actions)}")
+        with _hi_cols[2]:
+            _fight_duration = max(e.time + e.cast_time for e in _fight_log)
+            st.metric("Sim Duration", f"{_fight_duration:.1f}s")
+        with _hi_cols[3]:
+            st.metric("Total Damage", f"{_total_damage:,.0f}")
+
+        # Skill usage table: how many casts, total damage, % of total.
+        from collections import Counter
+        _usage = Counter(e.skill_name for e in _fight_log)
+        _damage_by_skill: dict = {}
+        for _e in _fight_log:
+            _damage_by_skill[_e.skill_name] = _damage_by_skill.get(_e.skill_name, 0) + _e.damage
+
+        _rows = []
+        for _skill, _count in _usage.most_common():
+            _dmg = _damage_by_skill.get(_skill, 0)
+            _pct = (_dmg / _total_damage * 100.0) if _total_damage > 0 else 0.0
+            _rows.append({
+                'Skill': _skill.replace('_', ' ').title(),
+                'Uses': _count,
+                'Total Damage': f"{_dmg:,.0f}",
+                '% of Damage': f"{_pct:.1f}%",
+            })
+
+        import pandas as pd
+        st.dataframe(pd.DataFrame(_rows), hide_index=True, use_container_width=True)
+
+        # First-cast highlights — answers "when do my buffs / summon fire?"
+        # at a glance without scrolling the full per-action log.
+        _firsts = {}
+        for _e in _fight_log:
+            if _e.skill_name not in _firsts:
+                _firsts[_e.skill_name] = _e.time
+        # Only surface the non-trivial events: buffs, summons, anything cast
+        # less than once-per-second (basic attacks would dominate otherwise).
+        _highlights = [
+            (name, t) for name, t in _firsts.items()
+            if _usage[name] <= max(1, len(_fight_log) // 10)
+        ]
+        if _highlights:
+            st.markdown("**First Cast Timeline:**")
+            _highlights.sort(key=lambda nt: nt[1])
+            _timeline_rows = [
+                {'Time': f"{t:.1f}s", 'Skill': name.replace('_', ' ').title()}
+                for name, t in _highlights
+            ]
+            st.dataframe(pd.DataFrame(_timeline_rows), hide_index=True, use_container_width=True)
+
+        st.caption("Full per-action log is on the Damage Calculator page.")
 
 st.divider()
 

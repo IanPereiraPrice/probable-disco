@@ -98,6 +98,7 @@ class StatType(Enum):
     FINAL_DAMAGE = "final_damage"
     BA_TARGETS = "ba_targets"  # Basic Attack Targets +X (for tops)
     SKILL_DAMAGE = "skill_damage"  # Skill Damage % (for earrings)
+    COMPANION_DURATION = "companion_duration"  # Extends summon duration (shoes special, glass slipper)
 
 
 # =============================================================================
@@ -383,6 +384,18 @@ SPECIAL_POTENTIALS: Dict[str, SpecialPotential] = {
             PotentialTier.MYSTIC: 30.0,
         }
     ),
+    "shoes": SpecialPotential(
+        StatType.COMPANION_DURATION,
+        {
+            # Companion Summon Duration +X% (extends the 30s base window).
+            # Same effect family as the Arwen's Glass Shoes artifact, which
+            # scales 20%→40% across stars.
+            PotentialTier.EPIC: 5.0,
+            PotentialTier.UNIQUE: 8.0,
+            PotentialTier.LEGENDARY: 12.0,
+            PotentialTier.MYSTIC: 20.0,
+        }
+    ),
 }
 
 SPECIAL_POTENTIAL_RATE = 0.01  # 1% base chance
@@ -448,6 +461,7 @@ STAT_TIER_RANKINGS = {
     StatType.ATTACK_SPEED: "B",
     StatType.SKILL_CD: "B",
     StatType.BUFF_DURATION: "B",
+    StatType.COMPANION_DURATION: "B",
     StatType.MAIN_STAT_PER_LEVEL: "A",
     # F Tier - Useless
     StatType.DEFENSE: "F",

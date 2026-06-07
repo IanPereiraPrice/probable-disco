@@ -53,7 +53,7 @@ COMBAT_SCENARIO_PARAMS: Dict[CombatMode, CombatScenarioConfig] = {
     CombatMode.BOSS: CombatScenarioConfig(
         num_enemies=1,
         mob_time_fraction=0.0,
-        fight_duration=60.0,
+        fight_duration=70.0,
         description="Boss stage (100% boss)",
     ),
     CombatMode.WORLD_BOSS: CombatScenarioConfig(

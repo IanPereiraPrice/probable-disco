@@ -498,9 +498,15 @@ def _apply_stat_to_dict(stats: Dict[str, Any], stat: str, value: float) -> None:
     # Utility stats that don't affect DPS - skip silently
     utility_stats = {
         'hp_recovery', 'hp_mp_recovery',
-        'companion_duration', 'cooldown_reduction', 'utility',
+        'cooldown_reduction', 'utility',
     }
     if stat in utility_stats:
+        return
+
+    # Companion duration: decimal (0.20) → percentage points (20.0). Read by the
+    # realistic-DPS simulator to extend the companion summon's 30s window.
+    if stat == 'companion_duration':
+        stats['companion_duration'] = stats.get('companion_duration', 0) + value * 100
         return
 
     # Special handling: final_damage and enemy_damage_taken go to final_damage_sources LIST

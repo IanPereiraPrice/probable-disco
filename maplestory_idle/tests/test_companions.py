@@ -319,3 +319,106 @@ class TestCompanionsRegistry:
     def test_all_companions_have_nonzero_max_level(self):
         for key, comp in COMPANIONS.items():
             assert comp.max_level > 0, f"{key} has max_level=0"
+
+
+# ---------------------------------------------------------------------------
+# Companion summon mechanic
+# ---------------------------------------------------------------------------
+
+from game.companions import (
+    get_companion_summon_attack,
+    SUMMON_DURATION_S,
+    SUMMON_COOLDOWN_S,
+    COMPANION_SUMMON_BY_ADVANCEMENT,
+)
+
+
+class TestCompanionSummonData:
+    def test_spawn_duration_and_cooldown_match_datamine(self):
+        # SupporterTable.SpawnDurationTimeMs = 30000
+        # SkillTable[SkillIndex=5].CoolTimeMs = 90000
+        assert SUMMON_DURATION_S == 30.0
+        assert SUMMON_COOLDOWN_S == 90.0
+
+    def test_basic_tier_has_no_active_attack(self):
+        # Grade1 supporters have no MainActiveSkillIndices in the datamine
+        assert COMPANION_SUMMON_BY_ADVANCEMENT[JobAdvancement.BASIC] is None
+        assert get_companion_summon_attack(JobAdvancement.BASIC, 1) is None
+        assert get_companion_summon_attack(JobAdvancement.BASIC, 100) is None
+
+    def test_first_tier_at_max_level(self):
+        # FIRST max level is 50; factor[9][50] = 900 → 0.9× scaling
+        attack = get_companion_summon_attack(JobAdvancement.FIRST, 50)
+        assert attack is not None
+        assert attack["damage_pct"] == pytest.approx(26.0 * 0.9)
+        assert attack["hits"] == 3
+        assert attack["targets"] == 1
+        assert attack["attack_interval_s"] == 0.6
+        assert attack["duration_s"] == 30.0
+        assert attack["cooldown_s"] == 90.0
+
+    def test_level_zero_returns_none(self):
+        assert get_companion_summon_attack(JobAdvancement.FIRST, 0) is None
+
+    def test_level_overflow_clamps_to_max(self):
+        # Asking for L9999 on a tier capped at L50 should clamp to the table max
+        capped = get_companion_summon_attack(JobAdvancement.FIRST, 9999)
+        at_max = get_companion_summon_attack(JobAdvancement.FIRST, 50)
+        assert capped == at_max
+
+    def test_higher_tiers_strictly_dominate_at_their_max(self):
+        # FIRST max -> SECOND max -> THIRD max -> FOURTH max — damage per hit grows
+        damages = []
+        for adv in (JobAdvancement.FIRST, JobAdvancement.SECOND,
+                    JobAdvancement.THIRD, JobAdvancement.FOURTH):
+            a = get_companion_summon_attack(adv, MAX_LEVELS[adv])
+            damages.append(a["damage_pct"])
+        assert damages == sorted(damages), (
+            f"expected monotone-increasing damage per hit by tier, got {damages}"
+        )
+
+
+class TestCompanionSummonRegistration:
+    """Wiring of the synthetic summon into DPSCalculator."""
+
+    def _build_calc(self):
+        from game.skills import create_character_at_level, DPSCalculator
+        char = create_character_at_level(140, 0, job_class=JobClass.BOWMASTER)
+        return char, DPSCalculator(char, enemy_def=0.752)
+
+    def test_build_skill_returns_none_for_basic_tier(self):
+        from game.skills import build_companion_summon_skill_data
+        assert build_companion_summon_skill_data(JobAdvancement.BASIC, 100) is None
+
+    def test_build_skill_returns_summon_for_first_tier(self):
+        from game.skills import build_companion_summon_skill_data, SkillType
+        skill = build_companion_summon_skill_data(JobAdvancement.FIRST, 50)
+        assert skill is not None
+        assert skill.skill_type == SkillType.SUMMON
+        assert skill.duration == 30.0
+        assert skill.cooldown == 90.0
+        assert skill.base_hits == 3
+
+    def test_register_inserts_into_summon_skills_and_unlocks(self):
+        from game.skills import build_companion_summon_skill_data
+        skill = build_companion_summon_skill_data(JobAdvancement.FIRST, 50)
+        char, calc = self._build_calc()
+        before = len(calc._summon_skills)
+        calc.register_companion_summon(skill)
+        assert len(calc._summon_skills) == before + 1
+        assert "companion_main_summon" in calc._summon_skills
+        assert char.is_skill_unlocked("companion_main_summon")
+
+    def test_register_does_not_leak_into_global_skill_table(self):
+        # Two separate calculators must not share the synthetic skill.
+        from game.skills import build_companion_summon_skill_data
+        skill = build_companion_summon_skill_data(JobAdvancement.FIRST, 50)
+        _, calc_a = self._build_calc()
+        calc_a.register_companion_summon(skill)
+        _, calc_b = self._build_calc()  # built AFTER calc_a's mutation
+        assert "companion_main_summon" not in calc_b._summon_skills
+
+
+# Need JobClass for the calculator tests; import at the bottom to avoid
+# affecting the module-level imports above.
+from game.job_classes import JobClass  # noqa: E402

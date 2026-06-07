@@ -233,7 +233,9 @@ class TestSlotHelpers:
         """get_special_stat_for_slot should return correct special stat."""
         assert get_special_stat_for_slot("gloves") == StatType.CRIT_DAMAGE
         assert get_special_stat_for_slot("cape") == StatType.FINAL_DAMAGE
-        assert get_special_stat_for_slot("shoes") is None
+        # Shoes gained a COMPANION_DURATION special potential (extends the
+        # companion summon window; matches the Glass Shoes artifact effect).
+        assert get_special_stat_for_slot("shoes") == StatType.COMPANION_DURATION
 
     def test_get_stat_value_at_tier_regular_stat(self):
         """get_stat_value_at_tier should return correct values for regular stats."""

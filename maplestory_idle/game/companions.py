@@ -293,8 +293,172 @@ TIER_DISPLAY = {
 
 
 # =============================================================================
+# SUMMON MECHANIC
+# =============================================================================
+# Source: data_mine/TextAsset/SupporterTable.json,
+#         data_mine/TextAsset/SkillTable.json (skill index 5 + per-grade attack
+#         skills 8XX110), data_mine/TextAsset/SupporterLevelStatFactorTable.json
+#
+# Each equipped MAIN-slot companion can be summoned. While summoned:
+#   - Stays for 30 seconds (SupporterTable.SpawnDurationTimeMs = 30000)
+#   - Then despawns and the spawn skill recharges over 90s
+#     (SkillTable[SkillIndex=5].CoolTimeMs = 90000)
+#   - => 33.3% base uptime in steady state
+# While alive, the companion uses its first MainActiveSkill at a fixed interval,
+# dealing N hits per attack against a single target. Damage scales with the
+# player's attack (via calculate_hit_damage) AND with a per-level multiplier
+# read from SupporterLevelStatFactorTable.
+#
+# Basic-tier (Grade1) companions have NO MainActiveSkillIndices in the datamine
+# => they do not attack while summoned (left as zero-damage no-ops here).
+
+SUMMON_DURATION_S: float = 30.0
+SUMMON_COOLDOWN_S: float = 90.0
+
+# Players cannot summon companions during the first 5 seconds of a fight (game
+# mechanic). Encoded once here; read by the burst-window scheduler in skills.py
+# to gate `_get_available_summon_actions`.
+SUMMON_LOCKOUT_S: float = 5.0
+
+
+# Per-grade primary attack stats. All companions of a given grade share these
+# in the datamine — only the level scaling differs (per the factor index below).
+# Fields:
+#   damage_pct        - base damage % per hit at "1.0x" scaling
+#   hits              - hits per attack (datamine MaxHitCount)
+#   targets           - targets per attack (datamine TargetCount)
+#   attack_interval_s - seconds between attacks (datamine TickTimeMs / 1000)
+#   level_factor_idx  - column in SUPPORTER_LEVEL_FACTOR used for level scaling
+COMPANION_SUMMON_BY_ADVANCEMENT: Dict[JobAdvancement, Optional[Dict]] = {
+    JobAdvancement.BASIC: None,  # Grade1 has no active attack
+    # Datamine GetDamageR.Values[0] is in tenths of a percent (matching the
+    # convention used by skills.py — e.g. Phoenix is 6000 raw → base_damage_pct=600),
+    # so we divide by 10 here.
+    JobAdvancement.FIRST: {
+        "damage_pct": 26.0, "hits": 3, "targets": 1,
+        "attack_interval_s": 0.6, "level_factor_idx": 9,
+    },
+    JobAdvancement.SECOND: {
+        "damage_pct": 40.0, "hits": 5, "targets": 1,
+        "attack_interval_s": 0.6, "level_factor_idx": 10,
+    },
+    JobAdvancement.THIRD: {
+        "damage_pct": 80.0, "hits": 6, "targets": 1,
+        "attack_interval_s": 0.6, "level_factor_idx": 11,
+    },
+    JobAdvancement.FOURTH: {
+        "damage_pct": 290.0, "hits": 6, "targets": 1,
+        "attack_interval_s": 0.4, "level_factor_idx": 12,
+    },
+}
+
+
+# SupporterLevelStatFactorTable.Factor[idx][level], for the indices we use
+# (8 = Basic baseline, 9 = 1st, 10 = 2nd, 11 = 3rd, 12 = 4th). Each level's
+# value is a /1000 fraction of the player's attack the companion "scales to".
+# Values are sliced to the grade's actual max level; lookups beyond clamp.
+SUPPORTER_LEVEL_FACTOR: Dict[int, Dict[int, int]] = {
+    9: {  # 1st Job — max level 50
+        1: 500, 2: 520, 3: 540, 4: 560, 5: 580, 6: 590, 7: 600, 8: 610, 9: 620, 10: 630,
+        11: 640, 12: 650, 13: 660, 14: 670, 15: 680, 16: 690, 17: 700, 18: 710, 19: 720, 20: 730,
+        21: 740, 22: 750, 23: 760, 24: 770, 25: 775, 26: 780, 27: 785, 28: 790, 29: 795, 30: 800,
+        31: 805, 32: 810, 33: 815, 34: 820, 35: 825, 36: 830, 37: 835, 38: 840, 39: 845, 40: 850,
+        41: 855, 42: 860, 43: 865, 44: 870, 45: 875, 46: 880, 47: 885, 48: 890, 49: 895, 50: 900,
+    },
+    10: {  # 2nd Job — max level 30
+        1: 500, 2: 550, 3: 590, 4: 620, 5: 640, 6: 660, 7: 670, 8: 680, 9: 690, 10: 700,
+        11: 710, 12: 720, 13: 730, 14: 740, 15: 750, 16: 760, 17: 770, 18: 780, 19: 790, 20: 800,
+        21: 810, 22: 820, 23: 830, 24: 840, 25: 850, 26: 860, 27: 870, 28: 880, 29: 890, 30: 900,
+    },
+    11: {  # 3rd Job — max level 10
+        1: 500, 2: 550, 3: 600, 4: 650, 5: 700, 6: 740, 7: 780, 8: 820, 9: 860, 10: 900,
+    },
+    12: {  # 4th Job — max level 10
+        1: 600, 2: 640, 3: 680, 4: 720, 5: 750, 6: 780, 7: 810, 8: 840, 9: 870, 10: 900,
+    },
+}
+
+
+def get_companion_summon_attack(
+    advancement: 'JobAdvancement',
+    level: int,
+    primary_attack_override: Optional[Dict] = None,
+) -> Optional[Dict]:
+    """
+    Resolve the level-adjusted summon-attack stats for a companion of the
+    given advancement and level. Returns None if this tier has no active
+    attack (Basic) or the level is invalid.
+
+    If `primary_attack_override` is provided (from `CompanionDefinition.
+    summon_primary_attack_override`), its fields replace the corresponding
+    tier defaults in `COMPANION_SUMMON_BY_ADVANCEMENT`. Lets per-companion
+    primary attacks differ from the generic tier values (e.g. Bishop's
+    5 hits × 6 targets vs. the generic 4th-job 6 hits × 1 target).
+
+    The returned dict has:
+        damage_pct        - base damage * (level_factor / 1000), e.g. 234.0 means
+                            companion deals 234% of player attack per hit at this level
+        hits, targets, attack_interval_s - per-grade constants
+        duration_s        - 30s (uniform)
+        cooldown_s        - 90s (uniform)
+    """
+    base = COMPANION_SUMMON_BY_ADVANCEMENT.get(advancement)
+    if base is None or level < 1:
+        return None
+    if primary_attack_override:
+        # Override merges into a copy so the module-level constant is untouched.
+        base = {**base, **primary_attack_override}
+    factor_table = SUPPORTER_LEVEL_FACTOR.get(base["level_factor_idx"], {})
+    if not factor_table:
+        return None
+    # Clamp to the actual max level the factor table covers for this grade
+    max_lvl_in_table = max(factor_table.keys())
+    capped_level = min(level, max_lvl_in_table)
+    factor = factor_table.get(capped_level, 0) / 1000.0
+    return {
+        "damage_pct": base["damage_pct"] * factor,
+        "hits": base["hits"],
+        "targets": base["targets"],
+        "attack_interval_s": base["attack_interval_s"],
+        "duration_s": SUMMON_DURATION_S,
+        "cooldown_s": SUMMON_COOLDOWN_S,
+    }
+
+
+# =============================================================================
 # DATA CLASSES
 # =============================================================================
+
+@dataclass
+class CompanionSecondarySkill:
+    """
+    A secondary damage skill the companion casts on its own cooldown during
+    the summon window (e.g. Bishop's skill 4: 650% × 6 hits × 10 targets,
+    11s CD). Fires inside `_simulate_fight`'s companion accumulation block
+    against the snapshot taken at summon-cast time. See plan: Bishop 4th.
+    """
+    name: str
+    damage_pct: float
+    hits: int
+    targets: int
+    cooldown_s: float
+
+
+@dataclass
+class CompanionProcSkill:
+    """
+    A proc the companion may trigger on each of its own attacks (e.g.
+    Bishop's skill 7: 20% chance to deal 2600% × 7 targets, 3s ICD).
+    Per-tick contribution is computed as expected value, capped by ICD.
+    See plan: Bishop 4th.
+    """
+    name: str
+    damage_pct: float
+    hits: int
+    targets: int
+    proc_chance: float       # 0.20 = 20%
+    icd_s: float             # internal cooldown between procs
+
 
 @dataclass
 class CompanionDefinition:
@@ -306,6 +470,49 @@ class CompanionDefinition:
     # Override inventory stat: (stat_key, base_at_l1, per_level) for linear scaling
     # When set, replaces the tier-default inventory stat entirely
     inventory_stat_override: Optional[Tuple[str, float, float]] = None
+
+    # Companion-side self-buff Final Damage per unlocked breakpoint, as a
+    # multiplicative decimal (e.g. 0.25 = +25% per unlock). 3rd/4th job
+    # companions get three identical +25% breakpoints at levels 5, 8, 10
+    # (per user; matches the datamine 8XX_Y_90/91/92 OnStart skill family
+    # firing as the companion levels up). Total at max level = +75%.
+    #
+    # Default 0.0. Per-companion overrides (e.g. SUPPORTER_8 = +45% per
+    # breakpoint → +135% at level 10) are a follow-up.
+    self_buff_fd_per_breakpoint: float = 0.0
+    self_buff_fd_breakpoints: Tuple[int, ...] = ()
+
+    # Player buffs active only while THIS companion is summoned. Keys are
+    # stat names; values are pre-uptime-averaged within the 30s summon
+    # window. attack_pct and final_damage are decimals (0.20 = +20%);
+    # max_dmg_mult, crit_damage, attack_speed are percentage points.
+    # Applied to player damage in `_simulate_fight` (NOT to companion
+    # damage — the snapshot doesn't include these, by design).
+    summon_active_player_bonuses: Dict[str, float] = field(default_factory=dict)
+
+    # Override the tier-default primary attack stats (e.g. Bishop has
+    # 5 hits / 6 targets rather than the generic 4th-job 6 hits / 1 target).
+    # When set, replaces the corresponding fields in COMPANION_SUMMON_BY_ADVANCEMENT.
+    summon_primary_attack_override: Optional[Dict] = None
+
+    # Additional damage skills the companion casts on cooldown during the
+    # summon window. Each tracks its own cooldown.
+    summon_secondary_skills: List[CompanionSecondarySkill] = field(default_factory=list)
+
+    # A proc the companion triggers on its own attacks (e.g. Bishop skill 7).
+    summon_proc_skill: Optional[CompanionProcSkill] = None
+
+    def get_self_buff_fd_decimal(self, level: int) -> float:
+        """
+        Companion self-buff FD at the given companion level.
+
+        Returns the sum of +`self_buff_fd_per_breakpoint` for each
+        unlocked breakpoint level. Zero for tiers without self-buffs.
+        """
+        if self.self_buff_fd_per_breakpoint <= 0 or not self.self_buff_fd_breakpoints:
+            return 0.0
+        unlocked = sum(1 for bp in self.self_buff_fd_breakpoints if level >= bp)
+        return self.self_buff_fd_per_breakpoint * unlocked
 
     @property
     def max_level(self) -> int:
@@ -887,11 +1094,41 @@ COMPANIONS = {
     ),
 
     # Bishop companions (Magician - skill damage % on-equip)
+    # See plan: C:/Users/ianpr/.claude/plans/sorted-nibbling-meteor.md
+    # Bishop 4th has a full 9-skill kit (player buffs + secondary attack + proc).
     "bishop_4th": CompanionDefinition(
         name="Bishop (4th)",
         job=CompanionJob.BISHOP,
         advancement=JobAdvancement.FOURTH,
         on_equip_type=OnEquipStatType.SKILL_DAMAGE,
+        # Player buffs active while Bishop is summoned, pre-averaged for
+        # in-window uptime. Optimistic conditionals (HP≥30%, MP≥50%, HP=100%).
+        summon_active_player_bonuses={
+            # Skill 2 (+15% atk, 67% uptime) + skill 3 (+20% atk, 60% uptime)
+            "attack_pct":   0.15 * (20/30) + 0.20 * (18/30),  # ≈ +0.22
+            "final_damage": 0.08,   # skill 6 (effectively always on)
+            "max_dmg_mult": 24.0,   # skill 5 (always-on, +24%p)
+            "crit_damage":  20.0,   # skill 8 at full HP (+20%p)
+            "attack_speed": 20.0,   # skill 8 at full HP (+20%p)
+        },
+        # Skill 1: 290% × 5 hits × 6 targets (overrides generic 4th-job 6×1).
+        summon_primary_attack_override={
+            "hits": 5,
+            "targets": 6,
+        },
+        # Skill 4: 650% × 6 hits × 10 targets, 11s CD.
+        summon_secondary_skills=[
+            CompanionSecondarySkill(
+                name="bishop_skill_4",
+                damage_pct=650.0, hits=6, targets=10, cooldown_s=11.0,
+            ),
+        ],
+        # Skill 7: 20% chance on companion attack → 2600% × 7 targets, 3s ICD.
+        summon_proc_skill=CompanionProcSkill(
+            name="bishop_skill_7",
+            damage_pct=2600.0, hits=1, targets=7,
+            proc_chance=0.20, icd_s=3.0,
+        ),
     ),
     "bishop_3rd": CompanionDefinition(
         name="Bishop (3rd)",
@@ -938,6 +1175,19 @@ COMPANIONS = {
         on_equip_type=OnEquipStatType.FLAT_ATTACK,
     ),
 }
+
+
+# Apply the default self-buff FD breakpoints to all 3rd/4th job companions
+# in one pass. The datamine has three OnStart `ModStat-Myself` skills per
+# supporter at IDs 8XX_Y_90/91/92, each granting +25% Final Damage at
+# companion levels 5/8/10 respectively (max-level total = +75%).
+# Outlier (e.g. SUPPORTER_8 at +45% per breakpoint → +135% at max level)
+# would need a per-companion override; the modal value is encoded here.
+for _comp in COMPANIONS.values():
+    if _comp.advancement in (JobAdvancement.THIRD, JobAdvancement.FOURTH):
+        _comp.self_buff_fd_per_breakpoint = 0.25
+        _comp.self_buff_fd_breakpoints = (5, 8, 10)
+del _comp
 
 
 # =============================================================================
