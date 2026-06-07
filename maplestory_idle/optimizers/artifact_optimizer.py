@@ -289,6 +289,7 @@ def calculate_inventory_effect_dps(
     stars: int,
     current_stats: Dict[str, Any],
     calculate_dps_func: Callable,
+    scenario: str = 'stage',
 ) -> float:
     """
     Calculate DPS% contribution from an artifact's inventory effect.
@@ -298,6 +299,9 @@ def calculate_inventory_effect_dps(
         stars: Current awakening level
         current_stats: Current character stats dict
         calculate_dps_func: Function to calculate DPS from stats
+        scenario: Combat scenario for DPS weighting (stage / boss /
+            world_boss / chapter_hunt). Passed through to the gain helper
+            so scoring reflects the user's actual combat mode.
 
     Returns:
         DPS percentage contribution
@@ -350,7 +354,7 @@ def calculate_inventory_effect_dps(
 
         test_stats[mapped_stat] = test_stats.get(mapped_stat, 0) + converted_value
 
-    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
+    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func, mode=scenario)
 
 
 def calculate_active_effect_dps(
@@ -406,7 +410,7 @@ def calculate_active_effect_dps(
                 test_stats['crit_rate'] = test_stats.get('crit_rate', 0) + cr_bonus
                 break
         # Calculate DPS with Book equipped
-        return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
+        return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func, mode=scenario)
 
     # All artifacts now use active_effects format
     if not definition.active_effects:
@@ -481,7 +485,7 @@ def calculate_active_effect_dps(
             derived_value = conversion_rate * source_value * uptime
             _apply_stat_to_dict(test_stats, effect.stat, derived_value)
 
-    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
+    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func, mode=scenario)
 
 
 def _apply_stat_to_dict(stats: Dict[str, Any], stat: str, value: float) -> None:
@@ -571,6 +575,7 @@ def calculate_resonance_stat_value(
     current_level: int,
     current_stats: Dict[str, Any],
     calculate_dps_func: Callable,
+    scenario: str = 'stage',
 ) -> float:
     """
     Calculate DPS% value of gaining resonance levels.
@@ -603,7 +608,7 @@ def calculate_resonance_stat_value(
     # HP doesn't directly affect DPS, but keep for completeness
     test_stats['max_hp'] = test_stats.get('max_hp', 0) + hp_gain
 
-    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
+    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func, mode=scenario)
 
 
 def calculate_potential_slot_expected_value(
@@ -611,6 +616,7 @@ def calculate_potential_slot_expected_value(
     is_equipped: bool,
     current_stats: Dict[str, Any],
     calculate_dps_func: Callable,
+    scenario: str = 'stage',
 ) -> float:
     """
     Calculate expected DPS% value of a new potential slot.
@@ -727,12 +733,14 @@ def calculate_awakening_efficiency(
         stars=current_stars,
         current_stats=current_stats,
         calculate_dps_func=calculate_dps_func,
+        scenario=scenario,
     )
     new_inv_dps = calculate_inventory_effect_dps(
         artifact_key=artifact_key,
         stars=target_stars,
         current_stats=current_stats,
         calculate_dps_func=calculate_dps_func,
+        scenario=scenario,
     )
     inv_dps_gain = new_inv_dps - old_inv_dps
 
@@ -764,6 +772,7 @@ def calculate_awakening_efficiency(
         current_level=current_resonance_level,
         current_stats=current_stats,
         calculate_dps_func=calculate_dps_func,
+        scenario=scenario,
     )
 
     # 4. Potential slot unlock (at ★1, ★3, ★5)
@@ -774,6 +783,7 @@ def calculate_awakening_efficiency(
             is_equipped=is_equipped,
             current_stats=current_stats,
             calculate_dps_func=calculate_dps_func,
+            scenario=scenario,
         )
     else:
         potential_dps_gain = 0.0
@@ -1850,6 +1860,7 @@ def _calculate_inventory_score_with_dps(
     stars: int,
     current_stats: Dict[str, Any],
     calculate_dps_func: Callable,
+    scenario: str = 'stage',
 ) -> float:
     """
     Calculate DPS% from artifact's inventory effect using the actual DPS calculator.
@@ -1859,6 +1870,7 @@ def _calculate_inventory_score_with_dps(
         stars: Current awakening level
         current_stats: Current character stats dict
         calculate_dps_func: Function to calculate DPS from stats
+        scenario: Combat scenario used for DPS weighting.
 
     Returns:
         DPS percentage contribution
@@ -1869,6 +1881,7 @@ def _calculate_inventory_score_with_dps(
         stars=stars,
         current_stats=current_stats,
         calculate_dps_func=calculate_dps_func,
+        scenario=scenario,
     )
 
 
@@ -1876,6 +1889,7 @@ def _calculate_potential_score_with_dps(
     potentials: List[ArtifactPotentialLine],
     current_stats: Dict[str, Any],
     calculate_dps_func: Callable,
+    scenario: str = 'stage',
 ) -> float:
     """
     Calculate DPS% from artifact potentials using the actual DPS calculator.
@@ -1929,7 +1943,7 @@ def _calculate_potential_score_with_dps(
             mapped_stat = stat_mapping.get(stat_key, stat_key)
             test_stats[mapped_stat] = test_stats.get(mapped_stat, 0) + value
 
-    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func)
+    return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func, mode=scenario)
 
 
 @dataclass
@@ -2020,9 +2034,12 @@ def calculate_artifact_dps_score(
     inventory_score = 0.0
 
     if calculate_dps_func is not None:
-        # Use actual DPS calculator
+        # Use actual DPS calculator. Pass scenario so the gain math reflects
+        # the user's combat mode (boss-only build shouldn't see stage-weighted
+        # gains for an inventory boss_damage stat).
         inventory_score = _calculate_inventory_score_with_dps(
-            artifact_key, stars, current_stats, calculate_dps_func
+            artifact_key, stars, current_stats, calculate_dps_func,
+            scenario=scenario,
         )
     # If no DPS func provided, inventory_score stays 0
 
@@ -2037,7 +2054,8 @@ def calculate_artifact_dps_score(
     if calculate_dps_func is not None and active_potentials:
         # Use actual DPS calculator for potential score
         potential_score = _calculate_potential_score_with_dps(
-            active_potentials, current_stats, calculate_dps_func
+            active_potentials, current_stats, calculate_dps_func,
+            scenario=scenario,
         )
 
     # Calculate totals

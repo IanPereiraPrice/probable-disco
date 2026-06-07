@@ -2182,19 +2182,34 @@ STAGE_MOB_FRACTION = 0.6
 STAGE_BOSS_FRACTION = 0.4
 
 
-def compute_phase_dps(stats: Dict[str, Any], calc_dps_func) -> tuple:
+def compute_phase_dps(stats: Dict[str, Any], calc_dps_func, mode: str = 'stage') -> tuple:
     """
-    Returns (mob_dps, boss_dps) for stage phase-weighted scoring.
+    Returns (mob_dps, boss_dps) for combat-mode-aware DPS scoring.
 
-    In realistic DPS mode, a single 'stage' call populates mob_phase_dps and
-    boss_phase_dps directly (1 call total). In legacy mode, makes two separate
-    calls: 'chapter_hunt' for the mob phase, 'boss' for the boss phase.
+    - `'stage'`: returns true (mob_phase, boss_phase) for the 60/40 stage
+       fight. In realistic mode, one stage call populates both via
+       mob_phase_dps / boss_phase_dps. In legacy mode, two calls
+       ('chapter_hunt' + 'boss').
+    - `'boss'` / `'world_boss'`: pure boss fight — (0, boss_total).
+    - `'chapter_hunt'`: pure mob — (mob_total, 0).
+    - Anything else: falls back to the stage behavior.
+
+    Critical for artifact / DPS-gain scoring: callers in pure boss mode
+    should NOT get stage-weighted (60/40) numbers. Before this argument
+    existed, artifact rankings used stage weights regardless of the user's
+    combat mode, so boss-only builds saw skewed scores.
 
     calc_dps_func signature: (stats, mode_str) -> Dict[str, Any] or float
     """
     def _total(r):
         return r.get('total', r) if isinstance(r, dict) else r
 
+    if mode in ('boss', 'world_boss'):
+        return (0.0, _total(calc_dps_func(stats, mode)))
+    if mode == 'chapter_hunt':
+        return (_total(calc_dps_func(stats, mode)), 0.0)
+
+    # Default = stage phase split.
     stage_result = calc_dps_func(stats, 'stage')
     if isinstance(stage_result, dict):
         mob_phase = stage_result.get('mob_phase_dps', 0)
@@ -2209,10 +2224,22 @@ def compute_phase_dps(stats: Dict[str, Any], calc_dps_func) -> tuple:
     )
 
 
-def stage_weighted_gain_pct(mob_b: float, boss_b: float, mob_t: float, boss_t: float) -> float:
-    """Pure math: mob_gain * 0.6 + boss_gain * 0.4 as a percentage."""
+def stage_weighted_gain_pct(
+    mob_b: float, boss_b: float, mob_t: float, boss_t: float,
+    mode: str = 'stage',
+) -> float:
+    """
+    Combat-mode-aware DPS gain percentage:
+    - 'stage': mob_gain × 0.6 + boss_gain × 0.4
+    - 'boss' / 'world_boss': boss_gain (mob component is 0 by construction)
+    - 'chapter_hunt': mob_gain
+    """
     mob_gain = (mob_t / mob_b - 1) if mob_b > 0 else 0.0
     boss_gain = (boss_t / boss_b - 1) if boss_b > 0 else 0.0
+    if mode in ('boss', 'world_boss'):
+        return boss_gain * 100
+    if mode == 'chapter_hunt':
+        return mob_gain * 100
     return (mob_gain * STAGE_MOB_FRACTION + boss_gain * STAGE_BOSS_FRACTION) * 100
 
 
@@ -2220,13 +2247,14 @@ def compute_stage_weighted_gain_pct(
     current_stats: Dict[str, Any],
     test_stats: Dict[str, Any],
     calc_dps_func,
+    mode: str = 'stage',
 ) -> float:
     """
-    Convenience wrapper: computes stage-weighted DPS gain %.
-
-    Formula: mob_gain * 0.6 + boss_gain * 0.4
-    Handles both realistic (1 stage call) and legacy (2 separate calls) modes.
+    DPS gain % evaluated against the user's combat mode. The name is kept
+    for backward compatibility, but the function now respects `mode`:
+    boss / world_boss → pure boss gain, chapter_hunt → pure mob gain,
+    anything else → 60/40 stage weighting.
     """
-    mob_b, boss_b = compute_phase_dps(current_stats, calc_dps_func)
-    mob_t, boss_t = compute_phase_dps(test_stats, calc_dps_func)
-    return stage_weighted_gain_pct(mob_b, boss_b, mob_t, boss_t)
+    mob_b, boss_b = compute_phase_dps(current_stats, calc_dps_func, mode)
+    mob_t, boss_t = compute_phase_dps(test_stats, calc_dps_func, mode)
+    return stage_weighted_gain_pct(mob_b, boss_b, mob_t, boss_t, mode)
