@@ -1975,10 +1975,15 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     # Apply damage range multiplier (not handled by DPSCalculator)
     # Apply Hex Necklace multiplier. In LEGACY mode this is a time-averaged
     # post-multiplier baked at aggregation time. In REALISTIC mode the
-    # simulator already stepped hex stacks live per damage event (see
+    # simulator steps hex stacks live per damage event (see
     # DPSCalculator._hex_multiplier_at and the per-tick multiplication in
-    # _simulate_fight), so we must NOT re-apply it here.
-    hex_mult = stats.get('hex_multiplier', 1.0) if not use_realistic_dps else 1.0
+    # _simulate_fight) — EXCEPT when fight_duration is infinite (chapter
+    # hunt), where calculate_realistic_dps falls back to calculate_total_dps
+    # (the legacy steady-state path) which doesn't apply hex internally. In
+    # that case we still need the post-multiplier.
+    import math as _math
+    simulator_applied_hex = use_realistic_dps and not _math.isinf(fight_duration)
+    hex_mult = stats.get('hex_multiplier', 1.0) if not simulator_applied_hex else 1.0
     final_total = dps_result.total_dps * dmg_range_mult * hex_mult
 
     # Also calculate old-style result for breakdown display (single-target reference)

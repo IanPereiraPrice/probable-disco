@@ -412,6 +412,28 @@ def calculate_active_effect_dps(
         # Calculate DPS with Book equipped
         return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func, mode=scenario)
 
+    # Special handling for Candle (dual-phase, fires once at fight start):
+    # FD active 0-20s, BossDmg active 20-30s. After 30s, both stop. Uptime
+    # = window_length / fight_duration, so an infinite chapter-hunt fight
+    # correctly yields ~0% contribution. Mirrors the page 4 display logic.
+    if artifact_key == 'candle':
+        fd_uptime = (min(20.0, fight_duration) / fight_duration) if fight_duration > 0 else 0.0
+        boss_uptime = (
+            max(0.0, min(30.0, fight_duration) - 20.0) / fight_duration
+            if fight_duration > 0 else 0.0
+        )
+        for effect in definition.active_effects:
+            raw_value = effect.get_value(stars)
+            if effect.stat == 'final_damage':
+                effective = raw_value * fd_uptime
+                if effective > 0:
+                    _apply_stat_to_dict(test_stats, 'final_damage', effective)
+            elif effect.stat == 'boss_damage':
+                effective = raw_value * boss_uptime * 100  # convert to %p
+                if effective > 0:
+                    test_stats['boss_damage'] = test_stats.get('boss_damage', 0) + effective
+        return compute_stage_weighted_gain_pct(current_stats, test_stats, calculate_dps_func, mode=scenario)
+
     # All artifacts now use active_effects format
     if not definition.active_effects:
         # No active effects defined - return baseline
