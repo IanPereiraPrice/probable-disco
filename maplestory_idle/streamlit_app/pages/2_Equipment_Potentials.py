@@ -665,8 +665,16 @@ with bottom_right:
     if 'cube_recommendations' in st.session_state and st.session_state.cube_recommendations:
         recommendations = st.session_state.cube_recommendations
 
-        # Number selector for how many to show
-        num_to_show = st.slider("Show top N recommendations", 1, 22, 5, key="num_recs")
+        # Number selector for how many to show — max = full recommendation list,
+        # so users can see every equip's best line not just the top 22.
+        max_recs = len(recommendations)
+        num_to_show = st.slider(
+            "Show top N recommendations",
+            min_value=1,
+            max_value=max_recs,
+            value=min(5, max_recs),
+            key="num_recs",
+        )
 
         for rec in recommendations[:num_to_show]:
             slot_display = rec.slot.upper()
