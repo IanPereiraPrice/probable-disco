@@ -1996,7 +1996,10 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
     import math as _math
     simulator_applied_hex = use_realistic_dps and not _math.isinf(fight_duration)
     hex_mult = stats.get('hex_multiplier', 1.0) if not simulator_applied_hex else 1.0
-    final_total = dps_result.total_dps * dmg_range_mult * hex_mult
+    # Damage Amp (equipment scrolls) is its own multiplier: (1 + damage_amp/100).
+    # Applied as a post-multiplier on the total DPS, separate from FD and damage_pct.
+    damage_amp_mult = 1 + stats.get('damage_amp', 0.0) / 100
+    final_total = dps_result.total_dps * dmg_range_mult * hex_mult * damage_amp_mult
 
     # Also calculate old-style result for breakdown display (single-target reference)
     secondary_stat_type = get_secondary_stat_name(job_class)
@@ -2021,8 +2024,8 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
 
     # Phase DPS (only meaningful for realistic DPS mode)
     # Apply display multiplier to boss phase for easier comparison
-    mob_phase_dps = dps_result.mob_phase_dps * dmg_range_mult * hex_mult
-    boss_phase_dps = dps_result.boss_phase_dps * dmg_range_mult * hex_mult
+    mob_phase_dps = dps_result.mob_phase_dps * dmg_range_mult * hex_mult * damage_amp_mult
+    boss_phase_dps = dps_result.boss_phase_dps * dmg_range_mult * hex_mult * damage_amp_mult
     boss_phase_dps_display = boss_phase_dps * boss_damage_multiplier
 
     return {
@@ -2043,10 +2046,10 @@ def calculate_dps(stats: Dict[str, Any], combat_mode: str = 'stage', enemy_def: 
         'speed_mult': atk_spd_mult,
         'total_dex': result.total_dex,
         # Full DPS breakdown
-        'basic_attack_dps': dps_result.basic_attack_dps * dmg_range_mult * hex_mult,
-        'active_skill_dps': dps_result.active_skill_dps * dmg_range_mult * hex_mult,
-        'summon_dps': dps_result.summon_dps * dmg_range_mult * hex_mult,
-        'proc_dps': dps_result.proc_dps * dmg_range_mult * hex_mult,
+        'basic_attack_dps': dps_result.basic_attack_dps * dmg_range_mult * hex_mult * damage_amp_mult,
+        'active_skill_dps': dps_result.active_skill_dps * dmg_range_mult * hex_mult * damage_amp_mult,
+        'summon_dps': dps_result.summon_dps * dmg_range_mult * hex_mult * damage_amp_mult,
+        'proc_dps': dps_result.proc_dps * dmg_range_mult * hex_mult * damage_amp_mult,
         # Phase breakdown (realistic DPS only)
         'mob_phase_dps': mob_phase_dps,
         'boss_phase_dps': boss_phase_dps,

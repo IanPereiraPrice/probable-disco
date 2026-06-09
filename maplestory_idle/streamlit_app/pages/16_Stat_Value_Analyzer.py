@@ -65,6 +65,15 @@ STAT_CONFIGS = [
         'description': f'+{main_stat_name.upper()} flat stat',
     },
     {
+        'name': 'Main Stat %',
+        'key': f'{main_stat_name}_pct',
+        'default_amount': 10,
+        'max_amount': 200,
+        'step': 5,
+        'display_unit': '%',
+        'description': f'+{main_stat_name.upper()}% percentage',
+    },
+    {
         'name': 'Attack',
         'key': 'attack_flat',
         'default_amount': 1000,
@@ -99,6 +108,15 @@ STAT_CONFIGS = [
         'step': 5,
         'display_unit': '%',
         'description': '+Damage % (all targets)',
+    },
+    {
+        'name': 'Damage Amp',
+        'key': 'damage_amp',
+        'default_amount': 10,
+        'max_amount': 200,
+        'step': 5,
+        'display_unit': '%',
+        'description': '+Damage Amplification %',
     },
     {
         'name': 'Crit Damage',
