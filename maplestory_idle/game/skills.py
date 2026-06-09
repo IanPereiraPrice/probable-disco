@@ -3571,7 +3571,7 @@ DARK_KNIGHT_SKILLS: Dict[str, SkillData] = {
         unlock_level=10,
         base_damage_pct=26.0,
         base_hits=3,
-        base_targets=1,
+        base_targets=2,                  # Datamine 31010 Values[2]=2 targets
         damage_per_level=0.11,
         level_factor_index=21,
     ),
@@ -3599,7 +3599,7 @@ DARK_KNIGHT_SKILLS: Dict[str, SkillData] = {
         unlock_level=30,
         base_damage_pct=40.0,
         base_hits=5,
-        base_targets=1,
+        base_targets=3,                  # Datamine 32010 Values[2]=3 targets
         damage_per_level=0.16,
         level_factor_index=21,
     ),
@@ -3684,7 +3684,7 @@ DARK_KNIGHT_SKILLS: Dict[str, SkillData] = {
         unlock_level=60,
         base_damage_pct=80.0,           # 800 raw / 10 = 80%
         base_hits=6,
-        base_targets=1,
+        base_targets=5,                  # Datamine 33010 Values[2]=5 targets
         damage_per_level=0.33,
         level_factor_index=21,
     ),
@@ -3696,8 +3696,8 @@ DARK_KNIGHT_SKILLS: Dict[str, SkillData] = {
         job=Job.THIRD,
         unlock_level=63,
         base_damage_pct=600.0,          # 6000 raw / 10 = 600%
-        base_hits=1,
-        base_targets=12,               # AoE: MaxHitCount=12 targets
+        base_hits=12,                   # Datamine 33020 MaxHitCount=12
+        base_targets=1,                 # Datamine 33020 Values[2]=1 (single target)
         damage_per_level=2.46,
         level_factor_index=12,          # Datamine: SkillIndex 33020
         cooldown=22.0,
@@ -3767,8 +3767,8 @@ DARK_KNIGHT_SKILLS: Dict[str, SkillData] = {
         job=Job.FOURTH,
         unlock_level=100,
         base_damage_pct=290.0,          # 2900 raw / 10 = 290%
-        base_hits=5,                    # Values[2] = 5 hits per target
-        base_targets=6,                 # MaxHitCount = 6 targets
+        base_hits=6,                    # Datamine 34010 MaxHitCount=6
+        base_targets=5,                 # Datamine 34010 Values[2]=5 targets
         damage_per_level=1.19,
         level_factor_index=21,          # Datamine: SkillIndex 34010
     ),
@@ -3781,13 +3781,11 @@ DARK_KNIGHT_SKILLS: Dict[str, SkillData] = {
         unlock_level=103,
         base_damage_pct=1800.0,         # 18000 raw / 10 = 1800%
         base_hits=2,
-        base_targets=1,                 # Single target nuke
+        base_targets=2,                 # Datamine 34020 Values[2]=2 (small AoE around target)
         damage_per_level=7.38,
         level_factor_index=12,          # Datamine: SkillIndex 34020
         cooldown=13.0,
         cast_time=1.0,                  # 30 frames @ 30 FPS
-        # Pre-L134: 1800% × 2 hits = 3600% per cast
-        # Post-L134 Strike mastery: converted to 900% × 6 via masteries
     ),
 
     "dark_resonance": SkillData(
@@ -3811,8 +3809,8 @@ DARK_KNIGHT_SKILLS: Dict[str, SkillData] = {
         job=Job.FOURTH,
         unlock_level=117,
         base_damage_pct=4800.0,         # 48000 raw / 10 = 4800%
-        base_hits=1,
-        base_targets=5,                 # MaxHitCount = 5 targets
+        base_hits=5,                    # Datamine 34040 MaxHitCount=5
+        base_targets=1,                 # Datamine 34040 Values[2]=1 (single target nuke)
         damage_per_level=19.67,
         level_factor_index=12,          # Datamine: SkillIndex 34040
         cooldown=28.0,
