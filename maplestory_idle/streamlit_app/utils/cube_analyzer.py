@@ -70,6 +70,12 @@ STAT_NAME_TO_TYPE = {
     "buff_duration": StatType.BUFF_DURATION,
     "stat_per_level": StatType.MAIN_STAT_PER_LEVEL,
     "ba_targets": StatType.BA_TARGETS,
+    # Slot special-potential stats — earrings auto-roll skill_damage, shoes
+    # auto-roll companion_duration. Missing entries here would cause
+    # get_stat_name_from_type to return '', which silently zeros the test
+    # line in calc_dps_with_lines (no aggregate_stats key matches '').
+    "skill_damage": StatType.SKILL_DAMAGE,
+    "companion_duration": StatType.COMPANION_DURATION,
 }
 
 TIER_NAME_TO_ENUM = {

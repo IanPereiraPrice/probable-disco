@@ -54,12 +54,16 @@ def _single_dps(
     n_enemies: int,
     mob_frac: float,
     buff_dur_pct: float = 0.0,
+    skill_dmg_pct: float = 0.0,
+    basic_dmg_pct: float = 0.0,
 ) -> float:
     job_class = JobClass[job_class_name]
     char = create_default_character(char_level, job_class, all_skills_bonus)
     char.skill_cd_reduction = cd
     char.attack_speed_pct = as_pct
     char.buff_duration_pct = buff_dur_pct
+    char.skill_damage = skill_dmg_pct
+    char.basic_attack_damage = basic_dmg_pct
     calc = DPSCalculator(char, enemy_def=0.752)
     bd = calc.get_skill_damage_breakdown(FIGHT_DURATION, n_enemies, mob_frac)
     return sum(info['dps'] for info in bd.values())
@@ -275,25 +279,32 @@ st.markdown(
 # Dedicated stat controls for these two charts — override the sidebar values
 # so the user can re-rank classes against specific build assumptions without
 # leaving the section.
-mb_col1, mb_col2, mb_col3, mb_col4 = st.columns(4)
-with mb_col1:
+mb_row1 = st.columns(3)
+with mb_row1[0]:
     mb_all_skills = st.slider("+All Skills", 0, 200, all_skills, step=5, key="mb_all_skills")
-with mb_col2:
+with mb_row1[1]:
     mb_cd = st.slider("CD Reduction (s)", 0.0, 10.0, cd_reduction, step=0.5, key="mb_cd")
-with mb_col3:
+with mb_row1[2]:
     mb_buff_dur = st.slider("Buff Duration %", 0, 100, 0, step=5, key="mb_buff_dur")
-with mb_col4:
+mb_row2 = st.columns(3)
+with mb_row2[0]:
     mb_as_pct = st.slider("Attack Speed %", 0, 150, int(attack_speed_pct), step=5, key="mb_as_pct")
+with mb_row2[1]:
+    mb_skill_dmg = st.slider("Skill Damage %", 0, 200, 0, step=5, key="mb_skill_dmg")
+with mb_row2[2]:
+    mb_basic_dmg = st.slider("Basic Atk Dmg %", 0, 200, 0, step=5, key="mb_basic_dmg")
 
 with st.spinner("Computing mob and boss performance..."):
     mob_dps_map  = {
         job: _single_dps(level, job.name, mb_all_skills, mb_cd, float(mb_as_pct),
-                         12, 1.0, float(mb_buff_dur))
+                         12, 1.0, float(mb_buff_dur),
+                         float(mb_skill_dmg), float(mb_basic_dmg))
         for job in AVAILABLE_JOBS
     }
     boss_dps_map = {
         job: _single_dps(level, job.name, mb_all_skills, mb_cd, float(mb_as_pct),
-                         1, 0.0, float(mb_buff_dur))
+                         1, 0.0, float(mb_buff_dur),
+                         float(mb_skill_dmg), float(mb_basic_dmg))
         for job in AVAILABLE_JOBS
     }
 
