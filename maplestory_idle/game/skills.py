@@ -5668,6 +5668,17 @@ class SkillActionValue:
     dps_value_boss: float        # damage_per_use_boss / cast_time
 
 
+# Planning horizon for scheduler scoring. At each decision point the scheduler
+# scores candidate plans (damage, buff, summon, buff_then_summon) by their
+# total damage produced over this many seconds, with greedy BA filling any
+# remaining time. Capped at remaining_fight_time at each tick.
+#
+# 90s comfortably covers most cooldowns (longest 4th-job CD is ~80s for Ifrit)
+# and summon windows (typical 30s), giving the scorer enough horizon to
+# fairly weigh long-windup plans like Mist Eruption against burst options.
+LOOKAHEAD_HORIZON_S: float = 90.0
+
+
 @dataclass
 class FightLogEntry:
     """A single action in the fight simulation log."""
@@ -7481,63 +7492,57 @@ class DPSCalculator:
         skill_values_getter: Optional[Callable[[float, Set[str]], Dict[str, 'SkillActionValue']]] = None,
     ) -> float:
         """
-        Calculate the DPS value of casting a buff now.
+        Score for casting a buff now, averaged as DPS over the lookahead horizon.
 
-        Compares two scenarios over the buff duration window:
-        - Option A: Attack continuously without buff
-        - Option B: Cast buff then attack with buff active
+        Returns: total damage produced over min(LOOKAHEAD_HORIZON_S, remaining_fight)
+        seconds if we follow this plan, divided by that horizon. All plans use the
+        same horizon so they are directly comparable.
 
-        Returns an "equivalent DPS" value that can be compared with
-        damage skill DPS to decide whether to cast the buff.
-
-        Args:
-            skill_values_getter: Optional cached function to get skill values.
-                                If provided, uses cache. Otherwise calls _precalculate_skill_values directly.
+        Plan timeline:
+        - cast_time seconds with NO damage (player is casting)
+        - buff_active_time seconds at boosted BA DPS (buff is up)
+        - rest of horizon at baseline BA DPS (buff has expired)
         """
-        # Time buff would be active (capped by remaining fight time)
-        effective_duration = self.get_effective_buff_duration(buff_name)
-        active_time = min(effective_duration, remaining_fight_time)
-        if active_time <= 0:
+        horizon = min(LOOKAHEAD_HORIZON_S, remaining_fight_time)
+        if horizon <= 0:
             return 0.0
 
-        # Cast time for buff (buffs don't scale with attack speed)
         cast_time = self.get_cast_time(buff_skill.cast_time, False, current_attack_speed_mult)
-
-        # Not enough time to even cast the buff
-        if cast_time >= active_time:
+        if cast_time >= horizon:
             return 0.0
 
-        # Get basic attack name
         ba_name = self.char.get_active_basic_attack()
         if not ba_name:
             return 0.0
 
-        # Calculate DPS with this buff active
+        # Baseline BA DPS at the current (pre-buff) state — used for the
+        # tail of the horizon after the buff expires.
+        if skill_values_getter is not None:
+            cur_sv = skill_values_getter(current_attack_speed_mult, current_active_buffs)
+        else:
+            cur_sv = self._precalculate_skill_values(num_enemies, current_attack_speed_mult, current_active_buffs)
+        if ba_name not in cur_sv:
+            return 0.0
+        baseline_ba_dps = cur_sv[ba_name].dps_value_boss if is_boss else cur_sv[ba_name].dps_value_mob
+
+        # Boosted BA DPS while the buff is active.
         new_buffs = current_active_buffs | {buff_name}
         new_attack_speed_mult = self.calculate_attack_speed_mult(new_buffs)
-
-        # Use cached getter if provided, otherwise call _precalculate_skill_values directly
         if skill_values_getter is not None:
-            new_skill_values = skill_values_getter(new_attack_speed_mult, new_buffs)
+            new_sv = skill_values_getter(new_attack_speed_mult, new_buffs)
         else:
-            new_skill_values = self._precalculate_skill_values(num_enemies, new_attack_speed_mult, new_buffs)
+            new_sv = self._precalculate_skill_values(num_enemies, new_attack_speed_mult, new_buffs)
+        boosted_ba_dps = new_sv[ba_name].dps_value_boss if is_boss else new_sv[ba_name].dps_value_mob
 
-        new_dps = new_skill_values[ba_name].dps_value_boss if is_boss else new_skill_values[ba_name].dps_value_mob
+        # Buff active for min(duration, post-cast portion of horizon).
+        effective_duration = self.get_effective_buff_duration(buff_name)
+        buff_active_time = min(effective_duration, horizon - cast_time)
+        post_buff_time = max(0.0, horizon - cast_time - buff_active_time)
 
-        # Option B: Cast buff (lose cast_time) then attack with buff
-        attack_time_with_buff = active_time - cast_time
-        damage_with_buff = new_dps * attack_time_with_buff
-
-        # If buff is worth it, calculate equivalent DPS
-        # The "equivalent DPS" is what DPS value would make Option B equal Option A
-        # Buff is worth it if: new_dps * (active_time - cast_time) > current_dps * active_time
-        #
-        # For comparison, we return an "effective DPS" that represents the average
-        # DPS over the active_time window when casting the buff:
-        # effective_dps = damage_with_buff / active_time
-        effective_dps = damage_with_buff / active_time
-
-        return effective_dps
+        # Total damage = (boosted while buff up) + (baseline after buff expires).
+        # Cast time itself contributes 0 damage (player is casting, not attacking).
+        total_damage = boosted_ba_dps * buff_active_time + baseline_ba_dps * post_buff_time
+        return total_damage / horizon
 
     def _calculate_summon_dps_value(
         self,
@@ -7553,30 +7558,31 @@ class DPSCalculator:
         hex_multiplier: float = 1.0,
     ) -> float:
         """
-        Calculate the "equivalent DPS" of casting the companion summon now.
+        Score for casting the summon now, averaged as DPS over the lookahead horizon.
 
-        Parallel to `_calculate_buff_dps_value` and uses the same comparison
-        unit: total damage over the summon's window divided by the window.
-        That total includes both the companion's damage (using a frozen
-        snapshot of the player's stats at cast time) AND the player's
-        continued basic-attack damage during the window after cast — so the
-        scheduler can compare summon's score directly against
-        `_calculate_buff_dps_value` and a damage skill's `dps_value`.
+        Uses the same horizon as `_calculate_buff_dps_value` so plans are comparable.
 
-        See plan: C:/Users/ianpr/.claude/plans/sorted-nibbling-meteor.md (Phase 2).
+        Plan timeline:
+        - cast_time seconds with NO player damage (player is casting)
+        - summon_window seconds with companion damage + player BA in parallel
+        - rest of horizon at baseline BA DPS (companion has expired)
         """
         if summon_skill.duration <= 0 or summon_skill.attack_interval <= 0:
             return 0.0
-        # Window length (capped by remaining fight time)
-        window = min(summon_skill.duration, remaining_fight_time)
-        if window <= 0:
+
+        horizon = min(LOOKAHEAD_HORIZON_S, remaining_fight_time)
+        if horizon <= 0:
             return 0.0
 
         cast_time = self.get_cast_time(
             summon_skill.cast_time, summon_skill.scales_with_attack_speed, current_attack_speed_mult,
         )
-        if cast_time >= window:
+        if cast_time >= horizon:
             return 0.0
+
+        # Summon active for min(duration, post-cast portion of horizon).
+        summon_window = min(summon_skill.duration, horizon - cast_time)
+        post_summon_time = max(0.0, horizon - cast_time - summon_window)
 
         # Build a stat snapshot of the player as they are right now. The
         # companion will use this snapshot for its 30s of attacks regardless
@@ -7585,9 +7591,7 @@ class DPSCalculator:
             active_buffs=current_active_buffs, hex_multiplier=hex_multiplier,
         )
 
-        # Companion attacks per second
-        interval = summon_skill.attack_interval
-        attacks_per_sec = 1.0 / interval
+        attacks_per_sec = 1.0 / summon_skill.attack_interval
 
         # Per-hit damage in each phase, computed against the snapshot
         damage_pct = self.get_skill_damage_pct(summon_name)
@@ -7614,37 +7618,35 @@ class DPSCalculator:
         hits = self.get_skill_hits(summon_name)
         targets_mob = min(self.get_skill_targets(summon_name), num_enemies)
 
-        # Companion damage over the active window, phase-split.
+        # Companion damage during its active window, phase-split.
         if is_boss:
-            companion_damage = dmg_boss * hits * 1 * attacks_per_sec * window
+            companion_damage = dmg_boss * hits * 1 * attacks_per_sec * summon_window
         else:
-            mob_damage = dmg_mob * hits * targets_mob * attacks_per_sec * window * mob_time_fraction
-            boss_damage = dmg_boss * hits * 1 * attacks_per_sec * window * (1 - mob_time_fraction)
+            mob_damage = dmg_mob * hits * targets_mob * attacks_per_sec * summon_window * mob_time_fraction
+            boss_damage = dmg_boss * hits * 1 * attacks_per_sec * summon_window * (1 - mob_time_fraction)
             companion_damage = mob_damage + boss_damage
 
         # The simulator's main loop applies the snapshot's hex multiplier to
         # companion damage at execution time. Mirror that here so the
-        # scoring function predicts what the run will actually produce —
-        # otherwise summons would be under-scored on hex-equipped builds
-        # and the delay-vs-summon-now comparison wouldn't see hex at all.
+        # scoring function predicts what the run will actually produce.
         companion_damage *= hex_multiplier
 
-        # Player's basic-attack damage during the post-cast portion of the
-        # window. We pull the BA DPS at the current attack-speed/buff state
-        # from the skill_values cache (so we match exactly what _simulate_fight
-        # is computing for the damage-action comparison).
+        # Player's BA DPS at the current (pre-summon) state — used for both
+        # the in-summon parallel attacks AND the post-summon tail of the horizon.
         ba_dps = 0.0
         if skill_values_getter is not None:
             sv = skill_values_getter(current_attack_speed_mult, current_active_buffs)
-            # Identify the basic-attack action and read its phase DPS.
             ba_name = self.char.get_active_basic_attack()
             if ba_name and ba_name in sv:
                 action = sv[ba_name]
                 ba_dps = action.dps_value_boss if is_boss else action.dps_value_mob
-        ba_damage = ba_dps * max(0.0, window - cast_time)
+
+        # BA damage during the summon window + during the post-summon tail.
+        # Cast time itself contributes 0 damage (player is casting).
+        ba_damage = ba_dps * (summon_window + post_summon_time)
 
         total_damage = companion_damage + ba_damage
-        return total_damage / window
+        return total_damage / horizon
 
     def _score_buff_then_summon_plan(
         self,
@@ -7662,22 +7664,23 @@ class DPSCalculator:
         current_t: float = 0.0,
     ) -> float:
         """
-        Score the 2-action plan "cast `buff_name` first, then cast `summon_name`."
+        Score the 2-action plan "cast `buff_name` first, then cast `summon_name`"
+        as DPS averaged over the lookahead horizon. Same horizon/units as
+        `_calculate_buff_dps_value` / `_calculate_summon_dps_value` so the
+        scheduler picks the best 1- or 2-action plan at each tick.
 
-        Returns total damage / horizon, using the same comparison unit as
-        `_calculate_buff_dps_value` and `_calculate_summon_dps_value` so the
-        scheduler can pick the best 1- or 2-action plan at each decision point.
-
-        The whole point of this lookahead is to catch "stack buffs first, then
-        summon" — under the 1-step greedy, summon's score doesn't credit the
-        snapshot uplift it WOULD get from a soon-to-be-cast buff, so the
-        scheduler casts summon prematurely without buff coverage.
-
-        See plan: C:/Users/ianpr/.claude/plans/sorted-nibbling-meteor.md (Phase 2).
+        Plan timeline:
+        - buff_cast_time : 0 damage (player casting buff)
+        - summon_cast_time : 0 damage (player casting summon)
+        - summon_window : companion damage (with buff baked into snapshot) + boosted BA in parallel
+        - tail : baseline boosted-BA if buff still alive, else baseline pre-buff BA
         """
-        # Time to cast the buff (buffs don't scale with attack speed)
+        horizon = min(LOOKAHEAD_HORIZON_S, remaining_fight_time)
+        if horizon <= 0:
+            return -1.0
+
         buff_cast_time = self.get_cast_time(buff_skill.cast_time, False, current_attack_speed_mult)
-        if buff_cast_time >= remaining_fight_time:
+        if buff_cast_time >= horizon:
             return -1.0
 
         # State AFTER casting the buff: it's active. Re-evaluate attack speed
@@ -7685,40 +7688,74 @@ class DPSCalculator:
         future_buffs = current_active_buffs | {buff_name}
         future_as = self.calculate_attack_speed_mult(future_buffs)
 
-        # Summon score under the future (post-buff) state. This captures the
-        # snapshot uplift the buff provides to the companion's entire window.
-        # Hex stack is read at the moment the summon would actually land
-        # (current_t + buff_cast_time), not at the current decision point.
-        summon_score_post_buff = self._calculate_summon_dps_value(
-            summon_name, summon_skill,
-            remaining_fight_time - buff_cast_time,
-            future_buffs, future_as,
-            num_enemies, is_boss, mob_time_fraction,
-            skill_values_getter=skill_values_getter,
-            hex_multiplier=self._hex_multiplier_at(current_t + buff_cast_time),
+        # Summon cast happens at t + buff_cast_time, with the buff active.
+        summon_cast_time = self.get_cast_time(
+            summon_skill.cast_time, summon_skill.scales_with_attack_speed, future_as,
         )
-        if summon_score_post_buff <= 0:
+        if buff_cast_time + summon_cast_time >= horizon:
             return -1.0
-        summon_window = min(summon_skill.duration, remaining_fight_time - buff_cast_time)
+
+        # Window where companion is up, capped by the horizon's tail.
+        summon_window = min(summon_skill.duration, horizon - buff_cast_time - summon_cast_time)
         if summon_window <= 0:
             return -1.0
-        summon_total_damage = summon_score_post_buff * summon_window
 
-        # Damage during the buff's cast time = current BA dps × cast_time.
-        # (Buffs themselves deal no damage, but the player keeps BA-ing.)
+        # Build the companion snapshot using the post-buff player state.
+        # Hex is read at the moment the summon would actually land.
+        landing_t = current_t + buff_cast_time + summon_cast_time
+        hex_at_landing = self._hex_multiplier_at(landing_t)
+        snapshot = self._build_companion_snapshot(
+            active_buffs=future_buffs, hex_multiplier=hex_at_landing,
+        )
+
+        damage_pct = self.get_skill_damage_pct(summon_name)
+        dmg_mob = self.calculate_hit_damage(
+            damage_pct, summon_skill.damage_type, summon_name,
+            is_boss_phase=False, attack_speed_mult=future_as,
+            active_buffs=future_buffs, num_enemies=num_enemies,
+            stat_override=snapshot,
+        )
+        dmg_boss = self.calculate_hit_damage(
+            damage_pct, summon_skill.damage_type, summon_name,
+            is_boss_phase=True, attack_speed_mult=future_as,
+            active_buffs=future_buffs, num_enemies=1,
+            stat_override=snapshot,
+        )
+        hits = self.get_skill_hits(summon_name)
+        targets_mob = min(self.get_skill_targets(summon_name), num_enemies)
+        attacks_per_sec = 1.0 / summon_skill.attack_interval
+
+        if is_boss:
+            companion_damage = dmg_boss * hits * 1 * attacks_per_sec * summon_window
+        else:
+            mob_damage = dmg_mob * hits * targets_mob * attacks_per_sec * summon_window * mob_time_fraction
+            boss_damage = dmg_boss * hits * 1 * attacks_per_sec * summon_window * (1 - mob_time_fraction)
+            companion_damage = mob_damage + boss_damage
+        companion_damage *= hex_at_landing
+
+        # Player BA contribution. The buff is active for min(buff_duration,
+        # post-cast horizon); within that we use boosted_ba_dps, after we use
+        # baseline_ba_dps. The buff lasts buff_duration starting at t+buff_cast_time.
         ba_name = self.char.get_active_basic_attack()
-        ba_during_cast = 0.0
+        boosted_ba_dps = 0.0
+        baseline_ba_dps = 0.0
         if ba_name:
             cur_sv = skill_values_getter(current_attack_speed_mult, current_active_buffs)
+            new_sv = skill_values_getter(future_as, future_buffs)
+            if ba_name in new_sv:
+                boosted_ba_dps = new_sv[ba_name].dps_value_boss if is_boss else new_sv[ba_name].dps_value_mob
             if ba_name in cur_sv:
-                cur_ba_dps = cur_sv[ba_name].dps_value_boss if is_boss else cur_sv[ba_name].dps_value_mob
-                ba_during_cast = cur_ba_dps * buff_cast_time
+                baseline_ba_dps = cur_sv[ba_name].dps_value_boss if is_boss else cur_sv[ba_name].dps_value_mob
 
-        # Total damage over the 2-action plan's window: buff cast time + summon window
-        plan_window = buff_cast_time + summon_window
-        if plan_window <= 0:
-            return -1.0
-        return (ba_during_cast + summon_total_damage) / plan_window
+        # BA contributes during the post-buff-cast tail of the horizon.
+        effective_buff_dur = self.get_effective_buff_duration(buff_name)
+        ba_total_window = horizon - buff_cast_time  # tail after buff is cast
+        boosted_window = min(effective_buff_dur, ba_total_window)
+        unboosted_window = max(0.0, ba_total_window - boosted_window)
+        ba_damage = boosted_ba_dps * boosted_window + baseline_ba_dps * unboosted_window
+
+        total_damage = companion_damage + ba_damage
+        return total_damage / horizon
 
     def _simulate_fight(
         self,
@@ -7828,18 +7865,56 @@ class DPSCalculator:
                 )
                 skill_values = get_cached_skill_values(current_attack_speed_mult, current_active_buffs)
 
-            # Find best available damage action
+            # Find best available damage action. Score each candidate by its
+            # horizon-averaged DPS so the comparison is on the same scale as
+            # the buff/summon scorers below (total damage over the next 90s
+            # divided by 90, with greedy BA filling any gaps).
             best_action = None
-            best_dps_value = -1.0
+            best_dps_value = -1.0      # Raw per-cast DPS rate, kept for logging
+            best_horizon_score = -1.0  # Horizon-averaged DPS (used for plan choice)
             available_options = []
+
+            _scoring_horizon = min(LOOKAHEAD_HORIZON_S, remaining_fight_time)
+            # Baseline BA DPS used as the "filler rate" between casts of a
+            # cooldown-bearing skill — same value the buff/summon scorers use.
+            _ba_name = self.char.get_active_basic_attack()
+            _baseline_ba_dps = 0.0
+            if _ba_name and _ba_name in skill_values:
+                _baseline_ba_dps = (
+                    skill_values[_ba_name].dps_value_boss if is_boss
+                    else skill_values[_ba_name].dps_value_mob
+                )
 
             for name, sv in skill_values.items():
                 if cooldowns[name] > 0:
                     continue  # On cooldown
 
                 dps_value = sv.dps_value_boss if is_boss else sv.dps_value_mob
+                damage_per_use = sv.damage_per_use_boss if is_boss else sv.damage_per_use_mob
                 available_options.append((name, dps_value))
-                if dps_value > best_dps_value:
+
+                # Horizon-averaged DPS: amortize future re-casts inside the
+                # horizon by floor((horizon - cast_time) / cooldown). Filler
+                # at baseline_ba_dps for time between casts.
+                # NOTE: use a non-shadowing local name — `total_damage` is the
+                # function-level accumulator and must NOT be reassigned here.
+                if _scoring_horizon <= 0 or sv.cast_time <= 0:
+                    horizon_score = dps_value
+                elif sv.cooldown <= 0:
+                    # No cooldown = basic-attack-class skill. Its per-cast DPS
+                    # IS the horizon-averaged DPS (sustained spam).
+                    horizon_score = dps_value
+                else:
+                    _tail = max(0.0, _scoring_horizon - sv.cast_time)
+                    _extra_casts = int(_tail / sv.cooldown) if sv.cooldown > 0 else 0
+                    _total_casts = 1 + _extra_casts
+                    _skill_time = _total_casts * sv.cast_time
+                    _filler_time = max(0.0, _scoring_horizon - _skill_time)
+                    _horizon_dmg = _total_casts * damage_per_use + _baseline_ba_dps * _filler_time
+                    horizon_score = _horizon_dmg / _scoring_horizon
+
+                if horizon_score > best_horizon_score:
+                    best_horizon_score = horizon_score
                     best_dps_value = dps_value
                     best_action = sv
 
@@ -7934,9 +8009,11 @@ class DPSCalculator:
                         best_buff_for_summon = buff_name_la
 
             # Pick the highest-scoring plan and take its FIRST action.
-            # "buff_then_summon" first action is the BUFF (not the summon).
+            # All scorers return "damage over the 90s lookahead horizon / 90s"
+            # so the values are directly comparable. "buff_then_summon" first
+            # action is the BUFF (not the summon).
             plan_scores = {
-                'damage':           best_dps_value,
+                'damage':           best_horizon_score,
                 'buff':             best_buff_value,
                 'summon':           best_summon_value,
                 'buff_then_summon': best_buff_then_summon_score,
