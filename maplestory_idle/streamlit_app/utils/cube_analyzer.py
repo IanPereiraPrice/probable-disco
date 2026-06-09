@@ -30,10 +30,11 @@ from game.cubes import (
 )
 from game.job_classes import JobClass, get_main_stat_name
 
-# Equipment slots
+# Equipment slots — keep in sync with utils/data_manager.py EQUIPMENT_SLOTS.
+# Missing "earrings" here would silently skip that slot in cube recommendations.
 EQUIPMENT_SLOTS = [
     "hat", "top", "bottom", "gloves", "shoes",
-    "belt", "shoulder", "cape", "ring", "necklace", "eye", "face"
+    "belt", "shoulder", "cape", "ring", "necklace", "eye", "face", "earrings"
 ]
 
 # Cost per cube in diamonds

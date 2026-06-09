@@ -272,15 +272,28 @@ st.markdown(
     "These are independent of the combat mode selected in the sidebar."
 )
 
+# Dedicated stat controls for these two charts — override the sidebar values
+# so the user can re-rank classes against specific build assumptions without
+# leaving the section.
+mb_col1, mb_col2, mb_col3, mb_col4 = st.columns(4)
+with mb_col1:
+    mb_all_skills = st.slider("+All Skills", 0, 200, all_skills, step=5, key="mb_all_skills")
+with mb_col2:
+    mb_cd = st.slider("CD Reduction (s)", 0.0, 10.0, cd_reduction, step=0.5, key="mb_cd")
+with mb_col3:
+    mb_buff_dur = st.slider("Buff Duration %", 0, 100, 0, step=5, key="mb_buff_dur")
+with mb_col4:
+    mb_as_pct = st.slider("Attack Speed %", 0, 150, int(attack_speed_pct), step=5, key="mb_as_pct")
+
 with st.spinner("Computing mob and boss performance..."):
     mob_dps_map  = {
-        job: _single_dps(level, job.name, all_skills, cd_reduction, float(attack_speed_pct),
-                         12, 1.0)
+        job: _single_dps(level, job.name, mb_all_skills, mb_cd, float(mb_as_pct),
+                         12, 1.0, float(mb_buff_dur))
         for job in AVAILABLE_JOBS
     }
     boss_dps_map = {
-        job: _single_dps(level, job.name, all_skills, cd_reduction, float(attack_speed_pct),
-                         1, 0.0)
+        job: _single_dps(level, job.name, mb_all_skills, mb_cd, float(mb_as_pct),
+                         1, 0.0, float(mb_buff_dur))
         for job in AVAILABLE_JOBS
     }
 
