@@ -1609,6 +1609,472 @@ ICE_LIGHTNING_MASTERIES: List[MasteryNode] = [
 
 
 # =============================================================================
+# FIRE/POISON ARCH MAGE SKILLS
+# =============================================================================
+# Skill IDs (datamine): 51010-54100 (CreatureIndex=5)
+# 1st: 51010-51040, 2nd: 52010-52080, 3rd: 53010-53080, 4th: 54010-54100
+
+FIRE_POISON_SKILLS: Dict[str, SkillData] = {
+    # =========================================================================
+    # Shared Beginner Skills
+    # =========================================================================
+    "nimble_feet": SkillData(
+        name="Nimble Feet",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.BASIC,
+        unlock_level=1,
+        cooldown=60.0,
+        duration=15.0,
+        skill_bonuses={
+            "attack_speed": (15.0, SkillGrowth.FLAT),
+        },
+    ),
+
+    # =========================================================================
+    # 1st Job Skills (Level 10-29)
+    # =========================================================================
+    # 51010 EnergyBolt action — basic ranged attack
+    "energy_bolt": SkillData(
+        name="Energy Bolt",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.FIRST,
+        unlock_level=10,
+        base_damage_pct=26.0,
+        base_hits=2,
+        base_targets=3,
+        damage_per_level=0.13,
+    ),
+
+    # 51030 MagicGuard action — +12% Attack/Def for 15s, 30s CD
+    "magic_guard": SkillData(
+        name="Magic Guard",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.FIRST,
+        unlock_level=15,
+        cooldown=30.0,
+        duration=15.0,
+        skill_bonuses={
+            "attack_pct": (12.0, SkillGrowth.FLAT),
+        },
+    ),
+
+    # =========================================================================
+    # 2nd Job Skills (Level 30-59)
+    # =========================================================================
+    # 52010 FlameOrb action (Fire) — 5 hits × 3 targets × 40%
+    "flame_orb": SkillData(
+        name="Flame Orb",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.SECOND,
+        unlock_level=30,
+        base_damage_pct=40.0,
+        base_hits=5,
+        base_targets=3,
+        damage_per_level=0.2,
+    ),
+
+    # 52050 — +5% Attack Speed passive
+    "spell_mastery": SkillData(
+        name="Spell Mastery",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=33,
+        skill_bonuses={
+            "attack_speed": (5.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 52060 (Fire OnAttack, 50% trigger, 2.5s ICD) → 52061 fires 130% × 1 hit
+    # Wiki name: "Ignite"
+    "ignite": SkillData(
+        name="Ignite",
+        skill_type=SkillType.PASSIVE_PROC,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=35,
+        base_damage_pct=130.0,
+        base_hits=1,
+        base_targets=1,
+        damage_per_level=0.65,
+        proc_chance=0.5,
+        cooldown=2.5,
+    ),
+
+    # 52030 PoisonBreath action (Poison) — 160% × 6 hits, 18s CD
+    "poison_breath": SkillData(
+        name="Poison Breath",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=38,
+        base_damage_pct=160.0,
+        base_hits=6,
+        base_targets=3,
+        damage_per_level=0.8,
+        cooldown=18.0,
+    ),
+
+    # 52040 Meditation action — +20% Attack for 15s, 30s CD (ally-target)
+    "meditation": SkillData(
+        name="Meditation",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=40,
+        cooldown=30.0,
+        duration=15.0,
+        skill_bonuses={
+            "attack_pct": (20.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 52070 — +15% Min Damage passive
+    "magic_boost": SkillData(
+        name="Magic Boost",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=43,
+        skill_bonuses={
+            "min_dmg_mult": (15.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 52020 (Poison OnHit, 50% trigger) → DoT 8% × 20 ticks, applies ArchMagePoison state
+    # Modeled as PASSIVE_PROC contributing total DoT contribution
+    # 8% × 20 ticks = 160% total over 20s window
+    "poison_dot": SkillData(
+        name="Poison Brace",
+        skill_type=SkillType.PASSIVE_PROC,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=50,
+        base_damage_pct=8.0,
+        base_hits=20,
+        base_targets=1,
+        damage_per_level=0.04,
+        proc_chance=0.5,
+    ),
+
+    # =========================================================================
+    # 3rd Job Skills (Level 60-99)
+    # =========================================================================
+    # 53010 Explosion action (Fire) — 3rd-job basic, 80% × 6 hits × 5 targets
+    "explosion": SkillData(
+        name="Explosion",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.THIRD,
+        unlock_level=60,
+        base_damage_pct=80.0,
+        base_hits=6,
+        base_targets=5,
+        damage_per_level=0.4,
+    ),
+
+    # 53020 PoisonMist action (Poison) — 160% × 10 hits, 35s CD (+ DoT 70% per tick)
+    "poison_mist": SkillData(
+        name="Poison Mist",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=63,
+        base_damage_pct=160.0,
+        base_hits=10,
+        base_targets=3,
+        damage_per_level=0.8,
+        cooldown=35.0,
+    ),
+
+    # 53030 PoisonRegion (Poison, 27s CD, 15s buff) → 53032 chains 120% × 2 hits
+    # on Fire attacks against poisoned targets (2s ICD per target).
+    # Modeled as SUMMON: 15s up, 2s interval, 120% × 2 hits per tick.
+    # Wiki name: "Creeping Toxin"
+    "creeping_toxin": SkillData(
+        name="Creeping Toxin",
+        skill_type=SkillType.SUMMON,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=69,
+        base_damage_pct=120.0,
+        base_hits=2,
+        base_targets=5,
+        damage_per_level=0.6,
+        cooldown=27.0,
+        duration=15.0,
+        attack_interval=2.0,
+        scales_with_attack_speed=False,
+    ),
+
+    # 53070 — +8% Crit Rate, +12% Crit Damage passive (Magic Critical)
+    "magic_critical": SkillData(
+        name="Magic Critical",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=74,
+        skill_bonuses={
+            "crit_rate": (8.0, SkillGrowth.INC5),
+            "crit_damage": (12.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 53080 — +15% Final Damage passive (Element Amplification, at >=50% MP)
+    "element_amplification": SkillData(
+        name="Element Amplification",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=75,
+        skill_bonuses={
+            "final_damage": (15.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # =========================================================================
+    # 4th Job Skills (Level 100+)
+    # =========================================================================
+    # 54010 FlameSweep action (Fire) — 4th-job basic, 290% × 6 hits × 5 targets
+    "flame_sweep": SkillData(
+        name="Flame Sweep",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.FOURTH,
+        unlock_level=100,
+        base_damage_pct=290.0,
+        base_hits=6,
+        base_targets=5,
+        damage_per_level=1.45,
+    ),
+
+    # 54100 — Skill enhancer: Maple Hero (F/P)
+    # 53032 (Creeping Toxin proc): +10% FD, 53020 (Poison Mist): +10% FD,
+    # 52030 (Poison Breath): +80% FD, 52061 (Ignite): +50% FD
+    "maple_hero_fp": SkillData(
+        name="Maple Hero",
+        skill_type=SkillType.SKILL_ENHANCER,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=100,
+        skill_bonuses={
+            "creeping_toxin": (10, SkillGrowth.INC50),
+            "poison_mist": (10, SkillGrowth.INC50),
+            "poison_breath": (80, SkillGrowth.INC50),
+            "ignite": (50, SkillGrowth.INC50),
+        },
+    ),
+
+    # 54020/54021/54022 — Mist Eruption
+    # Triggers on enemy death within 53020 (Poison Mist) projectile area.
+    # Modeled as a mob-scenario active: 3000% × 1 hit, gated to Poison Mist's CD.
+    "mist_eruption": SkillData(
+        name="Mist Eruption",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=103,
+        base_damage_pct=3000.0,
+        base_hits=1,
+        base_targets=5,
+        damage_per_level=15.0,
+        cooldown=35.0,
+        scenario="mob",
+    ),
+
+    # 54030 Meteor action (Fire) — 600% × 5 hits, 33s CD, 1500mm radius
+    # Wiki name: "Meteor Shower"
+    "meteor_shower": SkillData(
+        name="Meteor Shower",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=105,
+        base_damage_pct=600.0,
+        base_hits=5,
+        base_targets=5,
+        damage_per_level=3.0,
+        cooldown=33.0,
+    ),
+
+    # 54040/54041 FlameHaze action (Fire) — 1200% × 3 hits + Burn DoT
+    # Boss: +150% DoT × 30s = +4500% total; Non-boss: +150% DoT × 10s = +1500%
+    # Use non-boss values (default scenario); boss damage bonus handled separately
+    # Wiki name: "Flame Haze"
+    "flame_haze": SkillData(
+        name="Flame Haze",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=107,
+        base_damage_pct=1200.0,
+        base_hits=3,
+        base_targets=5,
+        damage_per_level=6.0,
+        cooldown=25.0,
+        dot_damage_pct=150.0,
+        dot_duration=10.0,
+        dot_interval=1.0,
+    ),
+
+    # 54050 Infinity action — +15% FD base + ModStatOnTick (+1% per sec, max +10%)
+    # 30s CD, 15s duration (FP is shorter CD than IL's 90s)
+    "infinity": SkillData(
+        name="Infinity",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=110,
+        cooldown=30.0,
+        duration=15.0,
+        skill_bonuses={
+            "final_damage": (15.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 54060/54061 Efreet action (Fire summon) — 80s CD, 3500% × 1 hit
+    # Estimate duration=30s, interval=4s (matches IL Elquines pattern)
+    "ifrit": SkillData(
+        name="Ifrit",
+        skill_type=SkillType.SUMMON,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=115,
+        base_damage_pct=3500.0,
+        base_hits=1,
+        base_targets=3,
+        damage_per_level=17.5,
+        cooldown=80.0,
+        duration=30.0,
+        attack_interval=4.0,
+        scales_with_attack_speed=False,
+    ),
+
+    # 54080 — +3% FD per stack proc (Arcane Aim), 25% trigger, 10s duration
+    "arcane_aim": SkillData(
+        name="Arcane Aim",
+        skill_type=SkillType.PASSIVE_PROC,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=120,
+        proc_chance=0.25,
+        duration=10.0,
+        skill_bonuses={
+            "final_damage": (3.0, SkillGrowth.FLAT),
+        },
+    ),
+
+    # 54090 — +60% Fire Damage per ArchMagePoison stack
+    # Approximation: assume 3 stacks held in typical fight → +180% Fire damage
+    # ~75% of FP damage is Fire-tagged, so effective FD bonus ≈ +135%
+    # Use conservative +90% baseline; treat as passive_stat final_damage
+    # (Note: 53050 "Burning Magic" is the 3rd-job version with +3% per stack;
+    #  this 4th-job passive stacks multiplicatively for Fire-tagged skills.)
+    "ignite_mastery": SkillData(
+        name="Ignite Mastery",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=125,
+        skill_bonuses={
+            "final_damage": (90.0, SkillGrowth.INC5),
+        },
+    ),
+}
+
+
+# =============================================================================
+# FIRE/POISON ARCH MAGE MASTERIES
+# =============================================================================
+# Sourced from idle.maplestorywiki.net/w/Arch_Mage_(Fire_Poison) and cross-checked
+# against the datamine (HeroSkillMasteryTable + SkillTable IDs 50010-50295).
+# Skills appear in the wiki interleaved by level — listed here in level order.
+
+FIRE_POISON_MASTERIES: List[MasteryNode] = [
+    # ==========================================================================
+    # 1st Job (Levels 12-28)
+    # ==========================================================================
+    MasteryNode("Energy Bolt - Damage I", 12, 0, "skill_damage_pct", "energy_bolt", 15.0, "Energy Bolt Damage +15%"),
+    MasteryNode("Main Stat Enhancement", 14, 0, "main_stat_flat", "global", 30.0, "Main Stat +30"),
+    MasteryNode("Energy Bolt - Target I", 15, 0, "skill_targets", "energy_bolt", 1.0, "Energy Bolt +1 target"),
+    MasteryNode("Critical Rate Enhancement", 17, 0, "crit_rate", "global", 5.0, "Critical Rate +5%"),
+    MasteryNode("Energy Bolt - Damage II", 19, 0, "skill_damage_pct", "energy_bolt", 20.0, "Energy Bolt Damage +20%"),
+    MasteryNode("Magic Guard - Reuse", 21, 0, "skill_cooldown_reduction", "magic_guard", 9.0, "Magic Guard Cooldown -30% (-9s of 30s base)"),
+    MasteryNode("Energy Bolt - Target II", 22, 0, "skill_targets", "energy_bolt", 1.0, "Energy Bolt +1 target"),
+    # Lvl 24 Teleport - Reuse (movement only, skipped)
+    MasteryNode("Energy Bolt - Damage III", 26, 0, "skill_damage_pct", "energy_bolt", 20.0, "Energy Bolt Damage +20%"),
+    MasteryNode("Basic Attack Damage Enhancement", 28, 0, "basic_attack_damage", "global", 15.0, "Basic Attack Damage +15%"),
+
+    # ==========================================================================
+    # 2nd Job (Levels 32-58)
+    # ==========================================================================
+    MasteryNode("Flame Orb - Damage I", 32, 0, "skill_damage_pct", "flame_orb", 15.0, "Flame Orb Damage +15%"),
+    MasteryNode("Accuracy Enhancement", 34, 0, "accuracy", "global", 5.0, "Accuracy +5"),
+    MasteryNode("Flame Orb - Target I", 37, 0, "skill_targets", "flame_orb", 1.0, "Flame Orb +1 target"),
+    MasteryNode("Poison Breath - Damage I", 39, 0, "skill_damage_pct", "poison_breath", 50.0, "Poison Breath Damage +50%"),
+    MasteryNode("Flame Orb - Damage II", 42, 0, "skill_damage_pct", "flame_orb", 20.0, "Flame Orb Damage +20%"),
+    MasteryNode("Meditation - Persistence", 44, 0, "skill_duration", "meditation", 4.5, "Meditation Duration +30% (+4.5s of 15s base)"),
+    MasteryNode("Flame Orb - Boss Damage I", 47, 0, "skill_boss_damage", "flame_orb", 15.0, "Flame Orb Boss Damage +15%"),
+    # Lvl 49 MP Eater - MP Boost: +7% AS at >=50% MP (conditional; approximated as +7% global AS since MP is usually full in idle play)
+    MasteryNode("MP Eater - MP Boost", 49, 0, "attack_speed", "global", 7.0, "Attack Speed +7% (at >50% MP)"),
+    MasteryNode("Flame Orb - Damage III", 52, 0, "skill_damage_pct", "flame_orb", 20.0, "Flame Orb Damage +20%"),
+    MasteryNode("Ignite - Damage I", 54, 0, "skill_damage_pct", "ignite", 100.0, "Ignite Damage +100%"),
+    MasteryNode("Flame Orb - Strike I", 56, 0, "skill_hits", "flame_orb", 1.0, "Flame Orb +1 hit"),
+    MasteryNode("Max Damage Multiplier Enhancement", 58, 0, "max_dmg_mult", "global", 10.0, "Max Damage Multiplier +10%"),
+
+    # ==========================================================================
+    # 3rd Job (Levels 62-98)
+    # ==========================================================================
+    MasteryNode("Explosion - Damage I", 62, 0, "skill_damage_pct", "explosion", 10.0, "Explosion Damage +10%"),
+    MasteryNode("Basic Attack Target Enhancement", 64, 0, "basic_attack_targets", "global", 1.0, "Basic Attack Target +1"),
+    MasteryNode("Explosion - Damage II", 66, 0, "skill_damage_pct", "explosion", 11.0, "Explosion Damage +11%"),
+    MasteryNode("Poison Mist - Damage I", 68, 0, "skill_damage_pct", "poison_mist", 50.0, "Poison Mist Damage +50%"),
+    MasteryNode("Explosion - Boss Damage I", 71, 0, "skill_boss_damage", "explosion", 10.0, "Explosion Boss Damage +10%"),
+    # Lvl 73 Creeping Toxin - Poison: mechanic enabler (auto-applies 3 poison stacks to nearby targets), skipped — Burning Magic per-stack scaling assumes full stacks
+    MasteryNode("Explosion - Damage III", 76, 0, "skill_damage_pct", "explosion", 12.0, "Explosion Damage +12%"),
+    MasteryNode("Creeping Toxin - Damage I", 78, 0, "skill_damage_pct", "creeping_toxin", 50.0, "Creeping Toxin Damage +50%"),
+    MasteryNode("Explosion - Damage IV", 80, 0, "skill_damage_pct", "explosion", 13.0, "Explosion Damage +13%"),
+    # Lvl 82 Elemental Reset - Chance: doubles Weakness-debuff trigger rate (not modeled — def-pen averaging)
+    MasteryNode("Explosion - Boss Damage II", 84, 0, "skill_boss_damage", "explosion", 10.0, "Explosion Boss Damage +10%"),
+    MasteryNode("Skill Damage Enhancement", 86, 0, "skill_damage", "global", 15.0, "Skill Damage +15%"),
+    MasteryNode("Explosion - Damage V", 88, 0, "skill_damage_pct", "explosion", 14.0, "Explosion Damage +14%"),
+    MasteryNode("Poison Mist - Reuse", 90, 0, "skill_cooldown_reduction", "poison_mist", 10.5, "Poison Mist Cooldown -30% (-10.5s of 35s base)"),
+    MasteryNode("Explosion - Damage VI", 92, 0, "skill_damage_pct", "explosion", 15.0, "Explosion Damage +15%"),
+    MasteryNode("Creeping Toxin - Normal Monster Damage", 94, 0, "skill_normal_monster_damage", "creeping_toxin", 100.0, "Creeping Toxin Normal Monster Damage +100%p"),
+    MasteryNode("Explosion - Strike I", 96, 0, "skill_hits", "explosion", 1.0, "Explosion +1 hit"),
+    # Lvl 98 Burning Magic - Damage: +2%p per Poison stack — bakes into ignite_mastery's baked-in average (skipped as separate node)
+
+    # ==========================================================================
+    # 4th Job (Levels 102-138)
+    # ==========================================================================
+    MasteryNode("Flame Sweep - Damage I", 102, 0, "skill_damage_pct", "flame_sweep", 10.0, "Flame Sweep Damage +10%"),
+    MasteryNode("Poison Mist - Strike Interval", 104, 0, "skill_attack_interval_pct", "poison_mist", -50.0, "Poison Mist Strike Interval -50%"),
+    MasteryNode("Flame Sweep - Damage II", 106, 0, "skill_damage_pct", "flame_sweep", 11.0, "Flame Sweep Damage +11%"),
+    # Lvl 108 Mist Eruption - Explosion: +1 max explosion count, 2s CD (mechanic, not modeled)
+    MasteryNode("Flame Sweep - Boss Damage I", 111, 0, "skill_boss_damage", "flame_sweep", 10.0, "Flame Sweep Boss Damage +10%"),
+    # Lvl 113 Meteor Shower - Final Attack: 20% proc, 750% (procs from Meteor in slot; complex conditional, approximated as +10% damage)
+    MasteryNode("Meteor Shower - Final Attack", 113, 0, "skill_damage_pct", "meteor_shower", 10.0, "Meteor Shower +10% via Final Attack proc"),
+    MasteryNode("Flame Sweep - Damage III", 116, 0, "skill_damage_pct", "flame_sweep", 12.0, "Flame Sweep Damage +12%"),
+    # Lvl 118 Flame Haze - Poisonous Fog: creates Poison Mist on cast (mechanic, not modeled)
+    MasteryNode("Flame Sweep - Damage IV", 120, 0, "skill_damage_pct", "flame_sweep", 13.0, "Flame Sweep Damage +13%"),
+    MasteryNode("Mist Eruption - Damage I", 122, 0, "skill_damage_pct", "mist_eruption", 100.0, "Mist Eruption Damage +100%"),
+    MasteryNode("Flame Sweep - Boss Damage II", 124, 0, "skill_boss_damage", "flame_sweep", 10.0, "Flame Sweep Boss Damage +10%"),
+    # Lvl 126 Flame Haze - Burn: Ifrit duration +5s, max targets +1 (modeled via Ifrit's existing values)
+    MasteryNode("Ifrit - Targets I", 126, 0, "skill_targets", "ifrit", 1.0, "Ifrit +1 target (Flame Haze - Burn)"),
+    MasteryNode("Flame Sweep - Damage V", 128, 0, "skill_damage_pct", "flame_sweep", 14.0, "Flame Sweep Damage +14%"),
+    MasteryNode("Meteor Shower - Damage I", 130, 0, "skill_damage_pct", "meteor_shower", 20.0, "Meteor Shower Damage +20%"),
+    MasteryNode("Flame Sweep - Damage VI", 132, 0, "skill_damage_pct", "flame_sweep", 15.0, "Flame Sweep Damage +15%"),
+    # Lvl 134 Meteor Shower - Damage ([Flame Haze in Slot]): conditional proc (skipped)
+    MasteryNode("Flame Sweep - Strike I", 136, 0, "skill_hits", "flame_sweep", 1.0, "Flame Sweep +1 hit"),
+    # Lvl 138 Ifrit - Persistence & Target: +10% per Burn stack on target (conditional, skipped)
+]
+
+
+# =============================================================================
 # NIGHT LORD SKILLS
 # =============================================================================
 
@@ -4312,6 +4778,7 @@ CORSAIR_MASTERIES: List[MasteryNode] = [
 # This allows DPSCalculator to work with any job class
 SKILLS_BY_JOB: Dict[JobClass, Dict[str, 'SkillData']] = {
     JobClass.BOWMASTER: BOWMASTER_SKILLS,
+    JobClass.ARCHMAGE_FIRE_POISON: FIRE_POISON_SKILLS,
     JobClass.ARCHMAGE_ICE_LIGHTNING: ICE_LIGHTNING_SKILLS,
     JobClass.NIGHT_LORD: NIGHT_LORD_SKILLS,
     JobClass.SHADOWER: SHADOWER_SKILLS,
@@ -4323,6 +4790,7 @@ SKILLS_BY_JOB: Dict[JobClass, Dict[str, 'SkillData']] = {
 
 MASTERIES_BY_JOB: Dict[JobClass, List['MasteryNode']] = {
     JobClass.BOWMASTER: BOWMASTER_MASTERIES,
+    JobClass.ARCHMAGE_FIRE_POISON: FIRE_POISON_MASTERIES,
     JobClass.ARCHMAGE_ICE_LIGHTNING: ICE_LIGHTNING_MASTERIES,
     JobClass.NIGHT_LORD: NIGHT_LORD_MASTERIES,
     JobClass.SHADOWER: SHADOWER_MASTERIES,
