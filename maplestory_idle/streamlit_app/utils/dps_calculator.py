@@ -2096,6 +2096,71 @@ def is_sequence_affecting(stat_name: str) -> bool:
     return stat_name in SEQUENCE_AFFECTING_STAT_KEYS
 
 
+def compute_sequence_cache_key(
+    stats: Dict[str, Any],
+    combat_mode: str,
+    enemy_def: float,
+    extra_kwargs: Dict[str, Any],
+) -> Tuple:
+    """
+    Build a hashable key capturing every input that can change the action
+    sequence in the realistic simulator. Two candidate stat-dicts with the
+    same key produce the same fight log and so share a cache entry.
+
+    Includes every stat that the simulator reads when deciding WHICH action
+    to cast next:
+    - level / skill-level inputs (changes skill availability + effective levels)
+    - sequence-affecting stats (skill_cd, buff_duration, companion_duration)
+    - attack speed sources (changes cast time / per-skill cooldown coverage)
+    - companion summon registration + companion-gated FD sources
+    - hex necklace stars (affects hex stepping)
+    - combat mode + enemy_def + sim params (fight_duration, num_enemies)
+
+    Does NOT include damage multipliers (attack, crit, damage_pct, FD), since
+    those scale the result but never change which action is chosen.
+    """
+    # Helper: recursively coerce list/dict/tuple values into hashable tuples
+    def _t(x):
+        if x is None:
+            return None
+        if isinstance(x, dict):
+            return tuple(sorted((k, _t(v)) for k, v in x.items()))
+        if isinstance(x, (list, tuple)):
+            return tuple(_t(item) for item in x)
+        return x
+
+    job_class = extra_kwargs.get('job_class')
+    job_value = job_class.value if hasattr(job_class, 'value') else job_class
+
+    return (
+        # Char identity + skill-level state
+        job_value,
+        int(stats.get('level', 100)),
+        int(stats.get('all_skills_bonus', 0)),
+        int(stats.get('skill_1st_bonus', 0)),
+        int(stats.get('skill_2nd_bonus', 0)),
+        int(stats.get('skill_3rd_bonus', 0)),
+        int(stats.get('skill_4th_bonus', 0)),
+        # Sequence-affecting stats (SEQUENCE_AFFECTING_STAT_KEYS)
+        round(stats.get('skill_cd_reduction', 0), 4),
+        round(stats.get('buff_duration', 0), 4),
+        round(stats.get('companion_duration', 0), 4),
+        # AS sources change cast time / cooldown coverage
+        _t(stats.get('attack_speed_sources', [])),
+        # Companion + Horn Flute affect when summon snapshot is captured
+        _t(stats.get('_main_companion_summon')),
+        _t(stats.get('_main_companion_primary_attack_override')),
+        _t(stats.get('companion_active_fd_sources', [])),
+        # Hex necklace stars affect the per-step hex multiplier stepping
+        int(stats.get('hex_necklace_stars', 0)),
+        # Sim/scenario params
+        combat_mode,
+        round(enemy_def, 6),
+        round(extra_kwargs.get('boss_importance', 0.7) or 0.0, 4),
+        bool(extra_kwargs.get('include_companion_summon', True)),
+    )
+
+
 class FastDPSEvaluator:
     """
     Optimizer helper that scales legacy-path candidate evaluations to
@@ -2140,13 +2205,28 @@ class FastDPSEvaluator:
         self._extra_kwargs.pop('use_realistic_dps', None)
         self._extra_kwargs.pop('log_actions', None)
 
+        # Memoize realistic-sim results keyed on sequence-affecting state.
+        # Two candidates with the same key share an action sequence, so we
+        # can reuse the prior sim's `total` instead of paying for another
+        # full _simulate_fight call. Persists across `evaluate` calls for
+        # the lifetime of this evaluator (= one optimizer pass).
+        self._sim_cache: Dict[Tuple, float] = {}
+        self._cache_hits = 0
+        self._cache_misses = 0
+
         # Baseline realistic (with sim) — used as the anchor everything else
-        # is scaled toward.
+        # is scaled toward. Also populates the sim cache so candidates that
+        # match the baseline's sequence-affecting state hit it for free.
         self._baseline_realistic = self._calculate_dps(
             baseline_stats, combat_mode, enemy_def,
             use_realistic_dps=True, log_actions=False,
             **self._extra_kwargs,
         )
+        baseline_key = compute_sequence_cache_key(
+            baseline_stats, combat_mode, enemy_def, self._extra_kwargs,
+        )
+        self._sim_cache[baseline_key] = self._baseline_realistic.get('total', 0.0)
+
         # Baseline legacy (closed-form) — used to compute the scaling ratio.
         baseline_legacy = self._calculate_dps(
             baseline_stats, combat_mode, enemy_def,
@@ -2171,6 +2251,11 @@ class FastDPSEvaluator:
         """realistic / legacy DPS at the baseline. Public for diagnostics."""
         return self._ratio
 
+    @property
+    def cache_stats(self) -> Tuple[int, int]:
+        """(hits, misses) counters for the realistic-sim cache. Diagnostic only."""
+        return (self._cache_hits, self._cache_misses)
+
     def evaluate(
         self,
         candidate_stats: Dict[str, Any],
@@ -2181,16 +2266,36 @@ class FastDPSEvaluator:
 
         - `changed_stat`: hint about which stat differs from baseline. If
           sequence-affecting (or None/unknown), we re-run the realistic
-          sim. Otherwise we run legacy and scale.
+          sim (or pull a cached result). Otherwise we run legacy and scale.
         """
         needs_sim = changed_stat is None or is_sequence_affecting(changed_stat)
+        if needs_sim:
+            # Cache lookup keyed on the sequence-affecting state. If two
+            # candidates share that state, they share the action log + total.
+            cache_key = compute_sequence_cache_key(
+                candidate_stats, self._combat_mode, self._enemy_def, self._extra_kwargs,
+            )
+            cached_dps = self._sim_cache.get(cache_key)
+            if cached_dps is not None:
+                self._cache_hits += 1
+                return cached_dps
+            self._cache_misses += 1
+            result = self._calculate_dps(
+                candidate_stats, self._combat_mode, self._enemy_def,
+                use_realistic_dps=True, log_actions=False,
+                **self._extra_kwargs,
+            )
+            dps = result.get('total', 0.0)
+            self._sim_cache[cache_key] = dps
+            return dps
+
+        # Non-sequence change: closed-form legacy + ratio scaling.
         result = self._calculate_dps(
             candidate_stats, self._combat_mode, self._enemy_def,
-            use_realistic_dps=needs_sim, log_actions=False,
+            use_realistic_dps=False, log_actions=False,
             **self._extra_kwargs,
         )
-        dps = result.get('total', 0.0)
-        return dps if needs_sim else dps * self._ratio
+        return result.get('total', 0.0) * self._ratio
 
 
 # =============================================================================

@@ -205,7 +205,9 @@ class TestFastDPSEvaluator:
     def test_unknown_changed_stat_falls_back_to_sim(self):
         # When the caller doesn't know which stat changed, the safe choice
         # is to run the sim — otherwise we'd risk silently fast-pathing
-        # a sequence change.
+        # a sequence change. The candidate must differ in some
+        # sequence-affecting field so it doesn't hit the sim cache, which
+        # would also short-circuit the realistic call.
         calc = _RecordingCalc(realistic_factor=1.20)
         evaluator = FastDPSEvaluator(
             baseline_stats=_baseline_stats(),
@@ -214,9 +216,39 @@ class TestFastDPSEvaluator:
             calculate_dps_fn=calc,
         )
         calls_before = len(calc.calls)
-        evaluator.evaluate(_baseline_stats(), changed_stat=None)
+        candidate = _baseline_stats()
+        candidate['skill_cd_reduction'] += 0.5  # changes the sequence cache key
+        evaluator.evaluate(candidate, changed_stat=None)
         new_calls = calc.calls[calls_before:]
         assert new_calls[0][1] is True
+
+    def test_repeated_sequence_candidate_hits_cache(self):
+        # The new sim cache short-circuits identical sequence-affecting
+        # candidates: the second call returns the first call's result
+        # without invoking the realistic sim again.
+        calc = _RecordingCalc(realistic_factor=1.20)
+        evaluator = FastDPSEvaluator(
+            baseline_stats=_baseline_stats(),
+            combat_mode='boss',
+            enemy_def=0.752,
+            calculate_dps_fn=calc,
+        )
+        candidate = _baseline_stats()
+        candidate['skill_cd_reduction'] += 0.5
+
+        # First evaluation: cache miss → runs sim
+        dps1 = evaluator.evaluate(candidate, changed_stat='skill_cd_reduction')
+        hits1, misses1 = evaluator.cache_stats
+
+        # Second evaluation of the SAME candidate: cache hit → no new sim
+        calls_before = len(calc.calls)
+        dps2 = evaluator.evaluate(candidate, changed_stat='skill_cd_reduction')
+        hits2, misses2 = evaluator.cache_stats
+
+        assert dps1 == pytest.approx(dps2, rel=1e-9)
+        assert hits2 == hits1 + 1  # cache hit incremented
+        assert misses2 == misses1  # no new miss
+        assert len(calc.calls) == calls_before  # no new sim call
 
 
 # ---------------------------------------------------------------------------
