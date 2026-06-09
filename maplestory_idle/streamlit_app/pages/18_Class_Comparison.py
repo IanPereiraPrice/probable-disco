@@ -32,6 +32,7 @@ JOB_COLORS = {
     JobClass.SHADOWER:              "#f97316",
     JobClass.ARCHMAGE_FIRE_POISON:  "#dc2626",
     JobClass.ARCHMAGE_ICE_LIGHTNING:"#06b6d4",
+    JobClass.HERO:                  "#facc15",
     JobClass.DARK_KNIGHT:           "#ef4444",
     JobClass.BUCCANEER:             "#0d9488",
     JobClass.CORSAIR:               "#d97706",

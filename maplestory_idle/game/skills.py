@@ -2075,6 +2075,475 @@ FIRE_POISON_MASTERIES: List[MasteryNode] = [
 
 
 # =============================================================================
+# HERO (WARRIOR) SKILLS
+# =============================================================================
+# Skill IDs (datamine, CreatureIndex=1): 11010-14100
+# Names sourced from idle.maplestorywiki.net mastery list and cross-checked
+# against datamine action names (RagingBlow, EnhanceRagingBlow, Incising,
+# MagicCrash).
+
+HERO_SKILLS: Dict[str, SkillData] = {
+    # =========================================================================
+    # Shared Beginner Skills
+    # =========================================================================
+    "nimble_feet": SkillData(
+        name="Nimble Feet",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.BASIC,
+        unlock_level=1,
+        cooldown=60.0,
+        duration=15.0,
+        skill_bonuses={
+            "attack_speed": (15.0, SkillGrowth.FLAT),
+        },
+    ),
+
+    # =========================================================================
+    # 1st Job Skills (Level 10-29)
+    # =========================================================================
+    # 11010 — basic melee attack, 26% × 3 hits × 2 targets, 600ms tick
+    "slash_blast": SkillData(
+        name="Slash Blast",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.FIRST,
+        unlock_level=10,
+        base_damage_pct=26.0,
+        base_hits=3,
+        base_targets=2,
+        damage_per_level=0.13,
+    ),
+
+    # 11030 — +15% Defence (skipped, defensive) and +30 STR passive
+    "iron_body": SkillData(
+        name="Iron Body",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.FIRST,
+        unlock_level=10,
+        skill_bonuses={
+            "main_stat_flat": (30.0, SkillGrowth.INC3),
+        },
+    ),
+
+    # =========================================================================
+    # 2nd Job Skills (Level 30-59)
+    # =========================================================================
+    # 12010 — Brandish basic, 40% × 5 hits × 3 targets
+    "brandish": SkillData(
+        name="Brandish",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.SECOND,
+        unlock_level=30,
+        base_damage_pct=40.0,
+        base_hits=5,
+        base_targets=3,
+        damage_per_level=0.2,
+    ),
+
+    # 12020 — Flash Slash active, 16s CD: 250% × 7 hits + 350% × 7 hits
+    # Modeled as combined 600% per hit × 7 hits for simplicity
+    "flash_slash": SkillData(
+        name="Flash Slash",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=35,
+        base_damage_pct=600.0,
+        base_hits=7,
+        base_targets=1,
+        damage_per_level=3.0,
+        cooldown=16.0,
+    ),
+
+    # 12030 — Combo Attack: OnAttack +4% Attack per stack (ComboAttack state)
+    # Approx avg 3 stacks held = +12% Attack passive
+    "combo_attack": SkillData(
+        name="Combo Attack",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=45,
+        skill_bonuses={
+            "attack_pct": (12.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 12040 — Spirit Blade active buff, 45s CD: +10% Attack for 20s
+    "spirit_blade": SkillData(
+        name="Spirit Blade",
+        skill_type=SkillType.BUFF,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=40,
+        cooldown=45.0,
+        duration=20.0,
+        skill_bonuses={
+            "attack_pct": (10.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 12050 — +15% Min Damage Ratio passive
+    "weapon_mastery": SkillData(
+        name="Weapon Mastery",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=43,
+        skill_bonuses={
+            "min_dmg_mult": (15.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 12060 — +5% Attack Speed passive
+    "weapon_booster": SkillData(
+        name="Weapon Booster",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=33,
+        skill_bonuses={
+            "attack_speed": (5.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 12070 — Final Attack: OnAttack DoT proc, 35% damage per tick
+    "final_attack_hero": SkillData(
+        name="Final Attack",
+        skill_type=SkillType.PASSIVE_PROC,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=50,
+        base_damage_pct=35.0,
+        base_hits=1,
+        base_targets=1,
+        damage_per_level=0.175,
+        proc_chance=0.5,
+    ),
+
+    # 12080 — +10% BaseAttackPower passive (Physical Training)
+    "physical_training": SkillData(
+        name="Physical Training",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.SECOND,
+        unlock_level=38,
+        skill_bonuses={
+            "attack_pct": (10.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # =========================================================================
+    # 3rd Job Skills (Level 60-99)
+    # =========================================================================
+    # 13010 — Intrepid Slash basic, 80% × 6 hits × 5 targets
+    "intrepid_slash": SkillData(
+        name="Intrepid Slash",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.THIRD,
+        unlock_level=60,
+        base_damage_pct=80.0,
+        base_hits=6,
+        base_targets=5,
+        damage_per_level=0.4,
+    ),
+
+    # 13020 — Beam Blade active, 16s CD: 250% × 8 hits × 4 targets
+    "beam_blade": SkillData(
+        name="Beam Blade",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=69,
+        base_damage_pct=250.0,
+        base_hits=8,
+        base_targets=4,
+        damage_per_level=1.25,
+        cooldown=16.0,
+    ),
+
+    # 13030 — Rush active, 22s CD: 600% × 12 hits × 1 target, +Stun
+    "rush": SkillData(
+        name="Rush",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=63,
+        base_damage_pct=600.0,
+        base_hits=12,
+        base_targets=1,
+        damage_per_level=3.0,
+        cooldown=22.0,
+    ),
+
+    # 13050 — Combo Synergy: boosts Combo Attack effectiveness
+    # Approximated as additional +5% Attack to represent the upgrade
+    "combo_synergy": SkillData(
+        name="Combo Synergy",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=75,
+        skill_bonuses={
+            "attack_pct": (5.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 13060 — Self Recovery: +5% Final Damage at >=50% HP (approximated as permanent passive)
+    "self_recovery": SkillData(
+        name="Self Recovery",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=60,
+        skill_bonuses={
+            "final_damage": (5.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 13070 — Combat Mastery: +8% Crit Rate, +12% AttackPowerInCc (only CR modeled)
+    "combat_mastery": SkillData(
+        name="Combat Mastery",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=74,
+        skill_bonuses={
+            "crit_rate": (8.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # =========================================================================
+    # 4th Job Skills (Level 100+)
+    # =========================================================================
+    # 14010 — RagingBlow action, 290% × 6 hits × 5 targets
+    "raging_blow": SkillData(
+        name="Raging Blow",
+        skill_type=SkillType.BASIC_ATTACK,
+        damage_type=DamageType.BASIC,
+        job=Job.FOURTH,
+        unlock_level=100,
+        base_damage_pct=290.0,
+        base_hits=6,
+        base_targets=5,
+        damage_per_level=1.45,
+    ),
+
+    # 14100 — Maple Hero (Warrior): +FD to key actives
+    # 13020 (Beam Blade) +20%, 13030 (Rush) +30%, 12020 (Flash Slash) +80%
+    "maple_hero_warrior": SkillData(
+        name="Maple Hero",
+        skill_type=SkillType.SKILL_ENHANCER,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=100,
+        skill_bonuses={
+            "beam_blade": (20, SkillGrowth.INC50),
+            "rush": (30, SkillGrowth.INC50),
+            "flash_slash": (80, SkillGrowth.INC50),
+        },
+    ),
+
+    # 14020 — Enhanced Raging Blow / "Puncture" (EnhanceRagingBlow action)
+    # 19s CD: 550% × 9 hits × 6 targets
+    "enhanced_raging_blow": SkillData(
+        name="Enhanced Raging Blow",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=103,
+        base_damage_pct=550.0,
+        base_hits=9,
+        base_targets=6,
+        damage_per_level=2.75,
+        cooldown=19.0,
+    ),
+
+    # 14030 — Incising active, 19s CD: 900% × 5 hits × 3 targets + 150% × 10s Burn DoT
+    "incising": SkillData(
+        name="Incising",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=107,
+        base_damage_pct=900.0,
+        base_hits=5,
+        base_targets=3,
+        damage_per_level=4.5,
+        cooldown=19.0,
+        dot_damage_pct=150.0,
+        dot_duration=10.0,
+        dot_interval=1.0,
+    ),
+
+    # 14040 — MagicCrash active, 28s CD: 4800% × 5 hits × 1 target + Weakness debuff
+    "magic_crash": SkillData(
+        name="Magic Crash",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=117,
+        base_damage_pct=4800.0,
+        base_hits=5,
+        base_targets=1,
+        damage_per_level=24.0,
+        cooldown=28.0,
+    ),
+
+    # 14050 — Enrage passive: OnTimer auto-procs +12% FD/+15% CD for 5s
+    # Approximated as a permanent passive (always-on uptime)
+    "enrage": SkillData(
+        name="Enrage",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=115,
+        skill_bonuses={
+            "final_damage": (12.0, SkillGrowth.INC5),
+            "crit_damage": (15.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 14070 — Combat Mastery (4th): +5% Toughness, +15% FD passive
+    "combat_mastery_4th": SkillData(
+        name="Combat Mastery (Advanced)",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=110,
+        skill_bonuses={
+            "final_damage": (15.0, SkillGrowth.INC5),
+        },
+    ),
+
+    # 14080 — Advanced Final Attack: +500% FD to Final Attack DoT (12070)
+    "advanced_final_attack": SkillData(
+        name="Advanced Final Attack",
+        skill_type=SkillType.SKILL_ENHANCER,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=105,
+        skill_bonuses={
+            "final_attack_hero": (500, SkillGrowth.INC50),
+        },
+    ),
+
+    # 14090 — Hyper Body: +15% Skill Power, +20% Max Damage Ratio
+    "hyper_body": SkillData(
+        name="Hyper Body",
+        skill_type=SkillType.PASSIVE_STAT,
+        damage_type=DamageType.SKILL,
+        job=Job.FOURTH,
+        unlock_level=120,
+        skill_bonuses={
+            "skill_damage": (15.0, SkillGrowth.INC5),
+            "max_dmg_mult": (20.0, SkillGrowth.INC5),
+        },
+    ),
+}
+
+
+# =============================================================================
+# HERO (WARRIOR) MASTERIES
+# =============================================================================
+# Sourced from datamine (HeroSkillMasteryTable + SkillTable IDs 10010-10295).
+# Main spine = basic-attack chain (11010 → 12010 → 13010 → 14010).
+# Branch nodes (sub-tier 100X) cover global stats and per-skill upgrades.
+
+HERO_MASTERIES: List[MasteryNode] = [
+    # ==========================================================================
+    # 1st Job (Levels 12-28)
+    # ==========================================================================
+    MasteryNode("Slash Blast - Damage I", 12, 0, "skill_damage_pct", "slash_blast", 15.0, "Slash Blast Damage +15%"),
+    MasteryNode("Main Stat Enhancement", 14, 0, "main_stat_flat", "global", 30.0, "Main Stat +30"),
+    MasteryNode("Slash Blast - Target I", 15, 0, "skill_targets", "slash_blast", 1.0, "Slash Blast +1 target"),
+    MasteryNode("Critical Rate Enhancement", 17, 0, "crit_rate", "global", 5.0, "Critical Rate +5%"),
+    MasteryNode("Slash Blast - Damage II", 19, 0, "skill_damage_pct", "slash_blast", 20.0, "Slash Blast Damage +20%"),
+    # Lvl 21 Iron Body - Defense +10%p: defensive, skipped
+    MasteryNode("Slash Blast - Target II", 22, 0, "skill_targets", "slash_blast", 1.0, "Slash Blast +1 target"),
+    # Lvl 24 Warrior Mastery - Speed +5%p: movement, skipped
+    MasteryNode("Slash Blast - Damage III", 26, 0, "skill_damage_pct", "slash_blast", 20.0, "Slash Blast Damage +20%"),
+    MasteryNode("Basic Attack Damage Enhancement", 28, 0, "basic_attack_damage", "global", 15.0, "Basic Attack Damage +15%"),
+
+    # ==========================================================================
+    # 2nd Job (Levels 32-58)
+    # ==========================================================================
+    MasteryNode("Brandish - Damage I", 32, 0, "skill_damage_pct", "brandish", 15.0, "Brandish Damage +15%"),
+    MasteryNode("Accuracy Enhancement", 34, 0, "accuracy", "global", 5.0, "Accuracy +5"),
+    MasteryNode("Brandish - Target I", 37, 0, "skill_targets", "brandish", 1.0, "Brandish +1 target"),
+    MasteryNode("Flash Slash - Damage I", 39, 0, "skill_damage_pct", "flash_slash", 50.0, "Flash Slash Damage +50%"),
+    MasteryNode("Brandish - Damage II", 42, 0, "skill_damage_pct", "brandish", 20.0, "Brandish Damage +20%"),
+    MasteryNode("Spirit Blade - Reuse", 44, 0, "skill_cooldown_reduction", "spirit_blade", 13.5, "Spirit Blade Cooldown -30% (-13.5s of 45s base)"),
+    MasteryNode("Brandish - Boss Damage I", 47, 0, "skill_boss_damage", "brandish", 15.0, "Brandish Boss Damage +15%"),
+    # Lvl 49 Combo Attack +1.5%p per stack: bundled into combo_attack baseline
+    MasteryNode("Brandish - Damage III", 52, 0, "skill_damage_pct", "brandish", 20.0, "Brandish Damage +20%"),
+    MasteryNode("Final Attack - Damage I", 54, 0, "skill_damage_pct", "final_attack_hero", 50.0, "Final Attack Damage +50%"),
+    MasteryNode("Brandish - Strike I", 56, 0, "skill_hits", "brandish", 1.0, "Brandish +1 hit"),
+    MasteryNode("Max Damage Multiplier Enhancement", 58, 0, "max_dmg_mult", "global", 10.0, "Max Damage Multiplier +10%"),
+
+    # ==========================================================================
+    # 3rd Job (Levels 62-98)
+    # ==========================================================================
+    MasteryNode("Intrepid Slash - Damage I", 62, 0, "skill_damage_pct", "intrepid_slash", 10.0, "Intrepid Slash Damage +10%"),
+    MasteryNode("Basic Attack Target Enhancement", 64, 0, "basic_attack_targets", "global", 1.0, "Basic Attack Target +1"),
+    MasteryNode("Intrepid Slash - Damage II", 66, 0, "skill_damage_pct", "intrepid_slash", 11.0, "Intrepid Slash Damage +11%"),
+    MasteryNode("Rush - Damage I", 68, 0, "skill_damage_pct", "rush", 80.0, "Rush Damage +80%"),
+    MasteryNode("Intrepid Slash - Boss Damage I", 71, 0, "skill_boss_damage", "intrepid_slash", 10.0, "Intrepid Slash Boss Damage +10%"),
+    MasteryNode("Beam Blade - Damage I", 73, 0, "skill_damage_pct", "beam_blade", 50.0, "Beam Blade Damage +50%"),
+    MasteryNode("Intrepid Slash - Damage III", 76, 0, "skill_damage_pct", "intrepid_slash", 12.0, "Intrepid Slash Damage +12%"),
+    # Lvl 78 Scaring Sword - Weaken +8%p damage taken: enemy debuff during 15s/30s = ~50% uptime
+    # Approximated as +4% skill_damage globally to represent average uptime contribution
+    MasteryNode("Scaring Sword - Weaken", 78, 0, "skill_damage", "global", 4.0, "Scaring Sword +8%p damage taken (50% uptime ~ +4% skill dmg)"),
+    MasteryNode("Intrepid Slash - Damage IV", 80, 0, "skill_damage_pct", "intrepid_slash", 13.0, "Intrepid Slash Damage +13%"),
+    MasteryNode("Combo Synergy - Final Damage", 82, 0, "final_damage", "global", 1.0, "Combo Synergy +1%p Final Damage"),
+    MasteryNode("Intrepid Slash - Boss Damage II", 84, 0, "skill_boss_damage", "intrepid_slash", 10.0, "Intrepid Slash Boss Damage +10%"),
+    MasteryNode("Skill Damage Enhancement", 86, 0, "skill_damage", "global", 15.0, "Skill Damage +15%"),
+    MasteryNode("Intrepid Slash - Damage V", 88, 0, "skill_damage_pct", "intrepid_slash", 14.0, "Intrepid Slash Damage +14%"),
+    MasteryNode("Rush - Reuse", 90, 0, "skill_cooldown_reduction", "rush", 6.6, "Rush Cooldown -30% (-6.6s of 22s base)"),
+    MasteryNode("Intrepid Slash - Damage VI", 92, 0, "skill_damage_pct", "intrepid_slash", 15.0, "Intrepid Slash Damage +15%"),
+    MasteryNode("Beam Blade - Strike I", 94, 0, "skill_hits", "beam_blade", 1.0, "Beam Blade +1 hit"),
+    MasteryNode("Intrepid Slash - Strike I", 96, 0, "skill_hits", "intrepid_slash", 1.0, "Intrepid Slash +1 hit"),
+    MasteryNode("Self Recovery - Attack", 98, 0, "final_damage", "global", 5.0, "Self Recovery +5% Final Damage at >=50% HP"),
+
+    # ==========================================================================
+    # 4th Job (Levels 102-138)
+    # ==========================================================================
+    MasteryNode("Raging Blow - Damage I", 102, 0, "skill_damage_pct", "raging_blow", 10.0, "Raging Blow Damage +10%"),
+    MasteryNode("Beam Blade - Reuse", 104, 0, "skill_cooldown_reduction", "beam_blade", 4.8, "Beam Blade Cooldown -30% (-4.8s of 16s base)"),
+    MasteryNode("Raging Blow - Damage II", 106, 0, "skill_damage_pct", "raging_blow", 11.0, "Raging Blow Damage +11%"),
+    # Lvl 108 "Puncture - Damage": datamine targets Incising (14030).
+    # "Puncture" = the Burn DoT + Weakness sub-effect of Incising. Wiki description appears mislabeled.
+    MasteryNode("Puncture - Damage", 108, 0, "skill_damage_pct", "incising", 50.0, "Incising Damage +50% (wiki: 'Puncture')"),
+    MasteryNode("Raging Blow - Boss Damage I", 111, 0, "skill_boss_damage", "raging_blow", 10.0, "Raging Blow Boss Damage +10%"),
+    MasteryNode("Advanced Final Attack - Enhance", 113, 0, "skill_damage_pct", "final_attack_hero", 50.0, "Advanced Final Attack FD boost +50%"),
+    MasteryNode("Raging Blow - Damage III", 116, 0, "skill_damage_pct", "raging_blow", 12.0, "Raging Blow Damage +12%"),
+    # Lvl 118 Advanced Combo - Max Stacks +1: bundled into combo_attack baseline
+    MasteryNode("Raging Blow - Damage IV", 120, 0, "skill_damage_pct", "raging_blow", 13.0, "Raging Blow Damage +13%"),
+    # Lvl 122 "Enhanced Raging Blow - Damage": datamine targets ERB (14020).
+    MasteryNode("Enhanced Raging Blow - Damage", 122, 0, "skill_damage_pct", "enhanced_raging_blow", 50.0, "Enhanced Raging Blow Damage +50%"),
+    MasteryNode("Raging Blow - Boss Damage II", 124, 0, "skill_boss_damage", "raging_blow", 10.0, "Raging Blow Boss Damage +10%"),
+    # Lvl 126 Magic Crash - Weaken: +10% damage taken during state (28s CD, 15s state = ~54% uptime ~+5.4% skill dmg)
+    MasteryNode("Magic Crash - Weaken", 126, 0, "skill_damage", "global", 5.0, "Magic Crash +10% damage taken (54% uptime ~ +5% skill dmg)"),
+    MasteryNode("Raging Blow - Damage V", 128, 0, "skill_damage_pct", "raging_blow", 14.0, "Raging Blow Damage +14%"),
+    # Lvl 130 Advanced Combo - Defense Penetration: +1% per combo stack
+    # Approximated assuming 5 avg stacks held = +5% def_pen → +5% boss damage (conservative)
+    MasteryNode("Advanced Combo - Def Pen", 130, 0, "skill_boss_damage", "raging_blow", 5.0, "Advanced Combo +1% Def Pen per stack (~+5% boss dmg)"),
+    MasteryNode("Raging Blow - Damage VI", 132, 0, "skill_damage_pct", "raging_blow", 15.0, "Raging Blow Damage +15%"),
+    # Lvl 134 "Puncture - Weaken": datamine strengthens Incising's Weakness debuff (100 -> 500).
+    # Modeled as a Boss Damage boost on Incising representing the def-pen amplification.
+    MasteryNode("Puncture - Weaken", 134, 0, "skill_boss_damage", "incising", 40.0, "Incising Weakness debuff strengthened (~+40% boss dmg)"),
+    MasteryNode("Raging Blow - Strike I", 136, 0, "skill_hits", "raging_blow", 1.0, "Raging Blow +1 hit"),
+    # Lvl 138 ERB FD scales per excess combo stack via #EnhanceRagingBlow_Mastery formula.
+    # ERB requires >=5 combo stacks to cast; avg ~7-8 stacks = 2-3 excess.
+    # Approximated as +50% FD to enhanced_raging_blow.
+    MasteryNode("Enhanced Raging Blow - FD per Stack", 138, 0, "skill_damage_pct", "enhanced_raging_blow", 50.0, "ERB FD scales per excess combo stack (~+50% avg)"),
+]
+
+
+# =============================================================================
 # NIGHT LORD SKILLS
 # =============================================================================
 
@@ -4780,6 +5249,7 @@ SKILLS_BY_JOB: Dict[JobClass, Dict[str, 'SkillData']] = {
     JobClass.BOWMASTER: BOWMASTER_SKILLS,
     JobClass.ARCHMAGE_FIRE_POISON: FIRE_POISON_SKILLS,
     JobClass.ARCHMAGE_ICE_LIGHTNING: ICE_LIGHTNING_SKILLS,
+    JobClass.HERO: HERO_SKILLS,
     JobClass.NIGHT_LORD: NIGHT_LORD_SKILLS,
     JobClass.SHADOWER: SHADOWER_SKILLS,
     JobClass.MARKSMAN: MARKSMAN_SKILLS,
@@ -4792,6 +5262,7 @@ MASTERIES_BY_JOB: Dict[JobClass, List['MasteryNode']] = {
     JobClass.BOWMASTER: BOWMASTER_MASTERIES,
     JobClass.ARCHMAGE_FIRE_POISON: FIRE_POISON_MASTERIES,
     JobClass.ARCHMAGE_ICE_LIGHTNING: ICE_LIGHTNING_MASTERIES,
+    JobClass.HERO: HERO_MASTERIES,
     JobClass.NIGHT_LORD: NIGHT_LORD_MASTERIES,
     JobClass.SHADOWER: SHADOWER_MASTERIES,
     JobClass.MARKSMAN: MARKSMAN_MASTERIES,
