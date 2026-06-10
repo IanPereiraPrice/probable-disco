@@ -19,6 +19,13 @@ from constants import ENEMY_DEFENSE_VALUES
 from game.equipment import get_amplify_multiplier
 from game.job_classes import JobClass, JOB_DISPLAY_NAMES, get_job_stats, get_main_stat_name, get_secondary_stat_name
 from game.skills import get_skill_points_for_job, Job
+from game.unique_stats import (
+    UNIQUE_STAT_OPTIONS,
+    SKIP_FOR_DPS,
+    available_unique_stat_points,
+    auto_allocate,
+    points_spent,
+)
 
 st.set_page_config(page_title="Character Settings", page_icon="⚔️", layout="wide")
 
@@ -214,44 +221,47 @@ with col1:
     st.divider()
 
     # Unique Stats (HeroUniqueStatOption)
+    # Auto-allocated greedily in unlock order from the points the character has
+    # earned per HeroStatStepTable. No manual editing — levels are derived from
+    # character level so users don't have to think about distribution.
     st.subheader("Unique Stats")
-    if not hasattr(data, 'unique_stats') or not data.unique_stats:
-        data.unique_stats = {}
 
-    # Define unique stat configs: (key, label, max_level, base_val, added_val)
-    UNIQUE_STAT_DEFS = [
-        ('attack_speed', 'Attack Speed', 20, 30, 2),
-        ('crit_chance', 'Crit Chance', 10, 50, 5),
-        ('min_damage', 'Min Damage', 20, 50, 3),
-        ('max_damage', 'Max Damage', 20, 50, 3),
-        ('crit_power', 'Crit Power', 30, 50, 5),
-        ('normal_damage', 'Normal Monster Dmg', 30, 50, 5),
-        ('boss_damage', 'Boss Damage', 30, 50, 5),
-        ('skill_power', 'Skill Power', 30, 100, 5),
-        ('attack_power', 'Attack Power', 50, 100, 5),
-        ('main_stat', 'Main Stat', 160, 300, 5),
-    ]
+    earned_points = available_unique_stat_points(int(data.character_level))
+    allocation = auto_allocate(int(data.character_level))
+    spent = points_spent(allocation)
 
+    # Persist the auto-allocation so downstream DPS aggregation picks it up via
+    # the existing data.unique_stats path. Save only when it actually changes.
+    if not hasattr(data, 'unique_stats') or data.unique_stats != allocation:
+        data.unique_stats = allocation
+        auto_save()
+
+    pt_col1, pt_col2 = st.columns(2)
+    pt_col1.metric(
+        "Points Earned", earned_points,
+        help="From HeroStatStepTable: +10/step from StatStep 3-10, +20/step from 11-26. StatStep = level // 5."
+    )
+    pt_col2.metric("Points Spent (auto)", spent)
+
+    # Read-only display of each option's allocated level + bonus.
     ucol1, ucol2 = st.columns(2)
-    for i, (key, label, max_lv, base_v, add_v) in enumerate(UNIQUE_STAT_DEFS):
-        cur_lv = data.unique_stats.get(key, 0)
-        # Compute current bonus for display
-        bonus = (base_v + add_v * cur_lv) / 10 if cur_lv > 0 else 0
-        # Main stat is flat, others are percentages
-        suffix = '' if key == 'main_stat' else '%'
+    for i, opt in enumerate(UNIQUE_STAT_OPTIONS):
+        lv = allocation[opt.key]
+        bonus = opt.bonus_at(lv)
+        suffix = '' if opt.is_flat else '%'
         col = ucol1 if i % 2 == 0 else ucol2
         with col:
-            new_lv = st.number_input(
-                f"{label} (Lv {cur_lv}, +{bonus:.1f}{suffix})",
-                min_value=0,
-                max_value=max_lv,
-                value=cur_lv,
-                step=1,
-                key=f"unique_{key}",
-            )
-            if new_lv != cur_lv:
-                data.unique_stats[key] = new_lv
-                auto_save()
+            if opt.key in SKIP_FOR_DPS:
+                st.caption(f"⏭ **{opt.display_name}** — skipped (no effect on DPS in our model)")
+            elif data.character_level < opt.unlock_level:
+                st.caption(f"🔒 **{opt.display_name}** — unlocks at L{opt.unlock_level}")
+            elif lv == 0:
+                st.caption(f"⏸ **{opt.display_name}** — no points reached this option yet")
+            else:
+                cost_note = f" [{opt.point_cost} pts/lv]" if opt.point_cost > 1 else ""
+                st.markdown(
+                    f"**{opt.display_name}** Lv {lv}/{opt.max_level} → **+{bonus:.1f}{suffix}**{cost_note}"
+                )
 
 with col2:
     st.subheader("Combat Settings")

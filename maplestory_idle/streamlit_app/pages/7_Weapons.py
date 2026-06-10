@@ -451,6 +451,19 @@ with tab5:
             with col3:
                 st.metric("Remaining", f"{remaining:,} enhancers")
 
+            # Apply button — bumps each weapon to its recommended level and
+            # deducts the spent enhancers from the budget input.
+            if st.button("Apply Upgrades", type="primary", key="apply_enhancer_recs"):
+                for rec in recommendations:
+                    wkey = rec.weapon_key
+                    if wkey not in data.weapons_data:
+                        data.weapons_data[wkey] = {'level': 0, 'awakening': 0, 'duplicates': 0}
+                    data.weapons_data[wkey]['level'] = rec.to_level
+                st.session_state.weapon_enhancers = max(0, available_enhancers - total_cost)
+                auto_save()
+                st.success(f"Applied {len(recommendations)} upgrade(s). Budget updated to {st.session_state.weapon_enhancers:,} enhancers.")
+                st.rerun()
+
             # Detailed table
             st.markdown("### Upgrade Details")
             table_data = []

@@ -303,74 +303,122 @@ with col_editor:
     sub_mult = get_amplify_multiplier(new_stars, is_sub=True)
     st.caption(f"Main Amplify: +{(main_mult-1)*100:.0f}% | Sub Amplify: +{(sub_mult-1)*100:.0f}%")
 
+    # Input mode toggle — when post-SF is on, the number inputs accept the
+    # final after-starforce value and the page back-converts to raw via the
+    # amplify multiplier. Stored data is always raw.
+    post_sf_input = st.checkbox(
+        "Input post-starforce values",
+        value=st.session_state.get(f"equip_stats_post_sf_{slot_key}", False),
+        help="Off: enter raw base values (multiplied for display). On: enter the final after-SF values directly; we back-convert to raw using the amplify multiplier.",
+        key=f"equip_stats_post_sf_{slot_key}",
+    )
+
+    # Helper: round-trip a stored raw value through (optional) display
+    # multiplication. When the user types in post-SF mode, divide by `mult`
+    # to recover the raw value to persist. Guard against mult=0/1 edge cases.
+    def _to_raw_int(displayed, mult):
+        if not post_sf_input or mult <= 0:
+            return int(displayed)
+        return int(round(displayed / mult))
+
+    def _to_raw_float(displayed, mult):
+        if not post_sf_input or mult <= 0:
+            return float(displayed)
+        return round(float(displayed) / mult, 4)
+
+    def _from_raw_int(raw, mult):
+        return int(round(int(raw) * mult)) if post_sf_input else int(raw)
+
+    def _from_raw_float(raw, mult):
+        return round(float(raw) * mult, 2) if post_sf_input else float(raw)
+
     st.markdown("---")
-    st.markdown("**Main Stats** (Main Amplify)")
+    st.markdown(f"**Main Stats** ({'after SF — back-converted to raw' if post_sf_input else 'raw — multiplied below'})")
 
     col1, col2 = st.columns(2)
     with col1:
-        new_atk = st.number_input("Base Attack", 0, 999999, int(st.session_state.edit_equip_base_attack), key=f"input_eq_atk_{slot_key}")
+        shown_atk = _from_raw_int(st.session_state.edit_equip_base_attack, main_mult)
+        new_atk_disp = st.number_input("Base Attack", 0, 999999, shown_atk, key=f"input_eq_atk_{slot_key}")
+        new_atk = _to_raw_int(new_atk_disp, main_mult)
         if new_atk != st.session_state.edit_equip_base_attack:
             st.session_state.edit_equip_base_attack = new_atk
             st.session_state.equip_stats_has_unsaved = True
     with col2:
-        st.metric("After SF", f"{new_atk * main_mult:,.0f}")
+        st.metric("Raw" if post_sf_input else "After SF", f"{(new_atk if post_sf_input else new_atk_disp * main_mult):,.0f}")
 
     col1, col2 = st.columns(2)
     with col1:
-        new_hp = st.number_input("Base Max HP", 0, 999999, int(st.session_state.edit_equip_base_max_hp), key=f"input_eq_hp_{slot_key}")
+        shown_hp = _from_raw_int(st.session_state.edit_equip_base_max_hp, main_mult)
+        new_hp_disp = st.number_input("Base Max HP", 0, 999999, shown_hp, key=f"input_eq_hp_{slot_key}")
+        new_hp = _to_raw_int(new_hp_disp, main_mult)
         if new_hp != st.session_state.edit_equip_base_max_hp:
             st.session_state.edit_equip_base_max_hp = new_hp
             st.session_state.equip_stats_has_unsaved = True
     with col2:
-        st.metric("After SF", f"{new_hp * main_mult:,.0f}")
+        st.metric("Raw" if post_sf_input else "After SF", f"{(new_hp if post_sf_input else new_hp_disp * main_mult):,.0f}")
 
     third_label = SLOT_THIRD_STAT.get(selected_slot, "Third Stat")
     col1, col2 = st.columns(2)
     with col1:
-        new_third = st.number_input(f"Base {third_label}", 0, 999999, int(st.session_state.edit_equip_base_third_stat), key=f"input_eq_third_{slot_key}")
+        shown_third = _from_raw_int(st.session_state.edit_equip_base_third_stat, main_mult)
+        new_third_disp = st.number_input(f"Base {third_label}", 0, 999999, shown_third, key=f"input_eq_third_{slot_key}")
+        new_third = _to_raw_int(new_third_disp, main_mult)
         if new_third != st.session_state.edit_equip_base_third_stat:
             st.session_state.edit_equip_base_third_stat = new_third
             st.session_state.equip_stats_has_unsaved = True
     with col2:
-        st.metric("After SF", f"{new_third * main_mult:,.0f}")
+        st.metric("Raw" if post_sf_input else "After SF", f"{(new_third if post_sf_input else new_third_disp * main_mult):,.0f}")
 
     st.markdown("---")
-    st.markdown("**Sub Stats** (Sub Amplify)")
+    st.markdown(f"**Sub Stats** ({'after SF — back-converted to raw' if post_sf_input else 'raw — multiplied below'})")
 
-    # Row 1: Boss, Normal, CR, CD
+    # Row 1: Boss, Normal, CR, CD — same toggle semantics for sub stats.
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        new_boss = st.number_input("Boss%", 0.0, 100.0, float(st.session_state.edit_equip_sub_boss), step=0.1, key=f"input_eq_boss_{slot_key}")
+        shown_boss = _from_raw_float(st.session_state.edit_equip_sub_boss, sub_mult)
+        new_boss_disp = st.number_input("Boss%", 0.0, 200.0, shown_boss, step=0.1, key=f"input_eq_boss_{slot_key}")
+        new_boss = _to_raw_float(new_boss_disp, sub_mult)
         if new_boss != st.session_state.edit_equip_sub_boss:
             st.session_state.edit_equip_sub_boss = new_boss
             st.session_state.equip_stats_has_unsaved = True
     with col2:
-        new_normal = st.number_input("Normal%", 0.0, 100.0, float(st.session_state.edit_equip_sub_normal), step=0.1, key=f"input_eq_normal_{slot_key}")
+        shown_normal = _from_raw_float(st.session_state.edit_equip_sub_normal, sub_mult)
+        new_normal_disp = st.number_input("Normal%", 0.0, 200.0, shown_normal, step=0.1, key=f"input_eq_normal_{slot_key}")
+        new_normal = _to_raw_float(new_normal_disp, sub_mult)
         if new_normal != st.session_state.edit_equip_sub_normal:
             st.session_state.edit_equip_sub_normal = new_normal
             st.session_state.equip_stats_has_unsaved = True
     with col3:
-        new_cr = st.number_input("CR%", 0.0, 100.0, float(st.session_state.edit_equip_sub_cr), step=0.1, key=f"input_eq_cr_{slot_key}")
+        shown_cr = _from_raw_float(st.session_state.edit_equip_sub_cr, sub_mult)
+        new_cr_disp = st.number_input("CR%", 0.0, 200.0, shown_cr, step=0.1, key=f"input_eq_cr_{slot_key}")
+        new_cr = _to_raw_float(new_cr_disp, sub_mult)
         if new_cr != st.session_state.edit_equip_sub_cr:
             st.session_state.edit_equip_sub_cr = new_cr
             st.session_state.equip_stats_has_unsaved = True
     with col4:
-        new_cd = st.number_input("CD%", 0.0, 100.0, float(st.session_state.edit_equip_sub_cd), step=0.1, key=f"input_eq_cd_{slot_key}")
+        shown_cd = _from_raw_float(st.session_state.edit_equip_sub_cd, sub_mult)
+        new_cd_disp = st.number_input("CD%", 0.0, 200.0, shown_cd, step=0.1, key=f"input_eq_cd_{slot_key}")
+        new_cd = _to_raw_float(new_cd_disp, sub_mult)
         if new_cd != st.session_state.edit_equip_sub_cd:
             st.session_state.edit_equip_sub_cd = new_cd
             st.session_state.equip_stats_has_unsaved = True
 
-    st.caption(f"After SF: Boss {new_boss*sub_mult:.1f}% | Normal {new_normal*sub_mult:.1f}% | CR {new_cr*sub_mult:.1f}% | CD {new_cd*sub_mult:.1f}%")
+    if post_sf_input:
+        st.caption(f"Raw values: Boss {new_boss:.2f}% | Normal {new_normal:.2f}% | CR {new_cr:.2f}% | CD {new_cd:.2f}%")
+    else:
+        st.caption(f"After SF: Boss {new_boss*sub_mult:.1f}% | Normal {new_normal*sub_mult:.1f}% | CR {new_cr*sub_mult:.1f}% | CD {new_cd*sub_mult:.1f}%")
 
     # Row 2: Attack Flat
     col1, col2 = st.columns(2)
     with col1:
-        new_atk_flat = st.number_input("Attack Flat", 0, 99999, int(st.session_state.edit_equip_sub_atk_flat), key=f"input_eq_atk_flat_{slot_key}")
+        shown_atkflat = _from_raw_int(st.session_state.edit_equip_sub_atk_flat, sub_mult)
+        new_atk_flat_disp = st.number_input("Attack Flat", 0, 99999, shown_atkflat, key=f"input_eq_atk_flat_{slot_key}")
+        new_atk_flat = _to_raw_int(new_atk_flat_disp, sub_mult)
         if new_atk_flat != st.session_state.edit_equip_sub_atk_flat:
             st.session_state.edit_equip_sub_atk_flat = new_atk_flat
             st.session_state.equip_stats_has_unsaved = True
     with col2:
-        st.metric("After SF", f"{new_atk_flat * sub_mult:,.0f}")
+        st.metric("Raw" if post_sf_input else "After SF", f"{(new_atk_flat if post_sf_input else new_atk_flat_disp * sub_mult):,.0f}")
 
     # Row 3: Job Skill Bonuses
     st.markdown("**Job Skill Bonuses** (Sub Amplify)")
