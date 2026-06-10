@@ -4621,29 +4621,15 @@ BUCCANEER_SKILLS: Dict[str, SkillData] = {
         unlock_level=30,
         skill_bonuses={"attack_speed": (5.0, SkillGrowth.INC3)},
     ),
-    "dark_clarity": SkillData(
-        name="Dark Clarity",
-        skill_type=SkillType.PASSIVE_STAT,
-        damage_type=DamageType.SKILL,
-        job=Job.SECOND,
-        unlock_level=40,
-        skill_bonuses={"attack_pct": (12.0, SkillGrowth.INC3)},
-    ),
-    "knuckle_mastery": SkillData(
-        name="Knuckle Mastery",
-        skill_type=SkillType.PASSIVE_STAT,
-        damage_type=DamageType.SKILL,
-        job=Job.SECOND,
-        unlock_level=35,
-        skill_bonuses={"min_dmg_mult": (15.0, SkillGrowth.INC3)},
-    ),
-    "physical_training": SkillData(
-        name="Physical Training",
+    "perseverance": SkillData(
+        name="Perseverance",
         skill_type=SkillType.PASSIVE_STAT,
         damage_type=DamageType.SKILL,
         job=Job.SECOND,
         unlock_level=45,
-        skill_bonuses={"basic_attack_damage": (10.0, SkillGrowth.INC3)},
+        # +5% Attack while HP >= 50%. Idle play maintains full HP, so
+        # treat as permanently active.
+        skill_bonuses={"attack_pct": (5.0, SkillGrowth.INC3)},
     ),
 
     # =========================================================================
@@ -4669,6 +4655,20 @@ BUCCANEER_SKILLS: Dict[str, SkillData] = {
         base_hits=2,
         base_targets=7,
         cooldown=25.0,
+        level_factor_index=21,  # INC4
+    ),
+    "serpent_assault": SkillData(
+        name="Serpent Assault",
+        skill_type=SkillType.ACTIVE,
+        damage_type=DamageType.SKILL,
+        job=Job.THIRD,
+        unlock_level=75,
+        # 3rd-job active that ties into the Serpent Scale resource. Without
+        # a resource model, treat as a standard cooldown-paced active.
+        base_damage_pct=700.0,
+        base_hits=3,
+        base_targets=5,
+        cooldown=30.0,
         level_factor_index=21,  # INC4
     ),
     "serpent_scale": SkillData(
@@ -4736,32 +4736,6 @@ BUCCANEER_SKILLS: Dict[str, SkillData] = {
         cooldown=60.0,
         level_factor_index=21,  # INC4
     ),
-    "crossbones": SkillData(
-        name="Crossbones",
-        skill_type=SkillType.BUFF,
-        damage_type=DamageType.SKILL,
-        job=Job.FOURTH,
-        unlock_level=115,
-        cooldown=30.0,
-        duration=12.0,
-        skill_bonuses={
-            "final_damage": (10.0, SkillGrowth.INC3),
-            "def_pen": (5.0, SkillGrowth.INC3),
-        },
-    ),
-    "speed_infusion": SkillData(
-        name="Speed Infusion",
-        skill_type=SkillType.BUFF,
-        damage_type=DamageType.SKILL,
-        job=Job.FOURTH,
-        unlock_level=115,
-        cooldown=45.0,
-        duration=15.0,
-        skill_bonuses={
-            "attack_speed": (20.0, SkillGrowth.INC3),
-            "final_damage": (20.0, SkillGrowth.INC3),
-        },
-    ),
     "time_leap": SkillData(
         name="Time Leap",
         skill_type=SkillType.BUFF,
@@ -4804,9 +4778,11 @@ BUCCANEER_SKILLS: Dict[str, SkillData] = {
         damage_type=DamageType.SKILL,
         job=Job.FOURTH,
         unlock_level=130,
+        # Boosts 2nd/3rd-job actives that need help in 4th-job rotations.
         skill_bonuses={
             "sea_serpent_burst": (60.0, SkillGrowth.INC25),
             "corkscrew_blow":    (40.0, SkillGrowth.INC20),
+            "serpent_assault":   (40.0, SkillGrowth.INC20),
         },
     ),
 }
@@ -4814,56 +4790,79 @@ BUCCANEER_SKILLS: Dict[str, SkillData] = {
 
 BUCCANEER_MASTERIES: List[MasteryNode] = [
     # =========================================================================
-    # 1st Job Masteries (Levels 28-30)
+    # 1st Job (Levels 12-28)
     # =========================================================================
-    MasteryNode("Basic Attack Damage Enhancement", 28, 0, "basic_attack_damage", "global", 15, "Basic Attack Damage +15%"),
+    MasteryNode("Somersault Kick - Damage I",      12, 0, "skill_damage_pct",       "somersault_kick", 15.0, "Somersault Kick damage +15%"),
+    MasteryNode("Main Stat Enhancement",           14, 0, "main_stat_flat",         "global",          30.0, "Main Stat +30"),
+    MasteryNode("Somersault Kick - Target I",      15, 0, "skill_targets",          "somersault_kick", 1.0,  "Somersault Kick max targets +1"),
+    MasteryNode("Critical Rate Enhancement",       17, 0, "crit_rate",              "global",          5.0,  "Critical Rate +5%"),
+    MasteryNode("Somersault Kick - Damage II",     19, 0, "skill_damage_pct",       "somersault_kick", 20.0, "Somersault Kick damage +20%"),
+    MasteryNode("Shadow Heart - Critical Damage",  21, 0, "crit_damage",            "global",          5.0,  "Shadow Heart Crit Damage +5%p"),
+    MasteryNode("Somersault Kick - Target II",     22, 0, "skill_targets",          "somersault_kick", 1.0,  "Somersault Kick max targets +1"),
+    MasteryNode("Quick Motion - Speed",            24, 0, "attack_speed",           "global",          5.0,  "Quick Motion Attack Speed +5%p"),
+    MasteryNode("Somersault Kick - Damage III",    26, 0, "skill_damage_pct",       "somersault_kick", 20.0, "Somersault Kick damage +20%"),
+    MasteryNode("Basic Attack Damage Enhancement", 28, 0, "basic_attack_damage",    "global",          15.0, "Basic Attack Damage +15%"),
 
     # =========================================================================
-    # 2nd Job Masteries (Levels 32-58)
+    # 2nd Job (Levels 32-58)
     # =========================================================================
-    MasteryNode("Shotgun Punch - Damage", 32, 0, "skill_damage_pct", "shotgun_punch", 15, "Shotgun Punch damage +15%"),
-    MasteryNode("Shotgun Punch - Target", 36, 0, "skill_targets", "shotgun_punch", 1, "Shotgun Punch max targets +1"),
-    MasteryNode("Knuckle Mastery - Critical", 38, 0, "crit_rate", "global", 8, "Knuckle Mastery Critical Rate +8%p"),
-    MasteryNode("Shotgun Punch - Damage 2", 42, 0, "skill_damage_pct", "shotgun_punch", 20, "Shotgun Punch damage +20%"),
-    MasteryNode("Agile Knuckles - Speed", 46, 0, "attack_speed", "global", 7, "Agile Knuckles Attack Speed +7%p"),
-    MasteryNode("Shotgun Punch - Boss Damage", 49, 0, "skill_boss_damage", "shotgun_punch", 15, "Shotgun Punch Boss Damage +15%"),
-    MasteryNode("Shotgun Punch - Damage 3", 56, 0, "skill_damage_pct", "shotgun_punch", 20, "Shotgun Punch damage +20%"),
-    MasteryNode("Max Damage Multiplier Enhancement", 58, 0, "max_dmg_mult", "global", 10, "Max Damage Multiplier +10%"),
+    MasteryNode("Shotgun Punch - Damage I",        32, 0, "skill_damage_pct",       "shotgun_punch",   15.0, "Shotgun Punch damage +15%"),
+    MasteryNode("Accuracy Enhancement",            34, 0, "accuracy",               "global",          5.0,  "Accuracy +5"),
+    MasteryNode("Shotgun Punch - Target I",        37, 0, "skill_targets",          "shotgun_punch",   1.0,  "Shotgun Punch max targets +1"),
+    MasteryNode("Sea Serpent Burst - Damage I",    39, 0, "skill_damage_pct",       "sea_serpent_burst", 50.0, "Sea Serpent Burst damage +50%"),
+    MasteryNode("Shotgun Punch - Damage II",       42, 0, "skill_damage_pct",       "shotgun_punch",   20.0, "Shotgun Punch damage +20%"),
+    MasteryNode("Agile Knuckles - Speed",          44, 0, "attack_speed",           "global",          7.0,  "Agile Knuckles Attack Speed +7%p"),
+    MasteryNode("Shotgun Punch - Boss Damage I",   47, 0, "skill_boss_damage",      "shotgun_punch",   15.0, "Shotgun Punch Boss Damage +15%"),
+    MasteryNode("Perseverance - Attack",           49, 0, "attack_pct",             "global",          5.0,  "Perseverance Attack +5% at >=50% HP"),
+    MasteryNode("Shotgun Punch - Damage III",      52, 0, "skill_damage_pct",       "shotgun_punch",   20.0, "Shotgun Punch damage +20%"),
+    # Lvl 54 Advanced Dash - Protection: -5% damage taken (defensive, skipped for DPS)
+    MasteryNode("Shotgun Punch - Strike I",        56, 0, "skill_hits",             "shotgun_punch",   1.0,  "Shotgun Punch hits +1"),
+    MasteryNode("Max Damage Mult Enhancement",     58, 0, "max_dmg_mult",           "global",          10.0, "Max Damage Multiplier +10%"),
 
     # =========================================================================
-    # 3rd Job Masteries (Levels 62-98)
+    # 3rd Job (Levels 62-98)
     # =========================================================================
-    MasteryNode("Turning Kick - Damage", 62, 0, "skill_damage_pct", "turning_kick", 10, "Turning Kick damage +10%"),
-    MasteryNode("Basic Attack Target Enhancement", 64, 0, "basic_attack_targets", "global", 1, "Basic Attack Target +1"),
-    MasteryNode("Turning Kick - Damage 2", 66, 0, "skill_damage_pct", "turning_kick", 11, "Turning Kick damage +11%"),
-    MasteryNode("Corkscrew Blow - Damage", 70, 0, "skill_damage_pct", "corkscrew_blow", 40, "Corkscrew Blow damage +40%"),
-    MasteryNode("Turning Kick - Boss Damage", 71, 0, "skill_boss_damage", "turning_kick", 10, "Turning Kick Boss Damage +10%"),
-    MasteryNode("Sea Serpent Burst - Damage", 76, 0, "skill_damage_pct", "sea_serpent_burst", 300, "Greater Sea Serpent I: Sea Serpent Burst damage changes to 430%"),
-    MasteryNode("Sea Serpent Burst - Target", 78, 0, "skill_targets", "sea_serpent_burst", 2, "Greater Sea Serpent I: Sea Serpent Burst max targets +2"),
-    MasteryNode("Corkscrew Blow - Boss Damage", 80, 0, "skill_boss_damage", "corkscrew_blow", 15, "Corkscrew Blow Boss Damage +15%"),
-    MasteryNode("Skill Damage Enhancement", 86, 0, "skill_damage", "global", 15, "Skill Damage +15%"),
-    MasteryNode("Corkscrew Blow - Strike", 88, 0, "skill_hits", "corkscrew_blow", 1, "Corkscrew Blow hits +1"),
-    MasteryNode("Turning Kick - Strike", 96, 0, "skill_hits", "turning_kick", 1, "Turning Kick hits +1"),
+    MasteryNode("Turning Kick - Damage I",         62, 0, "skill_damage_pct",       "turning_kick",    10.0, "Turning Kick damage +10%"),
+    MasteryNode("Basic Attack Target Enhancement", 64, 0, "basic_attack_targets",   "global",          1.0,  "Basic Attack Target +1"),
+    MasteryNode("Turning Kick - Damage II",        66, 0, "skill_damage_pct",       "turning_kick",    11.0, "Turning Kick damage +11%"),
+    # Lvl 68 Sea Serpent - Start: 3 Serpent Scale stacks at battle start (resource mechanic, not modeled)
+    MasteryNode("Turning Kick - Boss Damage I",    71, 0, "skill_boss_damage",      "turning_kick",    10.0, "Turning Kick Boss Damage +10%"),
+    MasteryNode("Corkscrew Blow - Damage I",       73, 0, "skill_damage_pct",       "corkscrew_blow",  80.0, "Corkscrew Blow damage +80%"),
+    MasteryNode("Turning Kick - Damage III",       76, 0, "skill_damage_pct",       "turning_kick",    12.0, "Turning Kick damage +12%"),
+    MasteryNode("Greater Sea Serpent I",           78, 0, "skill_cooldown_reduction", "sea_serpent_burst", 2.0, "Sea Serpent Burst CD -2s"),
+    MasteryNode("Turning Kick - Damage IV",        80, 0, "skill_damage_pct",       "turning_kick",    13.0, "Turning Kick damage +13%"),
+    MasteryNode("Serpent Assault - Damage I",      82, 0, "skill_damage_pct",       "serpent_assault", 50.0, "Serpent Assault damage +50%"),
+    MasteryNode("Turning Kick - Boss Damage II",   84, 0, "skill_boss_damage",      "turning_kick",    10.0, "Turning Kick Boss Damage +10%"),
+    MasteryNode("Skill Damage Enhancement",        86, 0, "skill_damage",           "global",          15.0, "Skill Damage +15%"),
+    MasteryNode("Turning Kick - Damage V",         88, 0, "skill_damage_pct",       "turning_kick",    14.0, "Turning Kick damage +14%"),
+    MasteryNode("Roll of the Dice - Attack",       90, 0, "basic_attack_damage",    "global",          5.0,  "Roll of the Dice Basic Attack +5%p"),
+    MasteryNode("Turning Kick - Damage VI",        92, 0, "skill_damage_pct",       "turning_kick",    15.0, "Turning Kick damage +15%"),
+    MasteryNode("Serpent Scale - Persistence",     94, 0, "skill_duration",         "serpent_scale",   5.0,  "Assault Mode duration +5s"),
+    MasteryNode("Turning Kick - Strike I",         96, 0, "skill_hits",             "turning_kick",    1.0,  "Turning Kick hits +1"),
+    MasteryNode("Groggy Mastery - Final Damage",   98, 0, "final_damage",           "global",          5.0,  "Groggy Mastery FD +5%p vs status-afflicted"),
 
     # =========================================================================
-    # 4th Job Masteries (Levels 102-138)
+    # 4th Job (Levels 102-138)
     # =========================================================================
-    MasteryNode("Hook Bomber - Damage", 102, 0, "skill_damage_pct", "hook_bomber", 10, "Hook Bomber damage +10%"),
-    MasteryNode("Sea Serpent Burst - Final Damage", 104, 0, "skill_final_damage", "sea_serpent_burst", 100, "Greater Sea Serpent II: Sea Serpent Burst Final Damage +100%"),
-    MasteryNode("Hook Bomber - Damage 2", 106, 0, "skill_damage_pct", "hook_bomber", 11, "Hook Bomber damage +11%"),
-    MasteryNode("Sea Serpent Burst - Hits", 108, 0, "skill_hits", "sea_serpent_burst", 1, "Serpent Assault: Sea Serpent Burst hits +1"),
-    MasteryNode("Hook Bomber - Boss Damage", 111, 0, "skill_boss_damage", "hook_bomber", 10, "Hook Bomber Boss Damage +10%"),
-    MasteryNode("Sea Serpent Burst - Targets 2", 113, 0, "skill_targets", "sea_serpent_burst", 5, "Serpent Assault: Sea Serpent Burst max targets +5"),
-    MasteryNode("Hook Bomber - Damage 3", 116, 0, "skill_damage_pct", "hook_bomber", 12, "Hook Bomber damage +12%"),
-    MasteryNode("Hook Bomber - Damage 4", 120, 0, "skill_damage_pct", "hook_bomber", 13, "Hook Bomber damage +13%"),
-    MasteryNode("Sea Serpent Burst - Damage 2", 124, 0, "skill_damage_pct", "sea_serpent_burst", 50, "Serpent Assault damage boost"),
-    MasteryNode("Octopunch - Damage", 126, 0, "skill_damage_pct", "octopunch", 50, "Octopunch damage +50%"),
-    MasteryNode("Hook Bomber - Damage 5", 128, 0, "skill_damage_pct", "hook_bomber", 14, "Hook Bomber damage +14%"),
-    MasteryNode("Nautilus Strike - Damage", 130, 0, "skill_damage_pct", "nautilus_strike", 50, "Nautilus Strike damage +50%"),
-    MasteryNode("Hook Bomber - Damage 6", 132, 0, "skill_damage_pct", "hook_bomber", 15, "Hook Bomber damage +15%"),
-    MasteryNode("Octopunch - Boss Damage", 134, 0, "skill_boss_damage", "octopunch", 30, "Octopunch Boss Damage +30%"),
-    MasteryNode("Hook Bomber - Strike", 136, 0, "skill_hits", "hook_bomber", 1, "Hook Bomber hits +1"),
-    MasteryNode("Sea Serpents Rage - Damage", 138, 0, "skill_damage_pct", "sea_serpents_rage", 50, "Sea Serpent's Rage damage +50%"),
+    MasteryNode("Hook Bomber - Damage I",          102, 0, "skill_damage_pct",      "hook_bomber",     10.0, "Hook Bomber damage +10%"),
+    # Lvl 104 Serpent Scale - Stack: +1 scale on Sea Serpent Burst (resource mechanic, not modeled)
+    MasteryNode("Hook Bomber - Damage II",         106, 0, "skill_damage_pct",      "hook_bomber",     11.0, "Hook Bomber damage +11%"),
+    MasteryNode("Octopunch - Damage I",            108, 0, "skill_damage_pct",      "octopunch",       50.0, "Octopunch damage +50%"),
+    MasteryNode("Hook Bomber - Boss Damage I",     111, 0, "skill_boss_damage",     "hook_bomber",     10.0, "Hook Bomber Boss Damage +10%"),
+    # Lvl 113 Nautilus Strike - Final Attack: 15% proc 850% — approximate as flat +50% to Nautilus Strike
+    MasteryNode("Nautilus Strike - Final Attack",  113, 0, "skill_damage_pct",      "nautilus_strike", 50.0, "Nautilus Strike Final Attack (15% proc ~ +50% avg)"),
+    MasteryNode("Hook Bomber - Damage III",        116, 0, "skill_damage_pct",      "hook_bomber",     12.0, "Hook Bomber damage +12%"),
+    MasteryNode("Greater Sea Serpent II - Strike", 118, 0, "skill_hits",            "sea_serpent_burst", 1.0, "Sea Serpent Burst hits +1, CD -2s"),
+    MasteryNode("Hook Bomber - Damage IV",         120, 0, "skill_damage_pct",      "hook_bomber",     13.0, "Hook Bomber damage +13%"),
+    MasteryNode("Sea Serpent's Rage - Damage",     122, 0, "skill_damage_pct",      "sea_serpents_rage", 100.0, "Sea Serpent's Rage damage +100%"),
+    MasteryNode("Hook Bomber - Boss Damage II",    124, 0, "skill_boss_damage",     "hook_bomber",     10.0, "Hook Bomber Boss Damage +10%"),
+    MasteryNode("Nautilus Strike - Damage",        126, 0, "skill_damage_pct",      "nautilus_strike", 50.0, "Nautilus Strike damage +50%"),
+    MasteryNode("Hook Bomber - Damage V",          128, 0, "skill_damage_pct",      "hook_bomber",     14.0, "Hook Bomber damage +14%"),
+    MasteryNode("Raging Serpent Assault - Damage", 130, 0, "skill_damage_pct",      "raging_serpent_assault", 50.0, "Raging Serpent Assault damage +50%"),
+    MasteryNode("Hook Bomber - Damage VI",         132, 0, "skill_damage_pct",      "hook_bomber",     15.0, "Hook Bomber damage +15%"),
+    MasteryNode("Octopunch - Reuse",               134, 0, "skill_cooldown_reduction", "octopunch",    6.0,  "Octopunch CD -30% (-6s of 20s base)"),
+    MasteryNode("Hook Bomber - Strike I",          136, 0, "skill_hits",            "hook_bomber",     1.0,  "Hook Bomber hits +1"),
+    MasteryNode("Time Leap - Grant",               138, 0, "final_damage",          "global",          10.0, "Time Leap +10% Final Damage"),
 ]
 
 
